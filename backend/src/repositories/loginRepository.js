@@ -11,7 +11,7 @@ const SALT_ROUNDS = 10;
 
 class LoginRepository {
   async signUp(req, res) {
-    const { name, phone, email, password } = req.body;
+    const { name, cpf, phone, email, password } = req.body;
     const client = await pool.connect();
 
     try {
@@ -24,6 +24,16 @@ class LoginRepository {
         return res.status(409).json({ message: "Email já cadastrado!" });
       }
 
+      if (cpf) {
+        const { rowCount: cpfExists } = await client.query(
+          "SELECT 1 FROM users WHERE cpf = $1",
+          [cpf],
+        );
+        if (cpfExists > 0) {
+          return res.status(409).json({ message: "Este CPF já está em uso!" });
+        }
+      }
+
       // 2. Gerar hash de forma assíncrona
       const hash = await bcrypt.hash(password, SALT_ROUNDS);
       const verificationToken = crypto.randomBytes(32).toString("hex");
@@ -31,9 +41,9 @@ class LoginRepository {
       // 3. Inserir usuário
       await client.query(
         `INSERT INTO users 
-         (user_id, name, phone, email, password, verification_token, is_verified) 
-         VALUES ($1, $2, $3, $4, $5, $6, false)`,
-        [v4(), name, phone, email, hash, verificationToken],
+         (user_id, name, cpf, phone, email, password, verification_token, is_verified) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, false)`,
+        [v4(), name, cpf, phone, email, hash, verificationToken],
       );
 
       client.release();
@@ -120,7 +130,7 @@ class LoginRepository {
     try {
       // 1. Buscar usuário
       const result = await client.query(
-        "SELECT user_id, name, password, role, is_verified FROM users WHERE email = $1",
+        "SELECT user_id, name, cpf, password, role, is_verified FROM users WHERE email = $1",
         [email],
       );
       if (result.rowCount === 0) {
@@ -132,6 +142,7 @@ class LoginRepository {
         name,
         password: hash,
         role,
+        cpf,
         is_verified,
       } = result.rows[0];
 
@@ -353,7 +364,7 @@ class LoginRepository {
       }
 
       const userRes = await client.query(
-        "SELECT user_id, email, name, role FROM users WHERE user_id = $1",
+        "SELECT user_id, email, name, cpf, role FROM users WHERE user_id = $1",
         [payload.userId],
       );
 
@@ -368,6 +379,7 @@ class LoginRepository {
             userId: userRes.rows[0].user_id,
             email: userRes.rows[0].email,
             name: userRes.rows[0].name,
+            cpf: userRes.rows[0].cpf,
             role: userRes.rows[0].role,
           }
         : null;
@@ -534,6 +546,40 @@ class LoginRepository {
       await client.query("ROLLBACK");
       console.error("resetPassword error:", err);
       return res.status(500).json({ message: "Erro ao redefinir senha." });
+    } finally {
+      client.release();
+    }
+  }
+
+  async updateProfile(req, res) {
+    const { userId } = req.user; // Pego pelo middleware de autenticação
+    const { cpf, phone, name } = req.body;
+    const client = await pool.connect();
+
+    try {
+      // Validar se o CPF já está em uso por outro usuário
+      if (cpf) {
+        const { rows } = await client.query(
+          "SELECT user_id FROM users WHERE cpf = $1 AND user_id <> $2",
+          [cpf, userId],
+        );
+        if (rows.length > 0) {
+          return res.status(409).json({
+            message: "Este CPF já está sendo utilizado por outra conta.",
+          });
+        }
+      }
+
+      await client.query(
+        "UPDATE users SET cpf = COALESCE($1, cpf), phone = COALESCE($2, phone), name = COALESCE($3, name) WHERE user_id = $4",
+        [cpf, phone, name, userId],
+      );
+
+      return res.json({ message: "Perfil atualizado com sucesso!" });
+    } catch (err) {
+      return res
+        .status(500)
+        .json({ error: err.message, message: "Erro ao atualizar perfil." });
     } finally {
       client.release();
     }

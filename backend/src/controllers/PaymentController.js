@@ -23,6 +23,21 @@ class PaymentController {
         shippingMethod,
       } = req.body;
 
+      if (userId) {
+        const userCheck = await client.query(
+          "SELECT cpf FROM users WHERE user_id = $1",
+          [userId],
+        );
+
+        if (userCheck.rowCount === 0 || !userCheck.rows[0].cpf) {
+          return res.status(400).json({
+            error: "CPF_MISSING",
+            message:
+              "É necessário informar o CPF para prosseguir com a entrega.",
+          });
+        }
+      }
+
       if (!items || items.length === 0) {
         return res.status(400).json({ error: "Carrinho vazio" });
       }

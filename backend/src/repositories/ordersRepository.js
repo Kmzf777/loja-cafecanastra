@@ -109,7 +109,8 @@ class OrderRepository {
           o.shipping_cost,   
           o.shipping_method,
           u.name as user_name,
-          u.email as user_email
+          u.email as user_email,
+          u.cpf as user_cpf
         FROM orders o
         JOIN users u ON o.user_id = u.user_id
         ORDER BY o.created_at DESC
@@ -135,7 +136,7 @@ class OrderRepository {
     try {
       const { rows } = await client.query(
         `SELECT * FROM orders WHERE order_id = $1::uuid`,
-        [orderId]
+        [orderId],
       );
       return rows[0];
     } catch (err) {
@@ -151,7 +152,7 @@ class OrderRepository {
     try {
       const { rows } = await client.query(
         `SELECT * FROM orders WHERE payment_id_mp = $1 LIMIT 1`,
-        [paymentIdMp.toString()]
+        [paymentIdMp.toString()],
       );
       return rows[0];
     } catch (err) {

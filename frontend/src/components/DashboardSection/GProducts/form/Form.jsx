@@ -5,7 +5,6 @@ import {
   FormStyled,
   PreviewImage,
   ImageZoom,
-  DimensionsGrid,
 } from "./Form.style";
 import fetchDataForm, { API_BASE } from "../../../../api";
 import productContext from "../../../../contexts/productContext/createProductContext";
@@ -159,9 +158,6 @@ function Form() {
     formData.append("price", data.price);
     formData.append("quantity", value);
     formData.append("description", data.description || "");
-    formData.append("weight", data.weight); // Peso em KG
-    formData.append("width", data.width);
-    formData.append("height", data.height);
     formData.append("length", data.length);
     if (imageFile) {
       formData.append("image", imageFile);
@@ -239,42 +235,6 @@ function Form() {
           type="number"
           required
         />
-
-        <DimensionsGrid>
-          <div>
-            <label>Peso (kg)</label>
-            <input
-              type="number"
-              step="0.001"
-              placeholder="Ex: 0.300"
-              {...register("weight", { required: true })}
-            />
-          </div>
-          <div>
-            <label>Largura (cm)</label>
-            <input
-              type="number"
-              placeholder="Ex: 11"
-              {...register("width", { required: true })}
-            />
-          </div>
-          <div>
-            <label>Altura (cm)</label>
-            <input
-              type="number"
-              placeholder="Ex: 2"
-              {...register("height", { required: true })}
-            />
-          </div>
-          <div>
-            <label>Compr. (cm)</label>
-            <input
-              type="number"
-              placeholder="Ex: 16"
-              {...register("length", { required: true })}
-            />
-          </div>
-        </DimensionsGrid>
 
         <label>Quantidade de peças disponíveis</label>
         <div className="inputIncrementoOrDecremento">

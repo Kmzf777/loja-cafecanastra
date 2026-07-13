@@ -10,6 +10,15 @@ const {
   resetPasswordValidationRules,
   validate,
 } = require("../middleware/validateAuth");
+const rateLimit = require("express-rate-limit");
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: {
+    error: "Muitas tentativas de login. Tente novamente em 15 minutos.",
+  },
+});
 
 loginRoutes.post(
   "/sign-up",
@@ -28,6 +37,7 @@ loginRoutes.post(
   "/sign-in",
   signInValidationRules,
   validate,
+  loginLimiter,
   async (request, response) => {
     await loginRepository.signIn(request, response);
   },
@@ -74,6 +84,10 @@ loginRoutes.post(
 
 loginRoutes.post("/refresh-token", async (request, response) => {
   await loginRepository.refreshToken(request, response);
+});
+
+loginRoutes.put("/users/profile", authenticateToken, async (req, res) => {
+  await loginRepository.updateProfile(req, res);
 });
 
 module.exports = loginRoutes;

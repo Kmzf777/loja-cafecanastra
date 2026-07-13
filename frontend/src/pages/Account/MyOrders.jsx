@@ -544,11 +544,13 @@ function MyOrders() {
           </h4>
           <div
             style={{
-              maxHeight: "200px",
+              maxHeight: "300px",
               overflowY: "auto",
               display: "flex",
               flexDirection: "column",
               gap: "10px",
+              paddingRight: "5px",
+              paddingBottom: "5px",
             }}
           >
             {parseItems(selectedOrder.items).map((item, idx) => (
@@ -569,6 +571,8 @@ function MyOrders() {
                     style={{
                       width: "50px",
                       height: "50px",
+                      minWidth: "50px",
+                      flexShrink: 0,
                       objectFit: "cover",
                       borderRadius: "4px",
                     }}

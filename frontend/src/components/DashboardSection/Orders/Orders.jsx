@@ -35,6 +35,7 @@ const ModalOverlay = ({ children, onClose }) => (
       justifyContent: "center",
       alignItems: "center",
       zIndex: 10000,
+      padding: "20px",
     }}
     onClick={onClose}
   >
@@ -46,8 +47,8 @@ const ModalOverlay = ({ children, onClose }) => (
         borderRadius: "8px",
         width: "600px",
         maxWidth: "90%",
-        maxHeight: "75vh",
-        //overflowY: "auto",
+        maxHeight: "85vh",
+        overflowY: "auto",
         boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
         position: "relative",
       }}
@@ -89,7 +90,7 @@ function Orders() {
   const fetchOrders = useCallback(async () => {
     try {
       const res = await authFetch(
-        `${API_BASE}/admin/orders?page=${page}&limit=10`
+        `${API_BASE}/admin/orders?page=${page}&limit=10`,
       );
       if (res.ok) {
         const data = await res.json();
@@ -147,7 +148,7 @@ function Orders() {
 
     if (newStatus === "sent") {
       const input = window.prompt(
-        "Digite o Rastreio (ou deixe vazio para local):"
+        "Digite o Rastreio (ou deixe vazio para local):",
       );
 
       if (input === null) return;
@@ -161,7 +162,7 @@ function Orders() {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status: newStatus, trackingCode }),
-        }
+        },
       );
 
       if (res.ok) {
@@ -419,7 +420,7 @@ function Orders() {
               >
                 {item}
               </PaginationButton>
-            )
+            ),
           )}
 
           <PaginationButton
@@ -457,6 +458,10 @@ function Orders() {
                 <strong>Email:</strong> {selectedOrder.user_email}
               </p>
               <p>
+                <strong>CPF:</strong>{" "}
+                {selectedOrder.user_cpf || "Não informado"}
+              </p>
+              <p>
                 <strong>ID Pedido:</strong>{" "}
                 <small>{selectedOrder.order_id}</small>
               </p>
@@ -474,7 +479,7 @@ function Orders() {
                 <strong>Custo Frete:</strong>{" "}
                 {Number(selectedOrder.shipping_cost || 0).toLocaleString(
                   "pt-BR",
-                  { style: "currency", currency: "BRL" }
+                  { style: "currency", currency: "BRL" },
                 )}
               </p>
               <p style={{ marginTop: 5 }}>
@@ -498,8 +503,10 @@ function Orders() {
               display: "flex",
               flexDirection: "column",
               gap: "10px",
-              maxHeight: "250px",
+              maxHeight: "350px",
               overflowY: "auto",
+              paddingRight: "5px",
+              paddingBottom: "15px",
             }}
           >
             {parseItems(selectedOrder.items).map((item, idx) => (
@@ -521,8 +528,10 @@ function Orders() {
                     style={{
                       width: "50px",
                       height: "50px",
+                      minWidth: "50px",
                       objectFit: "cover",
                       borderRadius: "4px",
+                      flexShrink: 0,
                     }}
                   />
                 )}

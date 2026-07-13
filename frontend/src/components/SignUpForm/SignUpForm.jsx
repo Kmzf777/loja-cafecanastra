@@ -53,6 +53,7 @@ function SignUpForm() {
   const nameValue = watch("name");
   const phoneValue = watch("phone");
   const emailValue = watch("email");
+  const cpfValue = watch("cpf");
   const confirmPasswordValue = watch("confirmPassword");
 
   const isValidField = (name, value) =>
@@ -68,6 +69,29 @@ function SignUpForm() {
     });
   }, [password]);
 
+  const validateCPF = (cpf) => {
+    if (!cpf) return false;
+    const cleanCpf = cpf.replace(/[^\d]+/g, ""); // Remove pontos e traços
+    if (cleanCpf.length !== 11 || /^(\d)\1{10}$/.test(cleanCpf)) return false;
+
+    let soma = 0;
+    let resto;
+    for (let i = 1; i <= 9; i++)
+      soma = soma + parseInt(cleanCpf.substring(i - 1, i)) * (11 - i);
+    resto = (soma * 10) % 11;
+    if (resto === 10 || resto === 11) resto = 0;
+    if (resto !== parseInt(cleanCpf.substring(9, 10))) return false;
+
+    soma = 0;
+    for (let i = 1; i <= 10; i++)
+      soma = soma + parseInt(cleanCpf.substring(i - 1, i)) * (12 - i);
+    resto = (soma * 10) % 11;
+    if (resto === 10 || resto === 11) resto = 0;
+    if (resto !== parseInt(cleanCpf.substring(10, 11))) return false;
+
+    return true;
+  };
+
   useEffect(() => {
     if (touchedFields.confirmPassword) {
       trigger("confirmPassword");
@@ -77,6 +101,7 @@ function SignUpForm() {
   const onSubmit = async (data) => {
     const userData = {
       name: data.name,
+      cpf: data.cpf,
       phone: data.phone,
       email: data.email,
       password: data.password,
@@ -158,6 +183,44 @@ function SignUpForm() {
           {errors.name && (
             <p className="error-message">{errors.name.message}</p>
           )}
+        </DivInputError>
+
+        {/* CPF */}
+        <DivInputError>
+          <InputContainer
+            isInvalid={!!errors.cpf}
+            isValid={isValidField("cpf", cpfValue)}
+          >
+            <FaPhone className="icon" />
+            <Controller
+              name="cpf"
+              control={control}
+              defaultValue=""
+              rules={{
+                required: "CPF é obrigatório.",
+                validate: (value) =>
+                  validateCPF(value) || "Digite um CPF válido.",
+              }}
+              render={({ field }) => (
+                <IMaskInput
+                  {...field}
+                  mask="000.000.000-00"
+                  unmask={false} // retorna máscara no value, altere para true se quiser só números
+                  placeholder="000.000.000-00"
+                  id="cpf"
+                  type="text"
+                  autoComplete="cpf"
+                  onAccept={(value) => field.onChange(value)} // atualiza react-hook-form
+                  onBlur={field.onBlur}
+                  value={field.value}
+                />
+              )}
+            />
+            {isValidField("cpf", cpfValue) && (
+              <FaCheckCircle className="check-icon" />
+            )}
+          </InputContainer>
+          {errors.cpf && <p className="error-message">{errors.cpf.message}</p>}
         </DivInputError>
 
         {/* Telefone */}
