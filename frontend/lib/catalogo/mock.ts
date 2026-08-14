@@ -2,6 +2,15 @@
 // produtor são plausíveis mas NÃO são reais. Substituir por dados de lote
 // verdadeiros antes de qualquer publicação — estetica.md §6 é explícito:
 // sem altitude real o eixo da serra vira ficção e a marca perde credibilidade.
+//
+// DIVERGÊNCIA DE PROPORÇÃO — não se corrige aqui. O estetica.md §8 especifica
+// 4:5 para foto de produto e de sabor; os ativos que existem em public/ são
+// 1:1 (500x500). Os campos w/h abaixo declaram 500x500 porque descrevem o
+// arquivo real — declarar 4:5 num arquivo quadrado distorce a imagem e estoura
+// o CLS, que o §10 exige abaixo de 0,05. Quem construir o <CardCafe> vai
+// desenhar um card 4:5 e receber imagem quadrada: decida o enquadramento
+// (object-fit / crop) ciente disso. A correção de verdade é a produção
+// fotográfica descrita no §8, não código.
 
 import type { Lote, Moagem, PesoGramas } from "./tipos";
 
@@ -48,8 +57,8 @@ export const LOTES: Lote[] = [
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8
-      sabor: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico sobre fundo claro", w: 1200, h: 1500 },
-      pacote: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico, 250 g", w: 1200, h: 1500 },
+      sabor: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico sobre fundo claro", w: 500, h: 500 },
+      pacote: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico, 250 g", w: 500, h: 500 },
     },
     variantes: variantes("casca-danta", 1.05),
     preparo: [
@@ -76,8 +85,8 @@ export const LOTES: Lote[] = [
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8
-      sabor: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave sobre fundo claro", w: 1200, h: 1500 },
-      pacote: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave, 250 g", w: 1200, h: 1500 },
+      sabor: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave sobre fundo claro", w: 500, h: 500 },
+      pacote: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave, 250 g", w: 500, h: 500 },
     },
     variantes: variantes("nascente", 1.12),
     preparo: [
@@ -105,8 +114,8 @@ export const LOTES: Lote[] = [
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8
-      sabor: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico sobre fundo claro", w: 1200, h: 1500 },
-      pacote: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico, 500 g", w: 1200, h: 1500 },
+      sabor: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico sobre fundo claro", w: 500, h: 500 },
+      pacote: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico, 500 g", w: 500, h: 500 },
     },
     variantes: variantes("sao-roque", 1),
     preparo: [
@@ -134,8 +143,8 @@ export const LOTES: Lote[] = [
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8
-      sabor: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave sobre fundo claro", w: 1200, h: 1500 },
-      pacote: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave, 500 g", w: 1200, h: 1500 },
+      sabor: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave sobre fundo claro", w: 500, h: 500 },
+      pacote: { src: "/cafe-suave.png", alt: "Pacote branco do Café Canastra Suave, 500 g", w: 500, h: 500 },
     },
     variantes: variantes("chapadao", 0.98),
     preparo: [
@@ -162,8 +171,8 @@ export const LOTES: Lote[] = [
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8
-      sabor: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra com canela sobre fundo claro", w: 1200, h: 1500 },
-      pacote: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra com canela, 250 g", w: 1200, h: 1500 },
+      sabor: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra com canela sobre fundo claro", w: 500, h: 500 },
+      pacote: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra com canela, 250 g", w: 500, h: 500 },
     },
     variantes: variantes("vargem", 1.08),
     preparo: [
@@ -190,8 +199,8 @@ export const LOTES: Lote[] = [
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8
-      sabor: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra aromatizado sobre fundo claro", w: 1200, h: 1500 },
-      pacote: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra aromatizado, 1 kg", w: 1200, h: 1500 },
+      sabor: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra aromatizado sobre fundo claro", w: 500, h: 500 },
+      pacote: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra aromatizado, 1 kg", w: 500, h: 500 },
     },
     variantes: variantes("porteira", 0.92),
     preparo: [
