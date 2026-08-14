@@ -87,11 +87,24 @@ export default function Page() {
 }
 ```
 
-`PainelLegado` preserva o `react-router` interno com `basename="/dashboard"` e os providers atuais. As 20 rotas do painel seguem funcionando sem reescrita. Como nada ali renderiza no servidor, os styled-components do legado **não precisam de registry de SSR** — o risco de FOUC desaparece justamente na parte que não vamos consertar.
+`PainelLegado` preserva o `react-router` interno e os providers atuais. As 20 rotas do painel seguem funcionando sem reescrita. Como nada ali renderiza no servidor, os styled-components do legado **não precisam de registry de SSR** — o risco de FOUC desaparece justamente na parte que não vamos consertar.
 
-**Verificação obrigatória na primeira tarefa:** confirmar que `createBrowserRouter` com `basename` opera dentro do catch-all sem conflitar com o roteador do Next. Se não operar, o fallback é `MemoryRouter` com sincronização manual de URL.
+**Sem `basename`** — corrigido durante a implementação. A intenção original era `createBrowserRouter(..., { basename: "/dashboard" })`, mas isso quebra o painel: o react-router aplica o basename também a caminhos **absolutos**, e o legado navega por absolutos (`to="/dashboard/orders"` em `MenuAside.jsx`). Os links passavam a apontar para `/dashboard/dashboard/orders` e o menu inteiro parava, embora o acesso por URL direta continuasse funcionando. A solução é manter os paths absolutos idênticos aos de `main.jsx` e não declarar basename — nenhum componente legado precisa ser editado.
 
-### 3.3 Mitigações do caminho B
+Lição de verificação registrada: **testar rota por HTTP não prova que o painel funciona.** O código de status estava correto justamente enquanto a navegação estava quebrada. Verificações do painel precisam inspecionar o DOM renderizado e a navegação client-side.
+
+Duas correções em `legacy/` foram necessárias, ambas quebras reais da migração e não melhorias:
+
+- `routes/AdminRoutes.jsx` importava `../../src/contexts/…`, caminho extinto quando `src/` virou `legacy/`.
+- `api.js` usava `import.meta.env.VITE_API_URL`, exclusivo do Vite. O webpack o compila para `undefined.VITE_API_URL`, lançando `TypeError` na avaliação do módulo — como os quatro contexts do painel importam `api.js`, as oito rotas ficariam em branco. Passou a `process.env.NEXT_PUBLIC_API_URL`, mantendo o fallback `http://localhost:3333`.
+
+### 3.3 Imagens estáticas: `.src` no legado, `next/image` na vitrine
+
+No Vite, `import logo from "./logo.png"` devolve uma string; no Next devolve `StaticImageData`. Todo `<img src={logo}>` do legado passa a pedir `/[object Object]` — **sem erro no console**, apenas a imagem quebrada.
+
+A correção adotada é acessar `.src` nos pontos de uso do legado. A alternativa de uma linha, `images: { disableStaticImages: true }`, foi **descartada**: ela desligaria o static import em todo o projeto, inclusive na vitrine, que depende dele para obter `width`/`height` automáticos via `next/image` — exigência do `estetica.md` §10 para zerar CLS e sustentar a meta de LCP < 2,0 s.
+
+### 3.4 Mitigações do caminho B
 
 | Risco | Mitigação |
 |---|---|
@@ -100,17 +113,17 @@ export default function Page() {
 | `react-router` e `next/navigation` coexistindo | Coexistem **apenas** dentro da ilha do painel. A vitrine nunca importa `react-router`. |
 | Código antigo da vitrine poluindo o repositório | É deletado conforme cada rota nova entra, não mantido em paralelo. |
 
-### 3.4 Linguagem: TypeScript no código novo
+### 3.5 Linguagem: TypeScript no código novo
 
 O projeto atual é JavaScript puro. O código novo da vitrine é escrito em **TypeScript**; o `legacy/` permanece em `.jsx` sem checagem. O Next suporta os dois no mesmo projeto, com `allowJs: true` e `strict: true` aplicado só ao código novo.
 
 A razão é o contrato de §4: ele é o centro do desenho, e um contrato sem verificação é documentação. Em TypeScript, um mock fora do formato ou uma página lendo campo inexistente falham em tempo de build — que é exatamente o erro mais provável enquanto a API real não existe.
 
-### 3.5 Esquema de URLs
+### 3.6 Esquema de URLs
 
 As URLs são novas, não herdadas do Shopnaw (`/site`, `/site/product/:name/:id`). Como o domínio da Canastra ainda não serve essas páginas, não há link antigo a preservar e nenhum redirect 301 é necessário. O slug do lote é a chave canônica: `/cafes/casca-danta`.
 
-### 3.6 Renderização por rota
+### 3.7 Renderização por rota
 
 | Rota | Estratégia | Motivo |
 |---|---|---|

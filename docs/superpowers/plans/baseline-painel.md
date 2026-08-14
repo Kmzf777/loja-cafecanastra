@@ -195,17 +195,8 @@ Duas, ambas correções de quebras causadas pela migração, não melhorias:
 
 ## Pendências conhecidas (não corrigidas nesta task)
 
-1. **Imagens importadas renderizam quebradas.** No Vite, `import logo from
-   "...jpeg"` devolvia uma string de URL; no Next devolve um objeto
-   `StaticImageData`. O legado usa `<img src={logo}>`, então o browser pede
-   `/[object Object]` (404 observado no log do Next). Afeta o painel em
-   `pages/dashboard/Dashboard.jsx` (logo do header) e
-   `components/Loading/Loading.jsx` (logo do fallback de carregamento) — e mais
-   11 pontos fora do painel. É defeito **visual**, não quebra rota. Correções
-   possíveis: `logo.src` nos pontos de uso, ou
-   `images: { disableStaticImages: true }` no `next.config.mjs` (restaura o
-   comportamento tipo-Vite globalmente, mas impede static import com
-   `next/image` na vitrine nova). Decisão deixada para quem tocar a vitrine.
+1. ~~**Imagens importadas renderizam quebradas.**~~ **RESOLVIDO** — ver seção
+   "Correção das imagens estáticas" abaixo.
 2. **O redirect do guard morre dentro da ilha.** Sem sessão de admin,
    `AdminRoutes` faz `<Navigate to="/account/login">`, mas `/account/login` não
    é rota deste roteador (a ilha só conhece `/dashboard/*`) nem existe ainda no
@@ -217,6 +208,48 @@ Duas, ambas correções de quebras causadas pela migração, não melhorias:
    `import.meta.env.VITE_MP_PUBLIC_KEY`. Não afeta o painel (não entra nesse
    bundle), mas quebrará do mesmo jeito que `api.js` quando o checkout for
    portado.
+
+## Correção das imagens estáticas
+
+No Vite, `import logo from "...jpeg"` devolvia uma string de URL; no Next
+devolve um objeto `StaticImageData`. Como o legado usa `<img src={logo}>`, o
+browser pedia `/[object Object]` — 404 real, observado no log do Next. Sendo o
+painel registrado neste baseline como renderizando, isso é **regressão
+introduzida pela conversão**, e foi corrigida dentro da Task 4.
+
+Correção adotada: acessar `.src` no ponto de uso. Descartado
+`images: { disableStaticImages: true }` no `next.config.mjs` — resolveria com
+uma linha, mas desligaria o static import de imagem em todo o projeto,
+inclusive na vitrine nova, que vai usar `next/image` com import estático para
+obter `width`/`height` automáticos (requisito de CLS zero e LCP < 2s). Não
+compensa trocar um bug visual de 2 arquivos por perda permanente de capacidade.
+
+Arquivos alterados (só o acesso à propriedade; nenhum `next/image`, nenhuma
+mudança de estilo ou refatoração em volta):
+
+| arquivo | antes | depois |
+|---|---|---|
+| `legacy/pages/dashboard/Dashboard.jsx` | `<img src={LogoShopnaw} ...>` | `<img src={LogoShopnaw.src} ...>` |
+| `legacy/components/Loading/Loading.jsx` | `<LogoImage src={logo} ...>` | `<LogoImage src={logo.src} ...>` |
+
+**São exatamente estes dois no grafo do painel**, confirmado por três vias: (a)
+o único asset emitido no chunk da ilha é `static/media/novalogo.c51610a9.jpeg`;
+(b) varredura de `src={...}` em todo `legacy/` — os demais usos dentro do painel
+(`AddedShirts.jsx`, `Form.jsx`, `Orders.jsx`, `UpdateInfo.jsx`) recebem URL de
+runtime vindo da API ou de estado, não de import estático; (c) os outros
+arquivos com import estático de imagem (`Header.jsx`, `Banner.jsx`,
+`LoginForm.jsx`, `SignUpForm.jsx`, `Cart.jsx`, `Home.jsx`) pertencem só à
+vitrine antiga, que será substituída — não foram tocados.
+
+Verificação (Chrome headless, mesma técnica de DOM usada acima, com a cópia sem
+guard para o painel chegar a renderizar):
+
+- `object Object` no DOM: **0 ocorrências** em `/dashboard`, `/dashboard/orders`
+  e `/dashboard/settings/offers` (antes: logo quebrado nas três).
+- `src` do logo agora: `/_next/static/media/novalogo.c51610a9.jpeg`.
+- O asset responde `200 image/jpeg` (7595 bytes).
+- Requisições a `/[object Object]` no log do Next: **0** (antes: 404).
+- As 8 rotas seguem `200`, `next build` compila, zero erro de módulo.
 
 ## O que continua não verificado
 

@@ -64,7 +64,7 @@ export default function Loading() {
         transition={{ duration: 0.8 }}
       >
         <LogoImage
-          src={logo}
+          src={logo.src}
           alt="Shop NAW Logo"
           animate={{ y: [0, -10, 0] }}
           transition={{ duration: 1.5, repeat: Infinity }}

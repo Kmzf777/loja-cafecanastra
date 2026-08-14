@@ -30,7 +30,7 @@ function Dashboard() {
     <DashboardContainer>
       <HeaderComponent>
         <div className="logoContent" onClick={() => navigate("/dashboard")}>
-          <img src={LogoShopnaw} alt="Logo-Shopnaw" />
+          <img src={LogoShopnaw.src} alt="Logo-Shopnaw" />
         </div>
 
         <span className="backShop" onClick={() => navigate("/site")}>
