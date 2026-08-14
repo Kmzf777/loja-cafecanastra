@@ -18,8 +18,29 @@
 @layer theme, base, components, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
 /* preflight NAO e importado globalmente — escopado abaixo em .vitrine */
+
+/* ---------------------------------------------------------------------------
+   Scan restrito aos diretorios da vitrine.
+
+   `source(none)` desliga a deteccao automatica de conteudo. Sem ele, o Tailwind
+   varre a raiz do projeto e alcanca frontend/legacy, gerando utilitarios a
+   partir de texto solto dentro dos templates styled-components (`display: flex`
+   vira `.flex`, e assim por diante). Esses utilitarios nao afetam o painel hoje
+   — nenhum className literal do legado colide com um nome de utilitario — mas a
+   garantia expira no dia em que alguem escrever className="table" ou "border"
+   num componente legado: o elemento herdaria o estilo do Tailwind em silencio.
+
+   Os @source abaixo declaram explicitamente onde a vitrine vive. `components/`
+   e `lib/` ainda nao existem (chegam no proximo plano); ficam declarados desde
+   ja para que as classes usadas la sejam geradas assim que os arquivos
+   aparecerem — do contrario a falha se manifestaria como componente sem estilo,
+   sem erro nenhum.
+--------------------------------------------------------------------------- */
+@source "../app";
+@source "../components";
+@source "../lib";
 
 @layer base {
   .vitrine *,
