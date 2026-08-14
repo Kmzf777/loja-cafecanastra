@@ -1,3 +1,5 @@
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { Archivo, Martian_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -15,12 +17,18 @@ const martianMono = Martian_Mono({
   preload: false,
 });
 
-export const metadata = {
+export const metadata: Metadata = {
   title: "Café Canastra",
   description: "Café que vem de cima. Torrado sob demanda, desde 1985.",
 };
 
-export default function RootLayout({ children }) {
+/**
+ * Layout raiz — envolve TANTO a vitrine quanto o painel legado em /dashboard.
+ * Nada de estilo visual entra aqui: as classes de fonte apenas expoem
+ * --fonte-ui / --fonte-dado no <html>; quem as aplica e `.vitrine`, em
+ * app/globals.css. Ver o comentario no topo daquele arquivo.
+ */
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="pt-BR" className={`${archivo.variable} ${martianMono.variable}`}>
       <body>{children}</body>
