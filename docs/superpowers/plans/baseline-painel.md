@@ -1,6 +1,6 @@
 # Baseline do painel administrativo (`/dashboard`) — pré-conversão
 
-Data: 2026-08-13
+Data: 2026-08-14
 Branch: `feat/vitrine-nextjs`
 Origem: `frontend/src/main.jsx`
 
@@ -113,3 +113,115 @@ de `frontend/`), repetir este mesmo procedimento e comparar:
    verificação **não foi feita** aqui por indisponibilidade de banco — não
    deve ser interpretado como "painel testado e aprovado" além do nível de
    grafo de módulos.
+
+---
+
+# Pós-conversão (Task 4 — painel como ilha client-only no Next 15)
+
+Data: 2026-08-14
+Branch: `feat/vitrine-nextjs`
+Origem agora: `frontend/legacy/PainelApp.jsx`, montado por
+`frontend/app/dashboard/[[...rota]]/page.tsx` via
+`next/dynamic(..., { ssr: false })`.
+
+## Resultado das 8 rotas
+
+Duas medições independentes, ambas com o dev server do Next em
+`localhost:3000` e **sem backend/banco** (limitação inalterada, ver acima):
+
+- **HTTP**: `curl` na rota, confirmando que o Next serve o shell da página.
+- **DOM renderizado**: Chrome headless (`--dump-dom`), confirmando que o bundle
+  client-only realmente executa, o react-router casa a rota, o layout
+  `Dashboard.jsx` monta com `<Outlet/>` e o componente de tela aparece.
+
+A medição de DOM foi feita com uma cópia temporária do `PainelApp` **sem** o
+guard `AdminRoutes` (idêntica no resto: mesmas rotas, mesmos componentes, mesmo
+ponto de montagem `/dashboard`), porque sem banco não existe sessão de admin e o
+guard redireciona antes de qualquer tela renderizar. Essa cópia foi apagada após
+a verificação e **não** faz parte do commit.
+
+| rota | componente | HTTP | DOM renderiza (sem guard) | status |
+|---|---|---|---|---|
+| `/dashboard` (index) | `components/DashboardSection/Home/HomeDashboard.jsx` | 200 | sim, layout + tela | OK |
+| `/dashboard/products/addProduct` | `components/DashboardSection/GProducts/form/Form.jsx` | 200 | sim, layout + tela | OK |
+| `/dashboard/products/addedProducts` | `components/DashboardSection/GProducts/addedShirts/AddedShirts.jsx` | 200 | sim, layout + tela | OK |
+| `/dashboard/orders` | `components/DashboardSection/Orders/Orders.jsx` | 200 | sim, layout + tela | OK |
+| `/dashboard/clients/registeredClients` | `components/DashboardSection/Clients/RegisteredClients/RegisteredClients.jsx` | 200 | sim, layout + tela | OK |
+| `/dashboard/settings/updateShopInfo` | `components/DashboardSection/Settings/UpdateShopInfo/UpdateInfo.jsx` | 200 | sim, layout + tela | OK |
+| `/dashboard/settings/manageCategories` | `components/DashboardSection/Settings/ManageCategories/ManageCategories.jsx` | 200 | sim, layout + tela | OK |
+| `/dashboard/settings/offers` | `components/DashboardSection/Settings/OffersAndCupons/PromotionsManager.jsx` | 200 | sim, layout + tela | OK |
+
+Nenhuma rota voltou 404/500. `next build` compila com sucesso (rota
+`ƒ /dashboard/[[...rota]]`). Nenhum erro de módulo não resolvido no log do Next.
+
+Navegação client-side também verificada via Chrome DevTools Protocol: clicar nos
+links do `MenuAside` troca a rota sem full reload (marcador em `window`
+sobrevive), e `history.back()` volta corretamente — ou seja, o `react-router` do
+legado convive com o App Router do Next sem conflito de `pushState`.
+
+Roteador usado: **`createBrowserRouter`**. O fallback `createMemoryRouter`
+previsto no design **não foi necessário**.
+
+## Decisão de rota: sem `basename`
+
+O design previa `basename: "/dashboard"` com paths relativos. **Isso não
+funciona** com este painel e foi descartado por evidência empírica: o
+`react-router` prefixa o `basename` também em paths **absolutos**, e o legado
+navega por absolutos (`to="/dashboard/orders"` em `MenuAside.jsx`,
+`navigate("/dashboard")` em `Dashboard.jsx`). Com `basename`, os links do menu
+renderizavam como `/dashboard/dashboard/orders` (verificado no DOM), quebrando
+toda a navegação interna.
+
+Solução adotada: **nenhum `basename`**, mantendo os paths absolutos idênticos
+aos de `main.jsx`. Assim o menu do painel funciona sem editar nenhum componente
+legado.
+
+## Alterações necessárias em `legacy/`
+
+Duas, ambas correções de quebras causadas pela migração, não melhorias:
+
+1. `legacy/routes/AdminRoutes.jsx` — importava
+   `../../src/contexts/...` e `../../src/components/...`. Esses caminhos
+   apontavam para `frontend/src/`, que deixou de existir quando a Task 3 moveu
+   `src/` → `legacy/`. Corrigido para `../contexts/...` e `../components/...`.
+   Sem isso o `next build` falha com módulo não encontrado.
+2. `legacy/api.js` — `import.meta.env.VITE_API_URL` é API exclusiva do Vite. O
+   webpack do Next compila isso para `undefined.VITE_API_URL`, que lança
+   `TypeError` na avaliação do módulo. Como os quatro contexts do painel
+   importam `api.js`, **as 8 rotas dariam tela branca**. Trocado por
+   `process.env.NEXT_PUBLIC_API_URL`, preservando o fallback
+   `http://localhost:3333` (não há `.env` no projeto, então o valor efetivo é
+   idêntico ao de antes).
+
+## Pendências conhecidas (não corrigidas nesta task)
+
+1. **Imagens importadas renderizam quebradas.** No Vite, `import logo from
+   "...jpeg"` devolvia uma string de URL; no Next devolve um objeto
+   `StaticImageData`. O legado usa `<img src={logo}>`, então o browser pede
+   `/[object Object]` (404 observado no log do Next). Afeta o painel em
+   `pages/dashboard/Dashboard.jsx` (logo do header) e
+   `components/Loading/Loading.jsx` (logo do fallback de carregamento) — e mais
+   11 pontos fora do painel. É defeito **visual**, não quebra rota. Correções
+   possíveis: `logo.src` nos pontos de uso, ou
+   `images: { disableStaticImages: true }` no `next.config.mjs` (restaura o
+   comportamento tipo-Vite globalmente, mas impede static import com
+   `next/image` na vitrine nova). Decisão deixada para quem tocar a vitrine.
+2. **O redirect do guard morre dentro da ilha.** Sem sessão de admin,
+   `AdminRoutes` faz `<Navigate to="/account/login">`, mas `/account/login` não
+   é rota deste roteador (a ilha só conhece `/dashboard/*`) nem existe ainda no
+   Next. Resultado hoje: tela de erro padrão do react-router
+   ("Unexpected Application Error / 404 Not Found"). Só será resolvido quando a
+   vitrine trouxer `/account/login` para o Next — aí o redirect precisa virar
+   navegação "dura" (`window.location`) para sair da ilha.
+3. `legacy/pages/Checkout/Checkout.jsx:57` ainda usa
+   `import.meta.env.VITE_MP_PUBLIC_KEY`. Não afeta o painel (não entra nesse
+   bundle), mas quebrará do mesmo jeito que `api.js` quando o checkout for
+   portado.
+
+## O que continua não verificado
+
+Segue **sem** verificação autenticada real: não há banco, logo não há login nem
+sessão de admin, e todas as chamadas de API falham com `Failed to fetch`. O que
+está provado é que as rotas existem, os bundles carregam e executam, os
+componentes montam e a navegação funciona. O comportamento das telas **com
+dados** continua não testado.

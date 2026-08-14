@@ -1,7 +1,7 @@
 import { useContext } from "react";
 import { Navigate, Outlet } from "react-router-dom";
-import authContext from "../../src/contexts/loginContext/createAuthContext";
-import Loading from "../../src/components/Loading/Loading";
+import authContext from "../contexts/loginContext/createAuthContext";
+import Loading from "../components/Loading/Loading";
 
 const AdminRoutes = () => {
   const { user, initialized } = useContext(authContext);
