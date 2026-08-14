@@ -1,2 +1,64 @@
-/* tokens e Tailwind entram nas Tasks 5 e 6 */
-:root { color-scheme: light; }
+/* ---------------------------------------------------------------------------
+   Tailwind v4 — camadas importadas SEM o preflight global.
+
+   Este arquivo e carregado por app/layout.jsx, que envolve TODA a aplicacao:
+   tanto a vitrine nova (app/(vitrine)) quanto o painel legado montado em
+   /dashboard (frontend/legacy, styled-components).
+
+   Por isso o preflight (reset do Tailwind) NAO e importado aqui. Ele zeraria
+   font-size/font-weight de titulos, aparencia de button, sublinhado de <a>,
+   display de <img> etc. dentro do painel legado, que depende dos defaults do
+   navegador e so reseta `* { margin/padding/box-sizing/font-family }` no seu
+   proprio GlobalStyle. O reset equivalente e aplicado abaixo, escopado em
+   `.vitrine`, que e aplicado apenas pelo layout do grupo de rotas da vitrine.
+
+   Tokens de cor: Task 6. Fontes: Task 11.
+--------------------------------------------------------------------------- */
+
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+/* preflight NAO e importado globalmente — escopado abaixo em .vitrine */
+
+@layer base {
+  .vitrine *,
+  .vitrine *::before,
+  .vitrine *::after {
+    box-sizing: border-box;
+    border: 0 solid;
+    margin: 0;
+    padding: 0;
+  }
+
+  .vitrine img,
+  .vitrine svg,
+  .vitrine video {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  .vitrine h1,
+  .vitrine h2,
+  .vitrine h3,
+  .vitrine h4 {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  .vitrine a {
+    color: inherit;
+    text-decoration: inherit;
+  }
+
+  .vitrine button {
+    background: none;
+    font: inherit;
+    cursor: pointer;
+  }
+}
+
+:root {
+  color-scheme: light;
+}
