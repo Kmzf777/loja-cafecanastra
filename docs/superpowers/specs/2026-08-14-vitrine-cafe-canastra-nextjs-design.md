@@ -87,7 +87,7 @@ export default function Page() {
 }
 ```
 
-`PainelLegado` preserva o `react-router` interno e os providers atuais. As 20 rotas do painel seguem funcionando sem reescrita. Como nada ali renderiza no servidor, os styled-components do legado **não precisam de registry de SSR** — o risco de FOUC desaparece justamente na parte que não vamos consertar.
+`PainelLegado` preserva o `react-router` interno e os providers atuais. As **8 rotas** do painel (índice + 7 telas) seguem funcionando sem reescrita. As demais rotas de `main.jsx` pertencem à vitrine (`/site`, `/checkout/*`, `/account/*`, institucionais) e ficam deliberadamente sem servir — são reescritas no Plano 2. Como nada ali renderiza no servidor, os styled-components do legado **não precisam de registry de SSR** — o risco de FOUC desaparece justamente na parte que não vamos consertar.
 
 **Sem `basename`** — corrigido durante a implementação. A intenção original era `createBrowserRouter(..., { basename: "/dashboard" })`, mas isso quebra o painel: o react-router aplica o basename também a caminhos **absolutos**, e o legado navega por absolutos (`to="/dashboard/orders"` em `MenuAside.jsx`). Os links passavam a apontar para `/dashboard/dashboard/orders` e o menu inteiro parava, embora o acesso por URL direta continuasse funcionando. A solução é manter os paths absolutos idênticos aos de `main.jsx` e não declarar basename — nenhum componente legado precisa ser editado.
 
@@ -255,6 +255,9 @@ Pontos de atenção:
 - **Carrinho.** Hoje vive em `localStorage` e sincroniza com o banco no login (`productContextProvider.jsx`). Continua client-side; a sacola nunca renderiza no servidor.
 - **Mercado Pago.** `@mercadopago/sdk-react` é client-only: `dynamic(..., { ssr: false })`.
 - **Sem Postgres local.** Não há PostgreSQL nem Docker na máquina, e `estrutura.sql` está no `.gitignore` — o schema não veio no repositório. Na Fase 1 isso não bloqueia, porque a vitrine roda sobre o mock. Bloqueia checkout e conta de ponta a ponta.
+- **`NEXT_PUBLIC_*` é resolvido em build time.** Diferente do `import.meta.env` do Vite, o webpack do Next substitui essas variáveis estaticamente durante o build. A URL da API passa a ser decidida no momento de compilar, não no runtime — o que muda como o deploy precisa ser configurado. Hoje, sem `.env`, vale o fallback `http://localhost:3333`.
+- **O redirect do guard não tem destino.** Sem sessão, `legacy/routes/AdminRoutes.jsx:14` faz `<Navigate to="/account/login">`, rota que não existe dentro da ilha nem no Next. O react-router renderiza sua tela crua de erro. Atinge qualquer admin com sessão expirada, não só o ambiente de desenvolvimento. Quando `/account/login` existir no Plano 2, o redirect precisa virar `window.location` para sair da ilha.
+- **O painel não tem `errorElement` em nenhuma rota.** Um throw em qualquer tela derruba a árvore inteira, menu incluído. É fragilidade pré-existente do legado, não introduzida pela migração, mas amplifica qualquer falha de API em produção. Fica para a reescrita do painel na Fase 2.
 
 ---
 
