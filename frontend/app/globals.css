@@ -44,7 +44,10 @@
 
 /* ---------------------------------------------------------------------------
    Tokens de cor, raio e easing — transcritos de estetica.md §4.1 e §4.3.
-   Tipografia fica para a Task 11.
+   Tipografia (§4.2) — Task 11. As custom properties --fonte-ui e --fonte-dado
+   sao geradas pelo next/font/google em app/layout.jsx e aplicadas como classe
+   no <html>; --font-titulo cai no fallback ate a Redaction 35 ser instalada
+   manualmente (ver app/fontes/LEIA-ME.md).
 --------------------------------------------------------------------------- */
 @theme {
   --color-fuligem: #14110E;
@@ -66,6 +69,10 @@
   --radius-bt: 2px;
 
   --ease-canastra: cubic-bezier(.22, 1, .36, 1);
+
+  --font-ui: var(--fonte-ui), system-ui, sans-serif;
+  --font-dado: var(--fonte-dado), ui-monospace, monospace;
+  --font-titulo: "Redaction 35", Georgia, serif;
 }
 
 @layer base {
