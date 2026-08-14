@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
    Tailwind v4 — camadas importadas SEM o preflight global.
 
-   Este arquivo e carregado por app/layout.jsx, que envolve TODA a aplicacao:
+   Este arquivo e carregado por app/layout.tsx, que envolve TODA a aplicacao:
    tanto a vitrine nova (app/(vitrine)) quanto o painel legado montado em
    /dashboard (frontend/legacy, styled-components).
 
@@ -45,25 +45,53 @@
 /* ---------------------------------------------------------------------------
    Tokens de cor, raio e easing — transcritos de estetica.md §4.1 e §4.3.
    Tipografia (§4.2) — Task 11. As custom properties --fonte-ui e --fonte-dado
-   sao geradas pelo next/font/google em app/layout.jsx e aplicadas como classe
+   sao geradas pelo next/font/google em app/layout.tsx e aplicadas como classe
    no <html>; --font-titulo cai no fallback ate a Redaction 35 ser instalada
    manualmente (ver app/fontes/LEIA-ME.md).
+
+   RENOMEACAO DOS TOKENS — o estetica.md §4.1/§4.2/§4.3 chama estas variaveis de
+   `--c-*`, `--f-*` e `--e-*`. Aqui elas viram `--color-*`, `--font-*`,
+   `--radius-*` e `--ease-*` porque o Tailwind v4 so reconhece um token de tema
+   pelo seu namespace: `--color-juta` gera `bg-juta`/`text-juta`/`border-juta`,
+   enquanto `--c-juta` seria apenas uma custom property inerte, sem utilitario.
+   Quem cruzar documento e codigo deve ler `--c-x` como `--color-x`. Os valores
+   sao identicos; o conteudo normativo continua sendo o estetica.md.
+
+   `@theme static` — NAO trocar por `@theme` puro. O Tailwind v4 faz
+   tree-shaking das variaveis de @theme: so emite no CSS final aquelas que algum
+   utilitario efetivamente usa. Com `@theme` simples, apenas 1 destas 22
+   variaveis chegava ao browser (medido com o mesmo plugin postcss que o Next
+   roda); `getComputedStyle(document.documentElement)` devolvia "" para
+   --color-fuligem, --color-juta, --radius-bt e --ease-canastra. Isso e fatal
+   para o que vem a seguir: <Serra> pinta stroke/fill por variavel, o heroi usa
+   gradiente e ha `style={{}}` com var(--color-*) — todos receberiam string
+   vazia SEM ERRO NENHUM. `static` forca a emissao de todas, usadas ou nao.
+   Verificado em tailwindcss 4.3.3.
 --------------------------------------------------------------------------- */
-@theme {
+@theme static {
+  /* — Superficies e tinta — */
   --color-fuligem: #14110E;
   --color-fuligem-80: #3A342E;
   --color-fuligem-55: #6E655C;
   --color-fuligem-20: #CFC8BE;
   --color-cal: #F1F0EA;
   --color-cal-puro: #FBFAF7;
+
+  /* — Cores de territorio — */
   --color-juta: #C9A87A;
   --color-juta-claro: #E2D3B8;
   --color-barro: #8E4B2E;
   --color-mata: #2C3B2E;
+
+  /* — Acento de marca — */
   --color-vermelho: #C4231E;
   --color-vermelho-esc: #9A1A16;
+
+  /* — Semanticas — */
   --color-sucesso: #3F6B45;
   --color-alerta: #B87514;
+  /* estetica.md §4.1: `--c-erro: var(--c-vermelho)`. Alias, nao cor nova. */
+  --color-erro: var(--color-vermelho);
 
   --radius-cx: 0px;
   --radius-bt: 2px;
@@ -76,6 +104,47 @@
 }
 
 @layer base {
+  /* -------------------------------------------------------------------------
+     <html> e <body> ficam FORA de `.vitrine *` — o contêiner .vitrine e um
+     <div> filho do body (app/(vitrine)/layout.tsx). Sem as duas regras abaixo,
+     a vitrine herdava `margin: 8px` e `font-family: "Times New Roman"` dos
+     defaults do navegador: o heroi full-bleed de 88vh (estetica.md §7.1) nascia
+     com 8px de calha e barra de rolagem horizontal, e todo texto saia serifado.
+
+     `:has()` e o que mantem isso longe do painel legado. Uma regra `body { }`
+     seca alcancaria /dashboard; `body:has(.vitrine)` so casa quando o layout do
+     grupo (vitrine) montou o contêiner, o que nunca acontece sob /dashboard.
+     (Mesmo se o seletor degradasse, o painel ja aplica `* { margin: 0 }` no seu
+     proprio createGlobalStyle — mas nao dependemos disso: a prova e o seletor.)
+  ------------------------------------------------------------------------- */
+  html:has(.vitrine) {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /* A voz da interface (estetica.md §4.2: corpo e UI em Archivo), a entrelinha
+     e a superficie base (Cal). Ficam no <body>, e nao so no `.vitrine`, porque
+     um portal (`createPortal(…, document.body)` — drawer da sacola, modal de
+     assinatura) monta FORA do contêiner e cairia na fonte serifada do
+     navegador. Com a regra no body, `.vitrine` herda e o portal tambem. */
+  body:has(.vitrine) {
+    margin: 0;
+    font-family: var(--font-ui);
+    line-height: 1.5;
+    color: var(--color-fuligem);
+    background-color: var(--color-cal);
+  }
+
+  /* Repeticao deliberada, com valores identicos: se `:has()` faltar no
+     navegador, a vitrine ainda recebe fonte, entrelinha e tinta corretas —
+     perde-se so a margem zero do body. Nao ha divergencia possivel porque os
+     valores sao os mesmos tokens. */
+  .vitrine {
+    font-family: var(--font-ui);
+    line-height: 1.5;
+    color: var(--color-fuligem);
+  }
+
   .vitrine *,
   .vitrine *::before,
   .vitrine *::after {
@@ -106,10 +175,27 @@
     text-decoration: inherit;
   }
 
+  /* Sem isto, os controles de formulario (newsletter, checkout) caem na fonte
+     do sistema em vez da Archivo — o navegador nao herda `font` em
+     input/textarea/select/button. `color: inherit` pelo mesmo motivo. */
+  .vitrine input,
+  .vitrine textarea,
+  .vitrine select,
+  .vitrine button {
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+  }
+
   .vitrine button {
     background: none;
-    font: inherit;
     cursor: pointer;
+  }
+
+  /* O navegador nao quebra palavra dentro de <textarea> herdando isto, mas
+     resize horizontal estoura grid — trava so o eixo vertical. */
+  .vitrine textarea {
+    resize: vertical;
   }
 }
 
