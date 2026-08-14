@@ -162,6 +162,14 @@
     height: auto;
   }
 
+  /* O preflight do Tailwind zera isto; como ele nao e importado globalmente,
+     precisa constar aqui. Sem a regra, toda <ul> de navegacao e de rodape
+     renderiza com bolinha de marcador. */
+  .vitrine ul,
+  .vitrine ol {
+    list-style: none;
+  }
+
   .vitrine h1,
   .vitrine h2,
   .vitrine h3,
