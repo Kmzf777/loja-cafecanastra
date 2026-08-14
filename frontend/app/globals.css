@@ -42,6 +42,32 @@
 @source "../components";
 @source "../lib";
 
+/* ---------------------------------------------------------------------------
+   Tokens de cor, raio e easing — transcritos de estetica.md §4.1 e §4.3.
+   Tipografia fica para a Task 11.
+--------------------------------------------------------------------------- */
+@theme {
+  --color-fuligem: #14110E;
+  --color-fuligem-80: #3A342E;
+  --color-fuligem-55: #6E655C;
+  --color-fuligem-20: #CFC8BE;
+  --color-cal: #F1F0EA;
+  --color-cal-puro: #FBFAF7;
+  --color-juta: #C9A87A;
+  --color-juta-claro: #E2D3B8;
+  --color-barro: #8E4B2E;
+  --color-mata: #2C3B2E;
+  --color-vermelho: #C4231E;
+  --color-vermelho-esc: #9A1A16;
+  --color-sucesso: #3F6B45;
+  --color-alerta: #B87514;
+
+  --radius-cx: 0px;
+  --radius-bt: 2px;
+
+  --ease-canastra: cubic-bezier(.22, 1, .36, 1);
+}
+
 @layer base {
   .vitrine *,
   .vitrine *::before,
