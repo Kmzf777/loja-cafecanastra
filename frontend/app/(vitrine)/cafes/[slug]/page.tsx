@@ -77,7 +77,7 @@ export default async function PaginaLote({
   return (
     <>
       {/* ── Topo: galeria + compra ──────────────────────────── superfície cal */}
-      <div className="mx-auto max-w-[1440px] px-5 py-10 md:px-10 md:py-16">
+      <div className="mx-auto max-w-[1440px] px-4 py-10 md:px-10 md:py-16">
         <nav aria-label="Trilha" className="mb-8 text-[12px] uppercase tracking-[0.14em] text-fuligem-55">
           <Link href="/cafes" className="hover:text-vermelho">
             Cafés
@@ -111,7 +111,7 @@ export default async function PaginaLote({
               </span>
             </p>
 
-            <h1 className="mt-3 font-titulo text-[clamp(2.25rem,5vw,3.75rem)] leading-[1] tracking-[-0.015em]">
+            <h1 className="mt-3 font-titulo text-[clamp(2.5rem,5vw,3.75rem)] leading-[1] tracking-[-0.015em]">
               {lote.nome}
             </h1>
 
@@ -143,11 +143,11 @@ export default async function PaginaLote({
 
       {/* ── História do lote ────────────────────────────── superfície fuligem */}
       <section className="bg-fuligem py-16 text-cal md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             A história deste lote
           </p>
-          <p className="mt-6 max-w-[62ch] font-titulo text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
+          <p className="mt-6 max-w-[62ch] titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
             {lote.descricao}
           </p>
           <p className="mt-6 max-w-[62ch] text-[17px] leading-relaxed text-cal/80">
@@ -163,8 +163,8 @@ export default async function PaginaLote({
 
       {/* ── Como preparar ─────────────────────────────────── superfície kraft */}
       <section className="bg-juta-claro py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
-          <h2 className="font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
+          <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
             Como preparar
           </h2>
 
@@ -208,9 +208,9 @@ export default async function PaginaLote({
 
       {/* ── Da mesma serra ──────────────────────────────────── superfície cal */}
       <section className="bg-cal py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 className="font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+            <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
               Da mesma serra
             </h2>
             <span className="font-dado text-[13px] text-fuligem-55">

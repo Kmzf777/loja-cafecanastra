@@ -207,6 +207,30 @@
   }
 }
 
+@layer components {
+  /* -------------------------------------------------------------------------
+     Titulo de secao — estetica.md §4.2 e §10.
+     A Redaction 35 so pode ser usada a partir de 40px: abaixo disso a
+     degradacao de impressao dela vira sujeira. Os titulos de secao ficam em
+     ~28px no mobile, entao ali eles passam a Archivo 700, exatamente como o
+     §10 determina ("H2 mobile passa a Archivo 700"). A partir de `md` o
+     tamanho justifica a serifada e ela volta.
+  ------------------------------------------------------------------------- */
+  .vitrine .titulo-secao {
+    font-family: var(--font-ui);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  @media (min-width: 768px) {
+    .vitrine .titulo-secao {
+      font-family: var(--font-titulo);
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+  }
+}
+
 :root {
   color-scheme: light;
 }

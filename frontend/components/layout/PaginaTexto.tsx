@@ -17,7 +17,7 @@ export function PaginaTexto({
   children: ReactNode;
 }) {
   return (
-    <div className="mx-auto max-w-[1440px] px-5 py-12 md:px-10 md:py-20">
+    <div className="mx-auto max-w-[1440px] px-4 py-10 md:px-10 md:py-20">
       <h1 className="font-titulo text-[clamp(2.25rem,5vw,3.75rem)] leading-none">
         {titulo}
       </h1>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Lote, Moagem, PesoGramas } from "@/lib/catalogo/tipos";
 import { MOAGENS } from "@/lib/catalogo/tipos";
 import {
@@ -38,6 +38,25 @@ export function PainelCompra({ lote }: { lote: Lote }) {
     lote.assinatura?.frequenciasDias[1] ?? 30,
   );
   const [quantidade, setQuantidade] = useState(1);
+
+  /**
+   * §10 — em mobile a PDP ganha barra de compra fixa no rodape, que aparece
+   * DEPOIS que o usuario passa do botao original. Mostra-la desde o inicio
+   * cobriria o proprio botao e roubaria altura util logo na primeira dobra.
+   */
+  const ctaRef = useRef<HTMLDivElement>(null);
+  const [ctaVisivel, setCtaVisivel] = useState(true);
+
+  useEffect(() => {
+    const alvo = ctaRef.current;
+    if (!alvo || typeof IntersectionObserver === "undefined") return;
+    const obs = new IntersectionObserver(
+      ([e]) => setCtaVisivel(e.isIntersecting),
+      { rootMargin: "0px 0px -72px 0px" },
+    );
+    obs.observe(alvo);
+    return () => obs.disconnect();
+  }, []);
 
   const variante = acharVariante(lote, moagem, peso);
   const indisponivel = !variante || variante.estoque === 0;
@@ -187,7 +206,7 @@ export function PainelCompra({ lote }: { lote: Lote }) {
       </fieldset>
 
       {/* ── Quantidade e CTA ───────────────────────────────────────────────── */}
-      <div className="mt-8 flex flex-wrap items-stretch gap-3">
+      <div ref={ctaRef} className="mt-8 flex flex-wrap items-stretch gap-3">
         <div className="flex items-center border border-fuligem-20">
           <button
             onClick={() => setQuantidade((q) => Math.max(1, q - 1))}
@@ -229,6 +248,34 @@ export function PainelCompra({ lote }: { lote: Lote }) {
           Torramos na terça, enviamos na quarta.
         </p>
       )}
+
+      {/* Barra de compra fixa — só mobile, e só depois de passar do CTA (§10) */}
+      <div
+        aria-hidden={ctaVisivel}
+        className={`fixed inset-x-0 bottom-0 z-40 border-t border-fuligem-20 bg-cal-puro px-4 py-3 transition-transform duration-[320ms] ease-canastra md:hidden ${
+          ctaVisivel ? "translate-y-full" : "translate-y-0"
+        }`}
+        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[12px] uppercase tracking-[0.12em] text-fuligem-55">
+              {lote.nome}
+            </p>
+            <p className="font-dado text-[17px] leading-tight">
+              {formatarPreco(preco)}
+            </p>
+          </div>
+          <Botao
+            variante="primario"
+            disabled={indisponivel}
+            tabIndex={ctaVisivel ? -1 : undefined}
+            className="shrink-0 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
+          >
+            {indisponivel ? "Esgotado" : "Adicionar"}
+          </Botao>
+        </div>
+      </div>
     </div>
   );
 }

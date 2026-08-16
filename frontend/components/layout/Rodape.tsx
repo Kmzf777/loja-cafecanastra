@@ -44,7 +44,7 @@ const COLUNAS = [
 export function Rodape() {
   return (
     <footer className="mt-auto bg-fuligem text-cal">
-      <div className="mx-auto max-w-[1440px] px-5 py-16 md:px-10 md:py-24">
+      <div className="mx-auto max-w-[1440px] px-4 py-14 md:px-10 md:py-24">
         <div className="grid grid-cols-2 gap-x-8 gap-y-10 md:grid-cols-4">
           {COLUNAS.map((coluna) => (
             <div key={coluna.titulo}>
@@ -67,18 +67,23 @@ export function Rodape() {
           ))}
         </div>
 
-        <div className="mt-16 flex flex-col items-center border-t border-fuligem-80 pt-14">
-          {/* invert() porque o ativo e preto sobre transparente e o fundo aqui
+        <div className="mt-14 flex flex-col items-center border-t border-fuligem-80 pt-12 md:mt-16 md:pt-14">
+          {/* O <div> com largura propria e o que impede o estouro: sem ele o
+              flex se dimensiona pela largura intrinseca do PNG (3508px) e o
+              documento inteiro ganha rolagem horizontal em mobile.
+              invert() porque o ativo e preto sobre transparente e o fundo aqui
               e fuligem. Some quando o SVG com currentColor existir (§1). */}
-          <Image
-            src="/logo-canastra.png"
-            alt="Café Canastra, desde 1985"
-            width={3508}
-            height={2481}
-            sizes="(min-width: 768px) 480px, 80vw"
-            className="w-full max-w-[480px] invert"
-          />
-          <p className="mt-8 font-dado text-[11px] tracking-[0.06em] text-fuligem-20">
+          <div className="w-full max-w-[320px] md:max-w-[480px]">
+            <Image
+              src="/logo-canastra.png"
+              alt="Café Canastra, desde 1985"
+              width={3508}
+              height={2481}
+              sizes="(min-width: 768px) 480px, 320px"
+              className="h-auto w-full invert"
+            />
+          </div>
+          <p className="mt-8 text-center font-dado text-[11px] tracking-[0.06em] text-fuligem-20">
             Serra da Canastra · Minas Gerais
           </p>
         </div>

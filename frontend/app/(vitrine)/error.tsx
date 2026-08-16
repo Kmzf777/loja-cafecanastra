@@ -19,8 +19,8 @@ export default function ErroVitrine({
   }, [error]);
 
   return (
-    <div className="mx-auto max-w-[1440px] px-5 py-20 md:px-10 md:py-28">
-      <h1 className="max-w-[20ch] font-titulo text-[clamp(2rem,4.5vw,3.25rem)] leading-[1.05]">
+    <div className="mx-auto max-w-[1440px] px-4 py-20 md:px-10 md:py-28">
+      <h1 className="max-w-[20ch] titulo-secao text-[clamp(2rem,4.5vw,3.25rem)] leading-[1.05]">
         Não foi possível carregar esta página.
       </h1>
       <p className="mt-5 max-w-[56ch] text-[17px] leading-relaxed text-fuligem-80">

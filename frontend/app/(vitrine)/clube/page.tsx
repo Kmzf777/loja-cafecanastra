@@ -52,11 +52,11 @@ export default async function PaginaClube() {
   return (
     <>
       <section className="bg-mata py-16 text-cal md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             Assinatura
           </p>
-          <h1 className="mt-6 max-w-[16ch] font-titulo text-[clamp(2.25rem,5vw,3.75rem)] leading-[1] tracking-[-0.015em]">
+          <h1 className="mt-6 max-w-[16ch] font-titulo text-[clamp(2.5rem,5vw,3.75rem)] leading-[1] tracking-[-0.015em]">
             Clube da Canastra
           </h1>
           <p className="mt-6 max-w-[56ch] text-[18px] leading-relaxed text-cal/85">
@@ -124,8 +124,8 @@ export default async function PaginaClube() {
       </section>
 
       <section className="bg-cal py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
-          <h2 className="font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
+          <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
             Perguntas diretas
           </h2>
           <dl className="mt-8 max-w-[70ch]">

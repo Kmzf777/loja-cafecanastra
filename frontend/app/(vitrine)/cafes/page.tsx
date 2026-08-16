@@ -102,9 +102,9 @@ export default async function PaginaCafes({
   const chips = ativos(filtros, ordenacao);
 
   return (
-    <div className="mx-auto max-w-[1440px] px-5 py-10 md:px-10 md:py-16">
+    <div className="mx-auto max-w-[1440px] px-4 py-10 md:px-10 md:py-16">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h1 className="font-titulo text-[clamp(2.25rem,5vw,3.75rem)] leading-none">
+        <h1 className="font-titulo text-[clamp(2.5rem,5vw,3.75rem)] leading-none">
           Cafés
         </h1>
         <span className="font-dado text-[13px] tracking-[0.06em] text-fuligem-55">
@@ -253,7 +253,7 @@ export default async function PaginaCafes({
       ) : (
         // §11: tela vazia e convite, e o erro explica e resolve. Nunca "0 resultados".
         <div className="mt-16 max-w-[52ch]">
-          <p className="font-titulo text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
+          <p className="titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
             Nenhum café com esses filtros.
           </p>
           <p className="mt-4 text-[17px] text-fuligem-80">

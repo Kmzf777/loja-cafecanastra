@@ -10,11 +10,11 @@ export default async function LoteNaoEncontrado() {
   const sugestoes = (await listarLotes({}, "sca-desc")).slice(0, 4);
 
   return (
-    <div className="mx-auto max-w-[1440px] px-5 py-16 md:px-10 md:py-24">
+    <div className="mx-auto max-w-[1440px] px-4 py-16 md:px-10 md:py-24">
       <p className="font-dado text-[13px] uppercase tracking-[0.1em] text-fuligem-55">
         404
       </p>
-      <h1 className="mt-4 max-w-[20ch] font-titulo text-[clamp(2.25rem,5vw,3.75rem)] leading-[1.05]">
+      <h1 className="mt-4 max-w-[20ch] font-titulo text-[clamp(2.5rem,5vw,3.75rem)] leading-[1.05]">
         Esse café não está no catálogo.
       </h1>
       <p className="mt-5 max-w-[56ch] text-[17px] leading-relaxed text-fuligem-80">

@@ -63,7 +63,7 @@ export default async function Home() {
           strokeWidth={1.5}
           preenchido
         />
-        <div className="relative mx-auto w-full max-w-[1440px] px-5 pb-20 pt-32 md:px-10 md:pb-28">
+        <div className="relative mx-auto w-full max-w-[1440px] px-4 pb-20 pt-32 md:px-10 md:pb-28">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             Serra da Canastra · Minas Gerais
           </p>
@@ -90,7 +90,7 @@ export default async function Home() {
           {PROVA.map((item, i) => (
             <li
               key={item}
-              className={`px-5 py-6 text-center font-dado text-[12px] uppercase tracking-[0.1em] md:px-10 ${
+              className={`px-4 py-6 text-center font-dado text-[12px] uppercase tracking-[0.1em] md:px-10 ${
                 i > 0 ? "md:border-l md:border-fuligem-20" : ""
               } ${i === 1 || i === 3 ? "border-l border-fuligem-20" : ""} ${
                 i > 1 ? "border-t border-fuligem-20 md:border-t-0" : ""
@@ -104,9 +104,9 @@ export default async function Home() {
 
       {/* ── TORRA DA SEMANA ─────────────────────────────────────── superfície cal */}
       <section className="bg-cal py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 className="font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+            <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
               Torra da semana
             </h2>
             <span className="font-dado text-[13px] tracking-[0.06em] text-fuligem-55">
@@ -130,8 +130,8 @@ export default async function Home() {
 
       {/* ── DO PÉ À XÍCARA ────────────────────────────────────── superfície kraft */}
       <section className="bg-juta-claro py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
-          <h2 className="font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
+          <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
             Do pé à xícara
           </h2>
           {/* Numeração justificada: é sequência real e irreversível (§7.1). */}
@@ -153,11 +153,11 @@ export default async function Home() {
 
       {/* ── CLUBE ────────────────────────────────────────────── superfície mata */}
       <section className="bg-mata py-16 text-cal md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             Assinatura
           </p>
-          <h2 className="mt-5 max-w-[18ch] font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+          <h2 className="mt-5 max-w-[18ch] titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
             Clube da Canastra
           </h2>
           <p className="mt-5 max-w-[62ch] text-[17px] leading-relaxed text-cal/85">
@@ -175,20 +175,24 @@ export default async function Home() {
 
       {/* ── HISTÓRIA ────────────────────────────────────────────── superfície cal */}
       <section className="bg-cal py-16 md:py-24">
-        <div className="mx-auto grid max-w-[1440px] items-center gap-10 px-5 md:grid-cols-2 md:px-10">
-          <Image
-            src="/nossa-historia.png"
-            alt="Dois produtores entre as fileiras de café, no fim da tarde"
-            width={1448}
-            height={1448}
-            sizes="(min-width: 768px) 50vw, 100vw"
-            className="w-full border border-fuligem-20"
-          />
-          <div>
+        <div className="mx-auto grid max-w-[1440px] items-center gap-8 px-4 md:grid-cols-2 md:gap-10 md:px-10">
+          {/* min-w-0: sem isto a largura intrinseca da imagem empurra a coluna
+              do grid e o documento estoura em mobile. */}
+          <div className="min-w-0">
+            <Image
+              src="/nossa-historia.png"
+              alt="Dois produtores entre as fileiras de café, no fim da tarde"
+              width={1448}
+              height={1448}
+              sizes="(min-width: 768px) 50vw, 100vw"
+              className="h-auto w-full border border-fuligem-20"
+            />
+          </div>
+          <div className="min-w-0">
             <p className="font-dado text-[13px] tracking-[0.08em] text-barro">
               Desde 1985
             </p>
-            <h2 className="mt-4 font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+            <h2 className="mt-4 titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
               Quarenta anos na mesma serra
             </h2>
             <p className="mt-5 max-w-[62ch] text-[17px] leading-relaxed text-fuligem-80">

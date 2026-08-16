@@ -40,11 +40,11 @@ export default async function PaginaSerra() {
           strokeWidth={1.5}
           preenchido
         />
-        <div className="relative mx-auto w-full max-w-[1440px] px-5 pb-16 pt-28 md:px-10 md:pb-20">
+        <div className="relative mx-auto w-full max-w-[1440px] px-4 pb-16 pt-28 md:px-10 md:pb-20">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             O território
           </p>
-          <h1 className="mt-6 max-w-[16ch] font-titulo text-[clamp(2.25rem,6vw,4.5rem)] leading-[0.98] tracking-[-0.02em]">
+          <h1 className="mt-6 max-w-[16ch] font-titulo text-[clamp(2.5rem,6vw,4.5rem)] leading-[0.98] tracking-[-0.02em]">
             A serra faz o café.
           </h1>
           <p className="mt-6 max-w-[56ch] text-[18px] leading-relaxed text-cal/80">
@@ -56,12 +56,12 @@ export default async function PaginaSerra() {
 
       {/* ── 1985 ────────────────────────────────────────────── superfície cal */}
       <section className="bg-cal py-16 md:py-24">
-        <div className="mx-auto grid max-w-[1440px] items-center gap-10 px-5 md:grid-cols-2 md:px-10">
+        <div className="mx-auto grid max-w-[1440px] items-center gap-10 px-4 md:grid-cols-2 md:px-10">
           <div>
             <p className="font-dado text-[13px] tracking-[0.08em] text-barro">
               1985
             </p>
-            <h2 className="mt-4 font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+            <h2 className="mt-4 titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
               Quarenta anos na mesma serra
             </h2>
             <p className="mt-5 max-w-[62ch] text-[17px] leading-relaxed text-fuligem-80">
@@ -74,21 +74,26 @@ export default async function PaginaSerra() {
               compra. A serra não mudou.
             </p>
           </div>
-          <Image
-            src="/nossa-historia.png"
-            alt="Dois produtores entre as fileiras de café, no fim da tarde"
-            width={1448}
-            height={1448}
-            sizes="(min-width: 768px) 50vw, 100vw"
-            className="w-full border border-fuligem-20"
-          />
+          {/* min-w-0: item de grid tem `min-width: auto` por padrao, entao a
+              largura intrinseca da imagem (1448px) empurra a coluna e estoura
+              o documento em mobile. */}
+          <div className="min-w-0">
+            <Image
+              src="/nossa-historia.png"
+              alt="Dois produtores entre as fileiras de café, no fim da tarde"
+              width={1448}
+              height={1448}
+              sizes="(min-width: 768px) 50vw, 100vw"
+              className="h-auto w-full border border-fuligem-20"
+            />
+          </div>
         </div>
       </section>
 
       {/* ── Território / altitudes ───────────────────────── superfície kraft */}
       <section className="bg-juta-claro py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
-          <h2 className="font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
+          <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
             De 900 a 1.320 metros
           </h2>
           <p className="mt-5 max-w-[62ch] text-[17px] leading-relaxed text-fuligem-80">
@@ -124,11 +129,11 @@ export default async function PaginaSerra() {
 
       {/* ── A torra ─────────────────────────────────────── superfície fuligem */}
       <section className="bg-fuligem py-16 text-cal md:py-24">
-        <div className="mx-auto max-w-[1440px] px-5 md:px-10">
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             A torra
           </p>
-          <h2 className="mt-5 max-w-[20ch] font-titulo text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+          <h2 className="mt-5 max-w-[20ch] titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
             Em lotes pequenos, sob demanda
           </h2>
           <p className="mt-5 max-w-[62ch] text-[17px] leading-relaxed text-cal/80">

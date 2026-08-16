@@ -48,9 +48,12 @@ export function FichaLavoura({ lote }: { lote: Lote }) {
 
       <dl className="mt-4">
         {linhas.map(([rotulo, valor]) => (
+          // §10: em mobile a ficha vira uma coluna, com o rotulo ACIMA do
+          // valor. Lado a lado em 390px, "Município" e "São Roque de Minas —
+          // MG" disputam a mesma linha e o valor quebra feio.
           <div
             key={rotulo}
-            className="flex items-baseline justify-between gap-4 border-b border-fuligem-20 py-2.5 last:border-b-0"
+            className="flex flex-col gap-0.5 border-b border-fuligem-20 py-2.5 last:border-b-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4"
           >
             <dt className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
               <abbr
@@ -60,7 +63,7 @@ export function FichaLavoura({ lote }: { lote: Lote }) {
                 {rotulo}
               </abbr>
             </dt>
-            <dd className="text-right font-dado text-[13px] tracking-[0.04em]">
+            <dd className="font-dado text-[13px] tracking-[0.04em] sm:text-right">
               {valor}
             </dd>
           </div>
