@@ -656,7 +656,25 @@ class LoginRepository {
         user_id,
       ]);
 
+      /**
+       * Trocar a senha DERRUBA todas as sessoes abertas.
+       *
+       * Sem isto, redefinir a senha nao adiantava nada contra quem ja estava
+       * dentro: o refresh token de sete dias continuava valendo, e o invasor
+       * seguia renovando o acesso indefinidamente. "Troquei minha senha" e
+       * exatamente o que a pessoa faz quando desconfia que alguem entrou —
+       * precisa ser o momento em que esse alguem e expulso.
+       */
+      const { rowCount: sessoesEncerradas } = await client.query(
+        "DELETE FROM refresh_tokens WHERE user_id = $1",
+        [user_id],
+      );
+
       await client.query("COMMIT");
+
+      console.info(
+        `Senha redefinida para ${user_id}: ${sessoesEncerradas} sessão(ões) encerrada(s).`,
+      );
 
       return res.json({
         message: "Senha alterada com sucesso! Faça login novamente.",

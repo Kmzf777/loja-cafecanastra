@@ -158,6 +158,17 @@ function Form() {
     formData.append("price", data.price);
     formData.append("quantity", value);
     formData.append("description", data.description || "");
+
+    // Peso e as TRES dimensoes.
+    // Antes so `length` era enviado, embora o formulario tenha campo para os
+    // quatro e o `isDirty` acima observe os quatro. O backend, sem receber os
+    // outros, aplicava os padroes (0,3 kg / 20 / 5 cm) — entao QUALQUER edicao
+    // de produto, mesmo so mudar o preco, apagava as medidas reais do pacote.
+    // Como o frete e cotado por peso e volume, isso fazia a loja cobrar frete
+    // errado, sem nenhum sinal na tela.
+    formData.append("weight", data.weight);
+    formData.append("width", data.width);
+    formData.append("height", data.height);
     formData.append("length", data.length);
     if (imageFile) {
       formData.append("image", imageFile);

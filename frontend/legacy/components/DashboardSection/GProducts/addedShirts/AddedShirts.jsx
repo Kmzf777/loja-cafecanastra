@@ -65,12 +65,24 @@ function AddedShirts() {
 
     try {
       setDeletingId(id);
-      await authFetch(`${API_BASE}/dashboard/${id}`, { method: "DELETE" });
+      const resposta = await authFetch(`${API_BASE}/dashboard/${id}`, {
+        method: "DELETE",
+      });
+
+      // `fetch` NAO lanca em 4xx/5xx — so em falha de rede. Sem esta checagem,
+      // um 403 "Acesso negado" ou um 500 caiam no caminho de sucesso e o painel
+      // anunciava "Produto deletado!" com o produto intacto no banco. O admin
+      // so descobria recarregando a lista.
+      if (!resposta.ok) {
+        const corpo = await resposta.json().catch(() => ({}));
+        throw new Error(corpo.message || `Falha ${resposta.status}`);
+      }
+
       await updateProductList();
 
       toast.success("Produto deletado!");
     } catch (error) {
-      toast.error("Erro ao deletar produto!");
+      toast.error(error.message || "Erro ao deletar produto!");
       console.error("Erro ao deletar produto:", error);
     } finally {
       setDeletingId(null);

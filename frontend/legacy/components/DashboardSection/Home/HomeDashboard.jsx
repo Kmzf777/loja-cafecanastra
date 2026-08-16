@@ -44,6 +44,16 @@ function Home() {
   });
   const [salesData, setSalesData] = useState([]);
   const [orderStatusData, setOrderStatusData] = useState([]);
+  /**
+   * `erro` existe porque zero e um numero perfeitamente plausivel.
+   *
+   * Quando a API falhava, o `catch` so escrevia no console e a tela seguia
+   * mostrando o estado inicial: 0 produtos, 0 pedidos, 0 clientes, graficos
+   * vazios. Para quem administra a loja, isso e indistinguivel de "hoje nao
+   * vendi nada" — informacao errada apresentada com toda a confianca. Pior que
+   * nao mostrar nada.
+   */
+  const [erro, setErro] = useState(null);
   const { authFetch, user } = useContext(authContext);
 
   useEffect(() => {
@@ -53,8 +63,11 @@ function Home() {
       try {
         const res = await authFetch(`${API_BASE}/dashboard/summary`, "GET");
 
-        if (res.ok) {
+        if (!res.ok) {
+          setErro("Não foi possível carregar os números agora.");
+        } else {
           const data = await res.json();
+          setErro(null);
 
           setMetrics(data.counts);
 
@@ -72,6 +85,7 @@ function Home() {
         }
       } catch (error) {
         console.error("Erro ao carregar dashboard:", error);
+        setErro("Não foi possível falar com o servidor.");
       } finally {
         setLoading(false);
       }
@@ -85,6 +99,26 @@ function Home() {
   return (
     <Container>
       <h2>Relatórios</h2>
+
+      {/* Aviso ANTES dos números: se o carregamento falhou, quem lê precisa
+          saber disso antes de acreditar no que está na tela. */}
+      {erro && (
+        <p
+          role="alert"
+          style={{
+            margin: "0 0 16px",
+            padding: "10px 14px",
+            borderLeft: "3px solid #b3261e",
+            background: "#fdf2f1",
+            color: "#5c1a14",
+            fontSize: 14,
+          }}
+        >
+          {erro} Os números abaixo podem estar desatualizados ou zerados —
+          recarregue a página.
+        </p>
+      )}
+
       <Overview>
         <Card>
           <h3>Produtos</h3>

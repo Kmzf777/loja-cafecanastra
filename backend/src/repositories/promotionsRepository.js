@@ -1,6 +1,33 @@
 const pool = require("../pgPool");
 const { v4: uuidv4 } = require("uuid");
 
+/**
+ * Valida tipo e valor do desconto.
+ *
+ * Nao havia checagem nenhuma. Um percentual de 150 fazia o checkout calcular
+ * `preco * (1 - 150/100)` = preco NEGATIVO — e, como o total do pedido e uma
+ * soma, um item negativo ABATIA o preco dos outros itens do carrinho. Bastava
+ * um erro de digitacao no painel para a loja passar a pagar para vender.
+ * (O checkout hoje recusa total <= 0, mas isso e a ultima linha de defesa, e
+ * ainda deixaria o desconto errado corromper o valor dos outros itens.)
+ */
+function validarDesconto(type, value) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n) || n <= 0) {
+    return "O valor do desconto precisa ser um número maior que zero.";
+  }
+  if (type === "percent" && n > 90) {
+    // Teto de 90%: acima disso quase certamente e engano, e um "100%" liberaria
+    // o produto de graca para todo mundo que abrisse a loja.
+    return "Desconto percentual acima de 90% não é permitido.";
+  }
+  if (type !== "percent" && type !== "fixed") {
+    return "Tipo de desconto inválido. Use 'percent' ou 'fixed'.";
+  }
+  return null;
+}
+
 class PromotionsRepository {
   async createPromotion(request, response) {
     const {
@@ -21,6 +48,11 @@ class PromotionsRepository {
         return response
           .status(400)
           .json({ error: "Campos obrigatórios faltando." });
+      }
+
+      const erroDeDesconto = validarDesconto(type, value);
+      if (erroDeDesconto) {
+        return response.status(400).json({ error: erroDeDesconto });
       }
 
       const categoryFixed = applies_to === "category" ? category : null;
@@ -93,6 +125,13 @@ class PromotionsRepository {
       end_date,
       active,
     } = request.body;
+
+    // A mesma regra do cadastro vale na edicao: sem isto, dava para criar uma
+    // promocao valida e depois edita-la para 150%.
+    const erroDeDesconto = validarDesconto(type, value);
+    if (erroDeDesconto) {
+      return response.status(400).json({ error: erroDeDesconto });
+    }
 
     const client = await pool.connect();
     try {

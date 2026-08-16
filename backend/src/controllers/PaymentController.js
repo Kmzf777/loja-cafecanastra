@@ -552,12 +552,16 @@ class PaymentController {
 
         if (order) {
           if (order.status !== currentStatus) {
-            const cancelledGroup = ["cancelled", "rejected"];
+            // Mesmos grupos do painel (OrderController). "refunded" tambem
+            // devolve estoque: um estorno e um cancelamento depois do pago.
+            const cancelledGroup = ["cancelled", "rejected", "refunded"];
             const activeGroup = [
               "pending",
               "approved",
               "in_process",
               "authorized",
+              "sent",
+              "delivered",
             ];
             const isNowCancelled = cancelledGroup.includes(currentStatus);
             const wasActive = activeGroup.includes(order.status);

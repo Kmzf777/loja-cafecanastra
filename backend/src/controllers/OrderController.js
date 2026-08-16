@@ -82,8 +82,23 @@ class OrderController {
       await client.query("BEGIN");
 
       const currentStatus = order.status;
-      const cancelledGroup = ["cancelled", "rejected"];
-      const activeGroup = ["pending", "approved", "sent", "delivered"];
+      /**
+       * Grupos de status para o ajuste de estoque.
+       *
+       * `activeGroup` nao incluia "in_process" nem "authorized" — os dois
+       * estados em que o Mercado Pago deixa um pagamento em analise. Como o
+       * estoque e reservado no momento do checkout, cancelar um pedido que
+       * estivesse num desses estados NAO devolvia nada: a unidade ficava
+       * debitada para sempre, e o produto sumia do catalogo sem ter sido
+       * vendido. Os dois estados agora contam como ativos, que e o que sao.
+       *
+       * A lista sai de STATUS_VALIDOS menos os cancelados, para as duas nao
+       * poderem divergir de novo quando alguem acrescentar um status.
+       */
+      const cancelledGroup = ["cancelled", "rejected", "refunded"];
+      const activeGroup = STATUS_VALIDOS.filter(
+        (st) => !cancelledGroup.includes(st),
+      );
       const isNowCancelled = cancelledGroup.includes(newStatus);
       const wasCancelled = cancelledGroup.includes(currentStatus);
       const isNowActive = activeGroup.includes(newStatus);
