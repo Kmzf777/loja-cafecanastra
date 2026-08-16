@@ -132,7 +132,9 @@ export default async function PaginaSerra() {
       </section>
 
       {/* ── A torra ─────────────────────────────────────── superfície fuligem */}
-      <section className="bg-fuligem py-16 text-cal md:py-24">
+      {/* id: o rodapé aponta para cá. Âncora que não existe rola a página para
+          o topo em silêncio, e ninguém percebe que o link está quebrado. */}
+      <section id="torra" className="bg-fuligem py-16 text-cal md:py-24">
         <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             A torra

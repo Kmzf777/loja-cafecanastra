@@ -27,6 +27,17 @@ function OPCOES_COOKIE_REFRESH() {
 }
 
 class LoginRepository {
+  /**
+   * Cadastro.
+   *
+   * VAZAMENTO DE CONEXAO (corrigido): os dois `return` de 409 abaixo — e-mail
+   * repetido e CPF repetido — saiam do metodo sem devolver a conexao ao pool,
+   * porque o `try` nao tinha `finally`. O pool do `pg` tem 10 conexoes por
+   * padrao: DEZ requisicoes anonimas repetindo um e-mail ja cadastrado
+   * esgotavam o pool, e a partir dali TODA consulta da aplicacao — vitrine,
+   * painel, login — ficava pendurada esperando conexao, para sempre. Derrubar a
+   * loja inteira custava dez POSTs sem autenticacao.
+   */
   async signUp(req, res) {
     const { name, cpf, phone, email, password } = req.body;
     const client = await pool.connect();
@@ -63,8 +74,6 @@ class LoginRepository {
         [v4(), name, cpf, phone, email, hash, verificationToken],
       );
 
-      client.release();
-
       const verifyLink = `${URL_LOJA}/account/verify-email?token=${verificationToken}`;
 
       try {
@@ -100,12 +109,11 @@ class LoginRepository {
       });
     } catch (err) {
       console.error("signUp error:", err);
-      try {
-        client.release();
-      } catch (e) {}
-      return res
-        .status(500)
-        .json({ error: err.message, message: "Erro ao criar usuário." });
+      // `err.message` cru pode carregar SQL e nome de coluna.
+      return res.status(500).json({ message: "Erro ao criar usuário." });
+    } finally {
+      // Uma saida so para a conexao, cobrindo TODOS os caminhos.
+      client.release();
     }
   }
 

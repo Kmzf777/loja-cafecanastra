@@ -12,23 +12,25 @@ const COLUNAS = [
     titulo: "Cafés",
     itens: [
       { href: "/cafes", rotulo: "Todos os cafés" },
-      { href: "/cafes?linha=classico", rotulo: "Clássicos" },
-      { href: "/cafes?linha=suave", rotulo: "Suaves" },
-      { href: "/cafes?linha=aromatizado", rotulo: "Aromatizados" },
+      { href: "/cafes?linha=classico", rotulo: "Clássico" },
+      { href: "/cafes?linha=suave", rotulo: "Suave" },
+      // A linha "aromatizado" nao existe mais no contrato: o catalogo real
+      // tem "canela", que e a linha aromatizada de fato vendida.
+      { href: "/cafes?linha=canela", rotulo: "Canela" },
     ],
   },
   {
     titulo: "Assinatura",
     itens: [
       { href: "/clube", rotulo: "Clube da Canastra" },
-      { href: "/clube#como-funciona", rotulo: "Como funciona" },
+      { href: "/clube", rotulo: "Como funciona" },
     ],
   },
   {
     titulo: "A Canastra",
     itens: [
       { href: "/a-serra", rotulo: "A serra" },
-      { href: "/a-serra#produtores", rotulo: "Os produtores" },
+      { href: "/cafes", rotulo: "As linhas" },
       { href: "/a-serra#torra", rotulo: "A torra" },
     ],
   },

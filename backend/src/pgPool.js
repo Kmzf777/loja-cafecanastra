@@ -4,6 +4,20 @@ const isProduction = process.env.NODE_ENV === "production";
 
 const poolConfig = {
   connectionString: process.env.DATABASE_URL,
+
+  /**
+   * Limites explicitos.
+   *
+   * `max` ja valia 10 por padrao, mas implicitamente. Declarar aqui e o lembrete
+   * de que existe um teto — e `connectionTimeoutMillis` e o que muda o
+   * comportamento na falha: sem ele, esgotar o pool faz cada requisicao ficar
+   * pendurada em `pool.connect()` PARA SEMPRE, sem erro, sem log, sem timeout.
+   * O sintoma e "o site parou" sem nada no log. Com o timeout, vira um erro
+   * visivel em 5 segundos, que aparece no monitoramento e no /health.
+   */
+  max: Number(process.env.PG_POOL_MAX || 10),
+  connectionTimeoutMillis: 5000,
+  idleTimeoutMillis: 30_000,
 };
 
 if (isProduction) {

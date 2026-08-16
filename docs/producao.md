@@ -53,8 +53,11 @@ ar com `JWT_SECRET` publicado neste repositório, não.
 
 Ainda em produção, configure também:
 
-- `NODE_ENV=production` — sem isso os cookies saem sem `Secure` e a conferência
-  de configuração não roda.
+- `NODE_ENV=production` — sem isso os cookies saem sem `Secure`, o CORS libera
+  localhost e a conferência de configuração vira aviso. A API recusa subir com
+  qualquer valor fora de `development` / `test` / `production`, justamente
+  porque escrever `prod` no painel do provedor desligaria as quatro defesas de
+  uma vez, em silêncio.
 - `WEBHOOK_URL` — URL pública `https://…/webhook/mercadopago`, registrada no
   painel do MP.
 - `EMAIL_PASS2` + `EMAIL_DOMINIO` — chave do Resend e domínio **verificado na
@@ -172,9 +175,12 @@ de campanha:
 (o fluxo normal exige confirmar o e-mail por link, e sem provedor configurado a
 conta ficaria travada no primeiro login).
 
-**Em produção, troque `SEED_ADMIN_EMAIL` e `SEED_ADMIN_PASSWORD` antes de rodar
-o seed.** Os valores do `.env.example` (`teste@teste.com` / `123456`) são de
-desenvolvimento e estão publicados neste repositório.
+**`SEED_ADMIN_EMAIL` e `SEED_ADMIN_PASSWORD` vêm vazios no `.env.example`, de
+propósito.** Preencha com valores próprios (`openssl rand -base64 24` serve para
+a senha). Em produção a API recusa subir se a senha tiver menos de 12 caracteres
+ou se for um dos valores de exemplo — porque o cabeçalho do `.env.example` manda
+copiá-lo, e um deploy feito "conforme a documentação" não pode nascer com
+administrador de senha conhecida.
 
 O painel não deixa excluir a própria conta nem o último administrador — a loja
 não pode ficar sem quem a administre.

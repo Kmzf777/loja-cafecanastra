@@ -22,10 +22,12 @@ diretamente utilizável para ataque.
 
 ## O que foi feito
 
-1. Os onze arquivos saíram do controle de versão (`git rm --cached`) e do
-   diretório de trabalho, movidos para `.dumps-antigos/`, que está no
-   `.gitignore` — mantidos localmente apenas enquanto forem úteis como
-   referência de schema, e não devem ser copiados para outra máquina.
+1. Os onze arquivos saíram do controle de versão (`git rm --cached`) e foram
+   **apagados do disco**. Numa primeira passada eles tinham sido apenas movidos
+   para `.dumps-antigos/`, dentro da própria árvore do projeto — o que resolvia
+   o versionamento e não resolvia nada mais: os dados continuavam em texto
+   claro dentro de qualquer `tar`, `zip` ou `rsync` do diretório. Dado pessoal
+   que não precisa existir não deve ficar guardado "por precaução".
 2. `*.csv` e `.dumps-antigos/` entraram no `.gitignore` para o caso não se
    repetir por descuido.
 3. O conhecimento que esses arquivos carregavam — a **estrutura** das tabelas —
@@ -53,7 +55,9 @@ no GitHub. Para fechar de verdade, é preciso, nesta ordem:
    refaça o clone. Por ser destrutivo e afetar quem mais estiver no repositório,
    **não foi executado automaticamente** — é decisão de quem administra.
 
-2. **Invalidar o que vazou**, porque o histórico ficou público enquanto existiu:
+2. **Invalidar o que vazou**, porque o histórico ficou público enquanto existiu.
+   Enquanto o item 1 não for feito, `git show <commit>:usuarios.csv` continua
+   devolvendo os dados hoje, em qualquer clone:
    - Trocar `JWT_SECRET_REFRESH` da loja antiga, se ainda estiver em uso em
      algum ambiente — os 34 tokens do dump foram assinados com ele.
    - Forçar redefinição de senha das duas contas do `usuarios.csv`.

@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { Botao } from "@/components/ui/Botao";
 import {
   entrar,
@@ -138,12 +137,12 @@ function FormularioDeLogin() {
         {enviando ? "Entrando…" : "Entrar"}
       </Botao>
 
+      {/* Sem link para "/#contato": aquela âncora não existe em página
+          nenhuma, e link quebrado numa tela de login é onde menos se pode ter.
+          O rodapé, presente em toda a vitrine, já leva aos canais de contato. */}
       <p className="mt-6 text-[14px] text-fuligem-55">
-        Esqueceu a senha? Fale com a gente pelo{" "}
-        <Link href="/#contato" className="text-vermelho underline underline-offset-4">
-          contato
-        </Link>
-        .
+        Ainda não tem conta? Fale com a gente pelos canais no rodapé — o
+        cadastro pela loja entra em breve.
       </p>
     </form>
   );

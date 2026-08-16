@@ -18,9 +18,24 @@
 const VALORES_DE_EXEMPLO = new Set([
   "canastra-dev-access-secret-nao-usar-em-producao",
   "canastra-dev-refresh-secret-nao-usar-em-producao",
+  "teste@teste.com",
+  "123456",
 ]);
 
 const TAMANHO_MINIMO_SEGREDO = 32;
+const TAMANHO_MINIMO_SENHA_ADMIN = 12;
+
+/**
+ * NODE_ENV precisa ser um dos tres valores conhecidos.
+ *
+ * Quatro defesas do backend dependem da comparacao com a string exata
+ * "production": CSP do helmet, isolamento de origem no CORS, `secure` no cookie
+ * de sessao e esta propria conferencia. Escrever "prod" ou "producao" no painel
+ * do provedor — ou deixar a variavel vazia — desliga as quatro de uma vez, sem
+ * nenhuma reclamacao. Recusar valor desconhecido transforma um erro de
+ * digitacao silencioso numa falha imediata na subida.
+ */
+const AMBIENTES_VALIDOS = new Set(["development", "test", "production"]);
 
 /** Obrigatorias em producao: sem elas a loja nao funciona ou fica insegura. */
 const OBRIGATORIAS_EM_PRODUCAO = [
@@ -37,6 +52,35 @@ const OBRIGATORIAS_EM_PRODUCAO = [
 function conferirAmbiente({ ehProducao = process.env.NODE_ENV === "production" } = {}) {
   const erros = [];
   const avisos = [];
+
+  const ambiente = process.env.NODE_ENV || "";
+  if (ambiente && !AMBIENTES_VALIDOS.has(ambiente)) {
+    console.error(
+      `\n❌ NODE_ENV="${ambiente}" não é reconhecido. Use development, test ou production.\n` +
+        "   Toda a postura de segurança do backend depende deste valor.\n",
+    );
+    throw new Error(`NODE_ENV inválido: ${ambiente}`);
+  }
+
+  /**
+   * A conta semeada nunca pode nascer com a credencial de exemplo.
+   * O .env.example é versionado e o cabeçalho manda copiá-lo para .env — sem
+   * esta trava, o deploy "conforme a documentação" criaria um administrador de
+   * e-mail previsível e senha publicada neste repositório.
+   */
+  const senhaAdmin = process.env.SEED_ADMIN_PASSWORD;
+  const emailAdmin = process.env.SEED_ADMIN_EMAIL;
+  if (ehProducao && (senhaAdmin || emailAdmin)) {
+    if (VALORES_DE_EXEMPLO.has(emailAdmin) || VALORES_DE_EXEMPLO.has(senhaAdmin)) {
+      erros.push(
+        "SEED_ADMIN_EMAIL/SEED_ADMIN_PASSWORD estão com os valores de exemplo.",
+      );
+    } else if (senhaAdmin && senhaAdmin.length < TAMANHO_MINIMO_SENHA_ADMIN) {
+      erros.push(
+        `SEED_ADMIN_PASSWORD tem menos de ${TAMANHO_MINIMO_SENHA_ADMIN} caracteres. Gere com: openssl rand -base64 24`,
+      );
+    }
+  }
 
   for (const { nome, segredo } of OBRIGATORIAS_EM_PRODUCAO) {
     const valor = process.env[nome];
