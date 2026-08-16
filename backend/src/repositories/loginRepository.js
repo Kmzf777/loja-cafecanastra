@@ -76,8 +76,17 @@ class LoginRepository {
 
       const verifyLink = `${URL_LOJA}/account/verify-email?token=${verificationToken}`;
 
+      /**
+       * O Resend NAO lanca quando recusa o envio: ele responde
+       * `{ data: null, error: {...} }`. Como ninguem olhava o retorno, o
+       * cadastro respondia 201 "Verifique seu email" mesmo quando o e-mail
+       * jamais saiu — dominio nao verificado, chave invalida, destinatario
+       * recusado. A pessoa ficava esperando um e-mail que nao existia, e a
+       * conta, que so ativa por link, ficava inacessivel para sempre.
+       */
+      let falhaNoEmail = null;
       try {
-        await resend.emails.send({
+        const { error: erroDoResend } = await resend.emails.send({
           from: REMETENTE.seguranca,
           to: [email],
           subject: `Confirme seu e-mail — ${NOME_LOJA}`,
@@ -100,12 +109,31 @@ class LoginRepository {
         }; 
         
          await transporter.sendMail(mailOptions);*/
+
+        if (erroDoResend) {
+          falhaNoEmail = erroDoResend.message || String(erroDoResend);
+        }
       } catch (emailError) {
-        console.error("Erro no envio do Resend:", emailError);
+        falhaNoEmail = emailError.message;
+      }
+
+      if (falhaNoEmail) {
+        console.error(
+          `ATIVACAO: conta ${email} criada mas o e-mail NAO foi enviado:`,
+          falhaNoEmail,
+        );
+        // 201 porque a conta existe de fato — mas a mensagem nao pode mandar a
+        // pessoa esperar um e-mail que nao vai chegar.
+        return res.status(201).json({
+          message:
+            "Cadastro realizado, mas não conseguimos enviar o e-mail de confirmação agora. Fale com a gente para ativar sua conta.",
+          emailEnviado: false,
+        });
       }
 
       return res.status(201).json({
         message: "Cadastro realizado! Verifique seu email.",
+        emailEnviado: true,
       });
     } catch (err) {
       console.error("signUp error:", err);
@@ -574,7 +602,10 @@ class LoginRepository {
         [v4(), user.user_id, token, expiresAt],
       );
 
-      const resetLink = `${process.env.CORS_ORIGIN}/account/reset-password?token=${token}`;
+      // URL_LOJA e normalizada (sem barra final, primeira entrada da lista);
+      // `process.env.CORS_ORIGIN` cru viraria "https://a.com,https://b.com/..."
+      // quando houvesse mais de uma origem liberada.
+      const resetLink = `${URL_LOJA}/account/reset-password?token=${token}`;
 
       try {
         await resend.emails.send({

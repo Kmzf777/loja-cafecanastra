@@ -125,14 +125,40 @@ recuperáveis em commits antigos**. Ver `docs/seguranca-dados-pessoais.md`: exig
 feito automaticamente porque reescrever histórico quebra o clone de todo mundo —
 é decisão de quem administra o repositório.
 
-### 4.2 Pagamento com cartão
+### 4.2 Backlog completo da auditoria
+
+Uma auditoria por domínio (autenticação, pagamentos, dados, painel, frontend,
+infraestrutura), com verificação adversarial de cada achado contra o código,
+produziu 12 bloqueadores, 22 itens importantes e 22 melhorias. Os bloqueadores
+foram corrigidos; o restante está listado abaixo, do mais para o menos urgente.
+
+**Vale a pena atacar cedo:**
+
+- Webhook do Mercado Pago sem transação nem idempotência: entregas repetidas da
+  mesma notificação podem inflar o estoque. O MP reenvia por desenho.
+- A cobrança acontece antes de o pedido existir no banco, e sem chave de
+  idempotência — uma queda entre as duas coisas deixa pagamento sem pedido.
+- Sem trilha de auditoria: não há registro de quem mudou preço, estoque ou
+  status de pedido. Numa loja oficial com mais de um administrador, isso é o
+  primeiro pedido de quem investiga uma divergência.
+- Sem migrações versionadas: `schema.sql` só cria, nunca altera. A próxima
+  mudança de coluna vai ser manual e sem histórico.
+- Refresh token gravado em texto puro no banco (deveria ser hash).
+- `PUT /promotions/:id` e `PUT /config` sobrescrevem com NULL os campos ausentes
+  e respondem 200 sem checar `rowCount`.
+- Conexão com o Postgres em produção não valida o certificado TLS
+  (`rejectUnauthorized: false` em `pgPool.js`).
+- Dependências com advisories: `csurf` (arquivado) e `axios`.
+- Política de Privacidade e Termos de Uso ainda atribuem a loja à Shopnaw.
+
+### 4.3 Pagamento com cartão
 
 O checkout aceita **Pix**. Cartão exige tokenizar o número no navegador com o
 SDK do Mercado Pago e uma chave pública (`NEXT_PUBLIC_MP_PUBLIC_KEY`). O backend
 já aceita cartão pelo mesmo endpoint assim que `formData.token` chegar — falta
 só a camada de tokenização na tela.
 
-### 4.3 CSP com `unsafe-inline` e `unsafe-eval`
+### 4.4 CSP com `unsafe-inline` e `unsafe-eval`
 
 `next.config.mjs` aplica CSP, mas o `script-src` ainda permite os dois, porque o
 painel legado usa styled-components (injeta `<style>` em runtime) e o runtime do
@@ -140,7 +166,7 @@ Next usa scripts inline. Fechar de vez exige nonce por requisição via
 middleware. O CSP atual já barra script de origem externa, que é o vetor mais
 comum — é melhor que não ter, e pior que o ideal.
 
-### 4.4 Acervo fotográfico
+### 4.5 Acervo fotográfico
 
 `estetica.md` §8 pede três famílias de foto (sabor, território, produto) em 4:5.
 Hoje existem quatro pack shots quadrados (500×500) e a "foto de sabor" é o
@@ -148,7 +174,7 @@ próprio pacote repetido, então o crossfade do card não aparece. É produção
 fotográfica, não código — e o `§8` estima isso como ~60% da percepção de
 qualidade do site.
 
-### 4.5 Dados que faltam no catálogo
+### 4.6 Dados que faltam no catálogo
 
 `data/catalogo-canastra.json` declara a procedência de cada SKU. Os marcados
 como `pesquisa-web` ou `inferido` merecem conferência contra a loja real antes
@@ -159,7 +185,7 @@ de campanha:
   valor.
 - Foto própria do Néctar de Minas (hoje reusa a arte do Clássico).
 
-### 4.6 Outros
+### 4.7 Outros
 
 - `csurf` está descontinuado há anos. Funciona, mas não recebe correção; migrar
   para `csrf-csrf` ou double-submit próprio é dívida conhecida.
