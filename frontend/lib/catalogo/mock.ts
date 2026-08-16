@@ -21,17 +21,36 @@ const MOAGENS_PADRAO: Moagem[] = [
   "prensa-francesa", "italiana-moka", "aeropress",
 ];
 
-/** Matriz completa moagem x peso. A PDP desabilita o que nao existir. */
-function variantes(slug: string, fator = 1): Lote["variantes"] {
+type Opcoes = {
+  /** Combinacoes que NAO existem, no formato "moagem:peso". */
+  ausentes?: string[];
+  /** Combinacoes com estoque zerado, mesmo formato. */
+  esgotadas?: string[];
+};
+
+/**
+ * Matriz moagem x peso. A PDP desabilita o que nao existir.
+ *
+ * A matriz NAO e retangular de proposito: um catalogo real nao moi todo grao
+ * em todo peso, e o `<SeletorMoagem>` precisa de buracos e de esgotados para
+ * ser desenvolvido e testado. Uma matriz cheia faz a logica de desabilitar
+ * parecer correta ate o primeiro dado verdadeiro chegar.
+ */
+function variantes(slug: string, fator = 1, opcoes: Opcoes = {}): Lote["variantes"] {
+  const ausentes = new Set(opcoes.ausentes ?? []);
+  const esgotadas = new Set(opcoes.esgotadas ?? []);
   const out: Lote["variantes"] = [];
+
   for (const moagem of MOAGENS_PADRAO) {
     for (const peso of [250, 500, 1000] as PesoGramas[]) {
+      const chave = `${moagem}:${peso}`;
+      if (ausentes.has(chave)) continue;
       out.push({
         sku: `${slug}-${moagem}-${peso}`,
         moagem,
         pesoGramas: peso,
         preco: Math.round(PRECO_BASE[peso] * fator),
-        estoque: 20,
+        estoque: esgotadas.has(chave) ? 0 : 20,
       });
     }
   }
@@ -117,7 +136,12 @@ export const LOTES: Lote[] = [
       sabor: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico sobre fundo claro", w: 500, h: 500 },
       pacote: { src: "/cafe-classico.png", alt: "Pacote preto do Café Canastra Clássico, 500 g", w: 500, h: 500 },
     },
-    variantes: variantes("sao-roque", 1),
+    variantes: variantes("sao-roque", 1, {
+      // Nao ha moagem para Moka nem Aeropress neste lote, e o 1 kg em grao
+      // esta esgotado — dado para o <SeletorMoagem> exercitar os dois casos.
+      ausentes: ["italiana-moka:250", "italiana-moka:500", "italiana-moka:1000", "aeropress:1000"],
+      esgotadas: ["grao:1000", "espresso:250"],
+    }),
     preparo: [
       { metodo: "coado-papel", proporcao: "1:15", gramas: 30, ml: 450, temperaturaC: 94, tempoSegundos: 180, moagem: "Média" },
       { metodo: "prensa-francesa", proporcao: "1:14", gramas: 32, ml: 450, temperaturaC: 94, tempoSegundos: 240, moagem: "Grossa" },
@@ -202,12 +226,16 @@ export const LOTES: Lote[] = [
       sabor: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra aromatizado sobre fundo claro", w: 500, h: 500 },
       pacote: { src: "/cafe-canela.png", alt: "Pacote do Café Canastra aromatizado, 1 kg", w: 500, h: 500 },
     },
-    variantes: variantes("porteira", 0.92),
+    variantes: variantes("porteira", 0.92, {
+      ausentes: ["coador-pano:1000", "aeropress:250"],
+      esgotadas: ["coado-papel:500"],
+    }),
     preparo: [
       { metodo: "coado-papel", proporcao: "1:14", gramas: 32, ml: 450, temperaturaC: 95, tempoSegundos: 190, moagem: "Média-grossa" },
       { metodo: "prensa-francesa", proporcao: "1:13", gramas: 34, ml: 450, temperaturaC: 95, tempoSegundos: 240, moagem: "Grossa" },
       { metodo: "coador-pano", proporcao: "1:14", gramas: 32, ml: 450, temperaturaC: 95, tempoSegundos: 210, moagem: "Média-grossa" },
     ],
-    assinatura: { desconto: 0.1, frequenciasDias: [15, 30, 45] },
+    // Sem assinatura: o campo e opcional no contrato e o <ModoCompra>
+    // precisa ver o caso ausente para nao assumir que sempre existe.
   },
 ];

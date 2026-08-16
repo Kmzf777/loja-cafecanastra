@@ -60,7 +60,33 @@ export type Filtros = {
   scaMin?: number;
   notas?: string[];
   moagem?: Moagem;
+  /** estetica.md §7.2 — slider de faixa desenhado sobre a silhueta da serra. */
+  altitudeMin?: number;
+  altitudeMax?: number;
+  /** Filtro "Formato" do §7.2. */
+  pesoGramas?: PesoGramas;
 };
+
+/**
+ * `notas` e AND, nao OR: marcar "rapadura" e "cacau" traz so os lotes que tem
+ * as duas. Facetas de PLP costumam ser OR, entao a escolha e deliberada — aqui
+ * a nota e uma promessa sobre a xicara, e quem marca duas quer as duas. Se o
+ * comportamento mudar, `repositorio.test.ts` falha de proposito.
+ */
+export type Ordenacao =
+  | "relevancia"
+  | "preco-asc"
+  | "preco-desc"
+  | "altitude-desc"
+  | "sca-desc";
+
+export const ORDENACOES: { valor: Ordenacao; rotulo: string }[] = [
+  { valor: "relevancia", rotulo: "Relevância" },
+  { valor: "preco-asc", rotulo: "Menor preço" },
+  { valor: "preco-desc", rotulo: "Maior preço" },
+  { valor: "altitude-desc", rotulo: "Mais alto" },
+  { valor: "sca-desc", rotulo: "Maior pontuação" },
+];
 
 export const MOAGENS: { valor: Moagem; rotulo: string }[] = [
   { valor: "grao", rotulo: "Grão" },
