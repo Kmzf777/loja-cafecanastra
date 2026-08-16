@@ -10,6 +10,7 @@ import {
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
 import { Botao } from "@/components/ui/Botao";
+import { useSacola } from "@/lib/sacola/sacola";
 
 /**
  * Painel de compra da PDP — estetica.md §5.5, §5.6 e §7.3.
@@ -54,6 +55,10 @@ export function PainelCompra({ lote }: { lote: Lote }) {
   );
   const [quantidade, setQuantidade] = useState(1);
 
+  const { adicionar } = useSacola();
+  const [adicionado, setAdicionado] = useState(false);
+  const [erroDaSacola, setErroDaSacola] = useState<string | null>(null);
+
   /**
    * §10 — em mobile a PDP ganha barra de compra fixa no rodape, que aparece
    * DEPOIS que o usuario passa do botao original. Mostra-la desde o inicio
@@ -93,6 +98,42 @@ export function PainelCompra({ lote }: { lote: Lote }) {
       setPacotes(embalagens[0]);
     }
   }, [embalagens, pacotes]);
+
+  /**
+   * Coloca a combinação escolhida na sacola.
+   *
+   * `produtoId` só existe quando a API respondeu (ver repositorio.ts): sem ele
+   * o backend não teria como identificar o item, então o botão avisa em vez de
+   * fingir que guardou. É o caso de contingência em que a vitrine está de pé
+   * lendo o JSON mas a API está fora.
+   */
+  async function aoAdicionar() {
+    if (!variante) return;
+    setErroDaSacola(null);
+
+    if (!variante.produtoId) {
+      setErroDaSacola(
+        "Não conseguimos falar com a loja agora. Tente de novo em instantes.",
+      );
+      return;
+    }
+
+    try {
+      await adicionar({
+        product_id: variante.produtoId,
+        name: `${lote.nome} — ${variante.rotuloEmbalagem}`,
+        price: variante.preco / 100,
+        quantity: quantidade,
+        image: lote.fotos.pacote.src,
+        size: variante.rotuloEmbalagem,
+        moagem: MOAGENS.find((m) => m.valor === variante.moagem)?.rotulo,
+      });
+      setAdicionado(true);
+      window.setTimeout(() => setAdicionado(false), 2500);
+    } catch {
+      setErroDaSacola("Não foi possível adicionar à sacola.");
+    }
+  }
 
   const desconto = lote.assinatura?.desconto ?? 0;
   const precoBase = variante?.preco ?? 0;
@@ -294,11 +335,28 @@ export function PainelCompra({ lote }: { lote: Lote }) {
         <Botao
           variante="primario"
           disabled={indisponivel}
+          onClick={aoAdicionar}
           className="flex-1 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
         >
-          {indisponivel ? "Esgotado" : "Adicionar à sacola"}
+          {indisponivel
+            ? "Esgotado"
+            : adicionado
+              ? "Na sacola ✓"
+              : "Adicionar à sacola"}
         </Botao>
       </div>
+
+      {/* aria-live: quem usa leitor de tela precisa ouvir que o item entrou —
+          a mudança do rótulo do botão sozinha não é anunciada. */}
+      <p role="status" aria-live="polite" className="sr-only">
+        {adicionado ? "Item adicionado à sacola." : ""}
+      </p>
+
+      {erroDaSacola ? (
+        <p role="alert" className="mt-3 text-[14px] text-vermelho">
+          {erroDaSacola}
+        </p>
+      ) : null}
 
       {indisponivel ? (
         <p role="status" className="mt-3 text-[14px] text-fuligem-55">
@@ -330,10 +388,11 @@ export function PainelCompra({ lote }: { lote: Lote }) {
           <Botao
             variante="primario"
             disabled={indisponivel}
+            onClick={aoAdicionar}
             tabIndex={ctaVisivel ? -1 : undefined}
             className="shrink-0 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
           >
-            {indisponivel ? "Esgotado" : "Adicionar"}
+            {indisponivel ? "Esgotado" : adicionado ? "✓" : "Adicionar"}
           </Botao>
         </div>
       </div>

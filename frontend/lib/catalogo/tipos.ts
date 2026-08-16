@@ -33,6 +33,13 @@ export type Variante = {
   sku: string;
   /** SKU correspondente na loja real — a rastreabilidade do dado. */
   skuLoja: string;
+  /**
+   * `product_id` da linha no banco. Chega junto com preco e estoque quando a
+   * API responde; fica indefinido no modo de contingencia (so JSON). E o que o
+   * carrinho precisa para falar com o backend — sem ele, da para navegar mas
+   * nao da para comprar.
+   */
+  produtoId?: string;
   formato: Formato;
   moagem: Moagem;
   pesoGramas: PesoGramas;
@@ -52,6 +59,7 @@ export type Variante = {
 export type FormatoEspecial = {
   sku: string;
   skuLoja: string;
+  produtoId?: string;
   formato: Extract<Formato, "drip" | "capsula">;
   nome: string;
   rotuloEmbalagem: string;

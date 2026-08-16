@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Serra } from "@/components/marca/Serra";
+import { AtalhosDoCliente } from "./AtalhosDoCliente";
 
 /**
  * estetica.md §5.8 e §10.
@@ -66,20 +67,28 @@ export function Cabecalho() {
           <Logo />
 
           {/* Navegacao de desktop */}
-          <nav aria-label="Principal" className="hidden md:block">
-            <ul className="flex items-center gap-8">
-              {NAV.map((item) => (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    className="text-[13px] font-semibold uppercase tracking-[0.12em] transition-colors hover:text-vermelho focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
-                  >
-                    {item.rotulo}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </nav>
+          <div className="hidden items-center gap-8 md:flex">
+            <nav aria-label="Principal">
+              <ul className="flex items-center gap-8">
+                {NAV.map((item) => (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className="text-[13px] font-semibold uppercase tracking-[0.12em] transition-colors hover:text-vermelho focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+                    >
+                      {item.rotulo}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+            <AtalhosDoCliente />
+          </div>
+
+          {/* Em mobile a sacola fica FORA do acordeao: é o atalho que a pessoa
+              mais procura e não pode depender de abrir o menu antes. */}
+          <div className="flex items-center gap-2 md:hidden">
+            <AtalhosDoCliente />
 
           {/* Acordeao de mobile — sem JS */}
           <details className="group md:hidden [&[open]_.rotulo-abrir]:hidden [&[open]_.rotulo-fechar]:inline">
@@ -134,6 +143,7 @@ export function Cabecalho() {
               </div>
             </nav>
           </details>
+          </div>
         </div>
 
         <Serra

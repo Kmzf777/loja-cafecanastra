@@ -26,7 +26,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
 /** Quanto tempo o Next guarda a resposta da API antes de perguntar de novo. */
 const SEGUNDOS_DE_CACHE = 60;
 
-type ProdutoDaApi = { sku: string | null; price: string | number; quantity: number };
+type ProdutoDaApi = {
+  product_id: string;
+  sku: string | null;
+  price: string | number;
+  quantity: number;
+};
 
 async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
   try {
@@ -51,13 +56,16 @@ async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
 function aplicarDadosAoVivo(lote: Lote, aoVivo: Map<string, ProdutoDaApi>): Lote {
   if (aoVivo.size === 0) return lote;
 
-  const atualizar = <T extends { skuLoja: string; preco: number; estoque: number }>(
+  const atualizar = <
+    T extends { skuLoja: string; preco: number; estoque: number },
+  >(
     v: T,
   ): T => {
     const vivo = aoVivo.get(v.skuLoja);
     if (!vivo) return v;
     return {
       ...v,
+      produtoId: vivo.product_id,
       preco: Math.round(Number(vivo.price) * 100),
       estoque: Number(vivo.quantity),
     };

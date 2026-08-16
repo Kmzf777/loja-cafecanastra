@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Cabecalho } from "@/components/layout/Cabecalho";
 import { Rodape } from "@/components/layout/Rodape";
 import { Grao } from "@/components/ui/Grao";
+import { ProvedorDaSacola } from "@/lib/sacola/sacola";
 
 /**
  * Layout do grupo de rotas da vitrine.
@@ -17,11 +18,15 @@ import { Grao } from "@/components/ui/Grao";
  */
 export default function VitrineLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="vitrine flex min-h-screen flex-col">
-      <Grao />
-      <Cabecalho />
-      <main className="flex-1">{children}</main>
-      <Rodape />
-    </div>
+    // O provedor da sacola envolve só a vitrine, não o painel: /dashboard tem o
+    // próprio conjunto de contexts legados e não precisa de carrinho.
+    <ProvedorDaSacola>
+      <div className="vitrine flex min-h-screen flex-col">
+        <Grao />
+        <Cabecalho />
+        <main className="flex-1">{children}</main>
+        <Rodape />
+      </div>
+    </ProvedorDaSacola>
   );
 }

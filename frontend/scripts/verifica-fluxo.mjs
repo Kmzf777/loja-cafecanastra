@@ -126,6 +126,46 @@ await p.waitForTimeout(2500);
 const conta = (await p.content()) || "";
 registra("conta: /account mostra o usuário logado", /teste@teste\.com/.test(conta), p.url());
 
+// ── 7. sacola e checkout ───────────────────────────────────────────────────
+await p.goto(`${BASE}/cafes/classico`, { waitUntil: "domcontentloaded" });
+await p.waitForTimeout(2500);
+const botaoSacola = p.locator('button:has-text("Adicionar à sacola")').first();
+registra("sacola: PDP tem botão de adicionar", await botaoSacola.count() > 0);
+await botaoSacola.click();
+await p.waitForTimeout(2500);
+const virouNaSacola = await p
+  .locator('button:has-text("Na sacola")')
+  .count()
+  .catch(() => 0);
+registra("sacola: clicar no botão confirma na tela", virouNaSacola > 0);
+
+await p.goto(`${BASE}/sacola`, { waitUntil: "domcontentloaded" });
+await p.waitForTimeout(2000);
+const htmlSacola = (await p.content()) || "";
+registra("sacola: item aparece na página da sacola", /Canastra Clássico/i.test(htmlSacola));
+registra("sacola: mostra subtotal", /Subtotal/i.test(htmlSacola));
+registra("sacola: não está vazia", !/Sua sacola está vazia/i.test(htmlSacola));
+await p.screenshot({ path: "./.verificacao/sacola.png" });
+
+await p.goto(`${BASE}/checkout`, { waitUntil: "domcontentloaded" });
+await p.waitForTimeout(3000);
+const htmlCheckout = (await p.content()) || "";
+registra(
+  "checkout: abre para usuário logado (não redireciona ao login)",
+  !p.url().includes("/account/login"),
+  p.url(),
+);
+registra("checkout: pede endereço", /CEP/i.test(htmlCheckout));
+registra("checkout: tem resumo com total", /Total/i.test(htmlCheckout));
+await p.screenshot({ path: "./.verificacao/checkout.png" });
+
+// Cabeçalho com sacola e conta
+await p.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+await p.waitForTimeout(1500);
+const home = (await p.content()) || "";
+registra("cabeçalho: tem link da sacola", /Sacola/i.test(home));
+registra("cabeçalho: tem link da conta", /Conta/i.test(home));
+
 console.log("\n=== PASSOU ===");
 ok.forEach((o) => console.log("  ✓ " + o));
 console.log("\n=== FALHOU ===");
