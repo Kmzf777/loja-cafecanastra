@@ -36,11 +36,30 @@ export default async function Home() {
     <>
       {/* ── HERÓI ─────────────────────────────────────────── superfície fuligem */}
       <section className="relative flex min-h-[88vh] flex-col justify-end overflow-hidden bg-fuligem text-cal">
+        <Image
+          src="/imagem-banner.jpg"
+          alt="Cozinha mineira ao amanhecer: coador de pano, caneca de ágata e um pacote de Café Canastra sobre a mesa de madeira"
+          fill
+          priority
+          fetchPriority="high"
+          sizes="100vw"
+          className="object-cover object-center"
+        />
+        {/* §7.1: sobreposição em gradiente de fuligem, 0 -> 60%, de baixo para
+            cima. Sem ela o texto em Cal não passa contraste sobre a foto. */}
+        <div
+          aria-hidden
+          className="absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(to top, var(--color-fuligem) 0%, color-mix(in srgb, var(--color-fuligem) 78%, transparent) 38%, color-mix(in srgb, var(--color-fuligem) 30%, transparent) 72%, transparent 100%)",
+          }}
+        />
         {/* Horizonte, nao pico: o viewBox e 5:1 e a altura precisa respeitar
             isso, senao a serra vira uma piramide esticada. */}
         <Serra
           aria-hidden
-          className="absolute inset-x-0 bottom-0 h-[26vh] max-h-[260px] w-full text-fuligem-80"
+          className="absolute inset-x-0 bottom-0 h-[18vh] max-h-[180px] w-full text-fuligem/70"
           strokeWidth={1.5}
           preenchido
         />

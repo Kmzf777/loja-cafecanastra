@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Serra } from "@/components/marca/Serra";
 
@@ -36,20 +37,26 @@ export function Cabecalho() {
       </div>
 
       <div className="sticky top-0 z-40 border-b border-fuligem-20 bg-cal">
-        <div className="mx-auto flex h-[72px] max-w-[1440px] items-center justify-between gap-6 px-5 md:px-10">
-          {/* Logo REDUZIDO (§1): serra + "CANASTRA" em grotesca condensada.
-              O lockup completo tem proporcao ~3:2 com muita area vazia e fica
-              ilegivel em 44px de altura — por isso o documento pede tres
-              versoes. O lockup completo vive no rodape, em tamanho generoso. */}
+        <div className="mx-auto flex h-[84px] max-w-[1440px] items-center justify-between gap-6 px-5 md:h-[92px] md:px-10">
+          {/* Lockup da marca. O ativo e 3508x2481 com margens generosas, entao
+              o container recorta a folga vertical (`overflow-hidden` + escala)
+              para o lettering ocupar a altura util do header — sem isso ele
+              renderiza pequeno demais para ler. Substituir pelo SVG do logo
+              reduzido quando a vetorizacao do §1 existir. */}
           <Link
             href="/"
             aria-label="Café Canastra — página inicial"
-            className="flex items-center gap-2.5 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+            className="flex h-full items-center focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
           >
-            <Serra aria-hidden className="h-4 w-11 text-fuligem" strokeWidth={2} />
-            <span className="text-[19px] font-bold uppercase leading-none tracking-[0.14em] md:text-[21px]">
-              Canastra
-            </span>
+            <Image
+              src="/logo-canastra.png"
+              alt="Café Canastra, desde 1985"
+              width={3508}
+              height={2481}
+              priority
+              sizes="(min-width: 768px) 150px, 120px"
+              className="h-[60px] w-auto object-contain md:h-[72px]"
+            />
           </Link>
 
           <nav aria-label="Principal">
