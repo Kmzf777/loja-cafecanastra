@@ -1,3 +1,9 @@
+const {
+  REMETENTE,
+  EMAIL_ADMIN,
+  NOME_LOJA,
+  URL_LOJA,
+} = require("../config/remetente");
 //const transporter = require("../config/mailer");
 const pool = require("../pgPool");
 const resend = require("../config/mailer");
@@ -49,7 +55,7 @@ async function sendStatusEmail(order, newStatus, trackingCode) {
 
     try {
       await resend.emails.send({
-        from: "Shopnaw Pedidos <pedidos@shopnaw.com.br>",
+        from: REMETENTE.pedidos,
         to: [email],
         subject: subject,
         html: `
@@ -60,7 +66,7 @@ async function sendStatusEmail(order, newStatus, trackingCode) {
            <p><strong>Resumo do Pedido:</strong></p>
                     <p>Total: R$ ${Number(order.total_amount).toFixed(2)}</p>
                     <br/>
-                    <a href="${process.env.CORS_ORIGIN}/account/orders">
+                    <a href="${URL_LOJA}/account">
                     Ver Meus Pedidos</a>
            </div>
       `,
@@ -81,7 +87,7 @@ async function sendStatusEmail(order, newStatus, trackingCode) {
                     <p><strong>Resumo do Pedido:</strong></p>
                     <p>Total: R$ ${Number(order.total_amount).toFixed(2)}</p>
                     <br/>
-                    <a href="${process.env.CORS_ORIGIN}/account/orders" style="background: #000; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Ver Meus Pedidos</a>
+                    <a href="${URL_LOJA}/account" style="background: #000; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Ver Meus Pedidos</a>
                 </div>
             `,
     };
@@ -95,19 +101,21 @@ async function sendStatusEmail(order, newStatus, trackingCode) {
 
 async function sendAdminNewOrderEmail(order) {
   try {
-    const adminEmail = process.env.ADMIN_EMAIL;
-    const dashboardUrl = `${process.env.CORS_ORIGIN}/dashboard/orders`;
+    // ADMIN_EMAIL nao existia no .env: `to: [undefined]` faz o Resend recusar
+    // a chamada, e o dono da loja nunca era avisado de venda nenhuma.
+    const adminEmail = EMAIL_ADMIN;
+    const dashboardUrl = `${URL_LOJA}/dashboard/orders`;
 
     const subject = `🎉 Novo Pedido Recebido! #${order.order_id.slice(0, 8)}`;
 
     await resend.emails.send({
-      from: "Shopnaw Sistema <pedidos@shopnaw.com.br>",
+      from: REMETENTE.sistema,
       to: [adminEmail],
       subject: subject,
       html: `
         <div style="font-family: Arial, sans-serif; color: #333;">
           <h2 style="color: #2e7d32;">Venda Realizada! 🎉</h2>
-          <p>Você tem um novo pedido aguardando processamento na Shopnaw.</p>
+          <p>Você tem um novo pedido aguardando processamento no ${NOME_LOJA}.</p>
           <hr/>
           <p><strong>ID do Pedido:</strong> ${order.order_id}</p>
           <p><strong>Valor Total:</strong> R$ ${Number(order.total_amount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</p>

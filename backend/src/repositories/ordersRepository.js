@@ -108,11 +108,17 @@ class OrderRepository {
           o.address_json as address,
           o.shipping_cost,   
           o.shipping_method,
-          u.name as user_name,
-          u.email as user_email,
+          COALESCE(u.name, 'Cliente removido')  as user_name,
+          COALESCE(u.email, '—')                as user_email,
           u.cpf as user_cpf
         FROM orders o
-        JOIN users u ON o.user_id = u.user_id
+        -- LEFT, nao INNER.
+        -- orders.user_id aceita NULL e a FK e ON DELETE CASCADE, mas basta um
+        -- pedido sem usuario correspondente (conta excluida por LGPD, compra
+        -- de convidado) para o INNER JOIN faze-lo SUMIR da tela de pedidos —
+        -- inclusive do faturamento que o admin confere ali. O pedido existe,
+        -- foi pago, e o painel simplesmente nao o mostrava.
+        LEFT JOIN users u ON o.user_id = u.user_id
         ORDER BY o.created_at DESC
         LIMIT $1 OFFSET $2
       `;

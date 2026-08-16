@@ -1,56 +1,97 @@
 const pool = require("../pgPool");
 const { v4 } = require("uuid");
 
+/**
+ * Numero positivo com valor padrao.
+ *
+ * O codigo anterior fazia `weight ? Number(weight) : 0.3`. Duas falhas nisso:
+ * `Number("abc")` e NaN — e NaN passa no `?`, entao ia para o banco e virava
+ * erro de tipo ou coluna nula; e nada impedia valor NEGATIVO, que num preco
+ * significa produto que paga o cliente para levar, e num peso quebra o calculo
+ * de frete.
+ */
+function numeroPositivo(valor, padrao) {
+  const n = Number(valor);
+  if (!Number.isFinite(n) || n < 0) return padrao;
+  return n;
+}
+
+/** Valida o que o painel manda ao cadastrar ou editar um produto. */
+function validarProduto(corpo) {
+  const erros = [];
+
+  const nome = String(corpo.name ?? "").trim();
+  if (nome.length < 2) erros.push("O nome do produto é obrigatório.");
+  if (nome.length > 200) erros.push("O nome do produto é longo demais.");
+
+  const preco = Number(corpo.price);
+  if (!Number.isFinite(preco) || preco < 0) {
+    erros.push("Preço inválido.");
+  } else if (preco > 1_000_000) {
+    // Teto contra erro de digitacao: um zero a mais no painel vira um produto
+    // de um milhao de reais na vitrine.
+    erros.push("Preço acima do limite permitido.");
+  }
+
+  const estoque = Number(corpo.quantity);
+  if (!Number.isInteger(estoque) || estoque < 0) {
+    erros.push("Estoque deve ser um número inteiro igual ou maior que zero.");
+  }
+
+  return {
+    erros,
+    valores: {
+      name: nome,
+      size: corpo.size ? String(corpo.size).trim() : null,
+      category: corpo.category ? String(corpo.category).trim() : null,
+      price: preco,
+      quantity: estoque,
+      description: corpo.description ? String(corpo.description) : "",
+      weight: numeroPositivo(corpo.weight, 0.3),
+      width: numeroPositivo(corpo.width, 20),
+      height: numeroPositivo(corpo.height, 5),
+      length: numeroPositivo(corpo.length, 20),
+    },
+  };
+}
+
 class DashboardRepository {
   async createProduct(request, response) {
-    const {
-      name,
-      size,
-      category,
-      price,
-      quantity,
-      description,
-      weight,
-      width,
-      height,
-      length,
-    } = request.body;
-    const image = request.file ? request.file.path : null;
-    const dateTime = new Date();
-    const formatedDateTime = dateTime.toISOString();
+    const { erros, valores } = validarProduto(request.body);
+    if (erros.length) {
+      return response.status(400).json({ message: erros.join(" ") });
+    }
 
+    const image = request.file ? request.file.path : null;
     const client = await pool.connect();
 
     try {
-      const valWeight = weight ? Number(weight) : 0.3;
-      const valWidth = width ? Number(width) : 20;
-      const valHeight = height ? Number(height) : 5;
-      const valLength = length ? Number(length) : 20;
-
       await client.query(
-        `INSERT INTO products (product_id, name, size, category, price, image, timestamp, quantity, 
-        description, weight, width, height, length) 
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        `INSERT INTO products (product_id, name, size, category, price, image, timestamp, quantity,
+        description, weight, width, height, length)
+        VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10, $11, $12)`,
         [
           v4(),
-          name,
-          size,
-          category,
-          price,
+          valores.name,
+          valores.size,
+          valores.category,
+          valores.price,
           image,
-          formatedDateTime,
-          quantity,
-          description,
-          valWeight,
-          valWidth,
-          valHeight,
-          valLength,
+          valores.quantity,
+          valores.description,
+          valores.weight,
+          valores.width,
+          valores.height,
+          valores.length,
         ],
       );
 
       response.status(201).json({ message: "Produto criado com sucesso!" });
     } catch (err) {
-      response.status(500).json({ error: err, details: err.message });
+      // O objeto de erro do `pg` traz a query e o nome das colunas; devolve-lo
+      // ao navegador entrega o schema do banco a quem estiver olhando.
+      console.error("createProduct error:", err);
+      response.status(500).json({ message: "Erro ao criar o produto." });
     } finally {
       client.release();
     }
@@ -60,7 +101,9 @@ class DashboardRepository {
     const client = await pool.connect();
     const { category, size, onlyOld } = request.query;
     let page = parseInt(request.query.page) || 1;
-    let limit = parseInt(request.query.limit) || 10;
+    // Teto de 200: `?limit=999999` faria o painel puxar o catalogo inteiro
+    // numa resposta so.
+    let limit = Math.min(200, Math.max(1, parseInt(request.query.limit) || 10));
 
     try {
       const filters = [];
@@ -160,9 +203,8 @@ class DashboardRepository {
         page,
       });
     } catch (err) {
-      return response
-        .status(500)
-        .json({ error: err, message: "Erro ao buscar produtos!" });
+      console.error("getProducts error:", err);
+      return response.status(500).json({ message: "Erro ao buscar produtos!" });
     } finally {
       client.release();
     }
@@ -177,27 +219,18 @@ class DashboardRepository {
 
       response.status(204).send();
     } catch (err) {
-      response
-        .status(500)
-        .json({ err: err, message: "Erro ao deletar produto." });
+      console.error("deleteProduct error:", err);
+      response.status(500).json({ message: "Erro ao deletar produto." });
     } finally {
       client.release();
     }
   }
 
   async editProduct(request, response) {
-    const {
-      name,
-      size,
-      category,
-      price,
-      quantity,
-      description,
-      weight,
-      width,
-      height,
-      length,
-    } = request.body;
+    const { erros, valores } = validarProduto(request.body);
+    if (erros.length) {
+      return response.status(400).json({ message: erros.join(" ") });
+    }
     const { id } = request.params;
 
     const client = await pool.connect();
@@ -218,35 +251,30 @@ class DashboardRepository {
         newImage = request.file.path;
       }
 
-      const valWeight = weight ? Number(weight) : 0.3;
-      const valWidth = width ? Number(width) : 20;
-      const valHeight = height ? Number(height) : 5;
-      const valLength = length ? Number(length) : 20;
 
       await client.query(
         `UPDATE products SET name=$1, size=$2, category=$3, price=$4, image=$5, quantity=$6, 
         description=$7, weight=$9, width=$10, height=$11, length=$12 WHERE product_id=$8`,
         [
-          name,
-          size,
-          category,
-          price,
+          valores.name,
+          valores.size,
+          valores.category,
+          valores.price,
           newImage,
-          quantity,
-          description,
+          valores.quantity,
+          valores.description,
           id,
-          valWeight,
-          valWidth,
-          valHeight,
-          valLength,
+          valores.weight,
+          valores.width,
+          valores.height,
+          valores.length,
         ],
       );
 
       response.status(200).json({ message: "Produto editado com sucesso!" });
     } catch (err) {
-      response
-        .status(500)
-        .json({ err: err, message: "Erro ao atualizar produto!" });
+      console.error("editProduct error:", err);
+      response.status(500).json({ message: "Erro ao atualizar produto!" });
     } finally {
       client.release();
     }

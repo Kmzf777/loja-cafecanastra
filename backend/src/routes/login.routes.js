@@ -20,8 +20,39 @@ const loginLimiter = rateLimit({
   },
 });
 
+/**
+ * Só o sign-in tinha limite. As outras rotas de credencial ficavam abertas, e
+ * cada uma abre um abuso diferente:
+ *   sign-up ........... criação de contas em massa e disparo de e-mail pela
+ *                       nossa conta do Resend (custo e reputação de remetente)
+ *   forgot-password ... inundar a caixa de uma pessoa e enumerar e-mails
+ *   reset-password .... força bruta no token de 32 bytes
+ *   verify-email ...... força bruta no token de verificação
+ *   refresh-token ..... força bruta no cookie de sessão
+ */
+const cadastroLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: { error: "Muitas tentativas. Tente novamente em uma hora." },
+});
+
+const senhaLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: {
+    error: "Muitas tentativas de recuperação. Tente novamente em uma hora.",
+  },
+});
+
+const tokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { error: "Muitas requisições. Aguarde alguns minutos." },
+});
+
 loginRoutes.post(
   "/sign-up",
+  cadastroLimiter,
   signUpValidationRules,
   validate,
   async (request, response) => {
@@ -29,7 +60,7 @@ loginRoutes.post(
   },
 );
 
-loginRoutes.post("/verify-email", async (request, response) => {
+loginRoutes.post("/verify-email", tokenLimiter, async (request, response) => {
   await loginRepository.verifyEmail(request, response);
 });
 
@@ -69,12 +100,13 @@ loginRoutes.delete(
   },
 );
 
-loginRoutes.post("/forgot-password", async (req, res) => {
+loginRoutes.post("/forgot-password", senhaLimiter, async (req, res) => {
   await loginRepository.forgotPassword(req, res);
 });
 
 loginRoutes.post(
   "/reset-password",
+  senhaLimiter,
   resetPasswordValidationRules,
   validate,
   async (req, res) => {
@@ -82,7 +114,7 @@ loginRoutes.post(
   },
 );
 
-loginRoutes.post("/refresh-token", async (request, response) => {
+loginRoutes.post("/refresh-token", tokenLimiter, async (request, response) => {
   await loginRepository.refreshToken(request, response);
 });
 

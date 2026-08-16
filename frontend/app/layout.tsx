@@ -17,9 +17,26 @@ const martianMono = Martian_Mono({
   preload: false,
 });
 
+/**
+ * `metadataBase` resolve as URLs relativas de Open Graph. Sem ele o Next avisa
+ * no build e cai em http://localhost:3000 — o que faz o card compartilhado no
+ * WhatsApp e no Instagram apontar para a máquina de quem compilou, sem imagem.
+ */
 export const metadata: Metadata = {
-  title: "Café Canastra",
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL || "https://loja.cafecanastra.com",
+  ),
+  title: {
+    default: "Café Canastra",
+    template: "%s — Café Canastra",
+  },
   description: "Café que vem de cima. Torrado sob demanda, desde 1985.",
+  openGraph: {
+    type: "website",
+    locale: "pt_BR",
+    siteName: "Café Canastra",
+  },
+  robots: { index: true, follow: true },
 };
 
 /**

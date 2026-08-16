@@ -186,8 +186,10 @@ async function semearConfig(client) {
        announcement_bar = EXCLUDED.announcement_bar,
        updated_at       = now()`,
     [
-      "/bannerdesktop.jpg",
-      "/imagem-banner.jpg",
+      // Absolutas pelo mesmo motivo da imagem de produto: o painel resolve
+      // caminho relativo contra o backend, que nao serve estes arquivos.
+      urlDaImagem("/bannerdesktop.jpg"),
+      urlDaImagem("/imagem-banner.jpg"),
       "Café Canastra",
       process.env.LOJA_WHATSAPP || "",
       "Torramos na terça, enviamos na quarta.",
@@ -213,18 +215,27 @@ async function semearConta(client) {
   const papel = process.env.SEED_ADMIN_ROLE || "admin";
   const hash = await bcrypt.hash(senha, SALT_ROUNDS);
 
-  await client.query(
+  /**
+   * NUNCA sobrescreve a senha de uma conta que ja existe.
+   *
+   * A versao anterior fazia `ON CONFLICT (email) DO UPDATE SET password = ...`.
+   * O seed e idempotente por desenho e vai ser rodado de novo — em producao,
+   * depois de o administrador ter trocado a senha dele, e depois de o deploy
+   * ainda carregar SEED_ADMIN_PASSWORD do ambiente. O efeito era REBAIXAR a
+   * senha real de volta para a do .env a cada execucao, sem avisar ninguem.
+   *
+   * `DO NOTHING` e a unica opcao segura: quem ja existe fica como esta. Se a
+   * conta precisar ser recuperada, isso e operacao deliberada, nao efeito
+   * colateral de um seed.
+   */
+  const { rowCount } = await client.query(
     `INSERT INTO users (user_id, name, phone, email, password, role, is_verified)
      VALUES ($1,$2,$3,$4,$5,$6,true)
-     ON CONFLICT (email) DO UPDATE SET
-       password    = EXCLUDED.password,
-       role        = EXCLUDED.role,
-       is_verified = true,
-       name        = EXCLUDED.name`,
+     ON CONFLICT (email) DO NOTHING`,
     [idDe(`user:${email}`), nome, process.env.SEED_ADMIN_PHONE || null, email, hash, papel],
   );
 
-  return { email, papel };
+  return { email, papel, criada: rowCount > 0 };
 }
 
 async function main() {
@@ -243,7 +254,13 @@ async function main() {
     console.log(`  · produtos: ${produtos.total} SKUs no catálogo`);
     console.log(`  · opções de filtro: ${opcoes}`);
     console.log(`  · config da loja: 1 linha`);
-    if (conta) console.log(`  · conta: ${conta.email} (${conta.papel})`);
+    if (conta) {
+      console.log(
+        conta.criada
+          ? `  · conta criada: ${conta.email} (${conta.papel})`
+          : `  · conta ${conta.email} já existia — senha preservada.`,
+      );
+    }
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("Seed falhou, nada foi gravado:", err.message);

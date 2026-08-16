@@ -6,8 +6,25 @@ const crypto = require("crypto");
 //const transporter = require("../config/mailer");
 const CartRepository = require("./cartRepository");
 const resend = require("../config/mailer");
+const { REMETENTE, NOME_LOJA, URL_LOJA } = require("../config/remetente");
 
 const SALT_ROUNDS = 10;
+
+/**
+ * Atributos do cookie de refresh, num lugar so.
+ *
+ * Emitir com um conjunto e apagar com outro faz o logout nao apagar nada:
+ * o navegador trata como cookies diferentes.
+ */
+function OPCOES_COOKIE_REFRESH() {
+  const isProd = process.env.NODE_ENV === "production";
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "None" : "Lax",
+    path: "/",
+  };
+}
 
 class LoginRepository {
   async signUp(req, res) {
@@ -48,15 +65,15 @@ class LoginRepository {
 
       client.release();
 
-      const verifyLink = `${process.env.CORS_ORIGIN}/account/verify-email?token=${verificationToken}`;
+      const verifyLink = `${URL_LOJA}/account/verify-email?token=${verificationToken}`;
 
       try {
         await resend.emails.send({
-          from: "Shopnaw Segurança <nao-responda@shopnaw.com.br>",
+          from: REMETENTE.seguranca,
           to: [email],
-          subject: "Confirme seu email - Shopnaw",
+          subject: `Confirme seu e-mail — ${NOME_LOJA}`,
           html: `
-            <h3>Bem-vindo à Shopnaw, ${name}!</h3>
+            <h3>Bem-vindo ao ${NOME_LOJA}, ${name}!</h3>
             <p>Para ativar sua conta, clique no link abaixo:</p>
             <a href="${verifyLink}">Confirmar Email</a>
           `,
@@ -65,9 +82,9 @@ class LoginRepository {
         /* const mailOptions = {
           from: '"Shopnaw Loja" <onboarding@resend.dev>', // <nao-responda@shopnaw.com>
           to: email,
-          subject: "Confirme seu email - Shopnaw",
+          subject: `Confirme seu e-mail — ${NOME_LOJA}`,
           html: `
-            <h3>Bem-vindo à Shopnaw, ${name}!</h3>
+            <h3>Bem-vindo ao ${NOME_LOJA}, ${name}!</h3>
             <p>Para ativar sua conta e fazer compras, clique no link abaixo:</p>
             <a href="${verifyLink}" target="_blank" style="background:#000;color:#fff;padding:10px 20px;text-decoration:none;border-radius:5px;">Confirmar Email</a>
           `,
@@ -160,18 +177,23 @@ class LoginRepository {
       }
 
       // 3. Gerar tokens
+      // `typ` separa access de refresh: sem a claim, um refresh token de 7
+      // dias e aceito como token de acesso caso os segredos coincidam.
+      // `algorithm` fixo fecha a porta de "alg confusion" na verificacao.
       const accessToken = jwt.sign(
-        { userId: user_id, role: role },
+        { userId: user_id, role: role, typ: "access" },
         process.env.JWT_SECRET,
         {
-          expiresIn: process.env.ACCESS_TOKEN_EXPIRY,
+          expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
+          algorithm: "HS256",
         },
       );
       const refreshToken = jwt.sign(
-        { userId: user_id, role: role },
+        { userId: user_id, role: role, typ: "refresh" },
         process.env.JWT_SECRET_REFRESH,
         {
-          expiresIn: `${process.env.REFRESH_TOKEN_EXPIRY_DAYS}d`,
+          expiresIn: `${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d`,
+          algorithm: "HS256",
         },
       );
 
@@ -189,12 +211,10 @@ class LoginRepository {
       const isProd = process.env.NODE_ENV === "production";
 
       res.cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: isProd ? true : false,
-        sameSite: isProd ? "None" : "Lax",
-        path: "/",
+        ...OPCOES_COOKIE_REFRESH(),
         maxAge:
-          Number(process.env.REFRESH_TOKEN_EXPIRY_DAYS) * 24 * 60 * 60 * 1000,
+          Number(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7) *
+          24 * 60 * 60 * 1000,
       });
 
       let cartItems = [];
@@ -242,7 +262,10 @@ class LoginRepository {
       client.release();
     }
 
-    res.clearCookie("refreshToken");
+    // Os atributos precisam bater com os de res.cookie no sign-in. Sem
+    // secure/sameSite/path iguais, o navegador nao identifica o mesmo cookie e
+    // o refreshToken SOBREVIVE ao logout em producao (cross-site, HTTPS).
+    res.clearCookie("refreshToken", OPCOES_COOKIE_REFRESH());
     return res.status(200).json({ message: "Logout efetuado com sucesso." });
   }
 
@@ -309,12 +332,34 @@ class LoginRepository {
       userId,
     ]);
 
-    // 4. Pedidos (Orders) - ATENÇÃO:
-    // Em sistemas reais, NÃO costumamos deletar pedidos para manter histórico financeiro.
-    // Mas se a LGPD exigir "esquecimento total", deletamos.
-    // Se quiser manter os pedidos mas desvincular o usuário, setaríamos user_id = NULL (se a coluna permitir).
-    // Aqui vou DELETAR para garantir que a exclusão do usuário funcione sem erros de FK.
-    await client.query("DELETE FROM orders WHERE user_id = $1", [userId]);
+    /**
+     * 4. Pedidos: ANONIMIZAR, nunca apagar.
+     *
+     * A versao anterior fazia DELETE, com o comentario de que era "para a
+     * exclusao funcionar sem erro de FK". O efeito pratico e que excluir um
+     * cliente pelo painel APAGAVA O HISTORICO FINANCEIRO dele: o faturamento do
+     * mes mudava retroativamente, e a loja perdia a nota daquelas vendas.
+     * Nenhum aviso na tela dizia isso ao administrador.
+     *
+     * Anonimizar atende os dois lados: o dado pessoal some (LGPD art. 16, que
+     * ja admite a guarda para cumprimento de obrigacao legal e fiscal) e o
+     * registro contabil fica. O `address_json` tambem e limpo — e la que moram
+     * nome, endereco e telefone dentro do pedido.
+     *
+     * A coluna orders.user_id aceita NULL, e a listagem do painel usa LEFT JOIN
+     * justamente para continuar mostrando estes pedidos como "Cliente removido".
+     */
+    await client.query(
+      `UPDATE orders
+          SET user_id = NULL,
+              address_json = jsonb_build_object(
+                'anonimizado', true,
+                'city',  COALESCE(address_json->>'city', ''),
+                'state', COALESCE(address_json->>'state', '')
+              )
+        WHERE user_id = $1`,
+      [userId],
+    );
   }
 
   async deleteUser(req, res) {
@@ -322,12 +367,54 @@ class LoginRepository {
     const client = await pool.connect();
 
     try {
-      await this._clearUserData(client, userId);
+      // Um admin nao pode se excluir pelo painel: o clique errado tira o acesso
+      // de quem o deu, sem caminho de volta pela interface.
+      if (req.user?.userId === userId) {
+        return res.status(400).json({
+          message: "Você não pode excluir a própria conta por aqui.",
+        });
+      }
 
-      const result = await client.query(
-        "DELETE FROM users WHERE user_id = $1 RETURNING *",
+      /**
+       * E nao pode sobrar loja sem administrador.
+       *
+       * Excluir o ultimo admin deixa o painel inacessivel para sempre: nao ha
+       * tela de promocao de usuario, entao a recuperacao so seria por SQL
+       * direto no banco de producao.
+       */
+      const alvo = await client.query(
+        "SELECT role FROM users WHERE user_id = $1",
         [userId],
       );
+      if (alvo.rowCount === 0) {
+        return res.status(404).json({ message: "Usuário não encontrado!" });
+      }
+      if (alvo.rows[0].role === "admin") {
+        const { rows } = await client.query(
+          "SELECT COUNT(*)::int AS total FROM users WHERE role = 'admin'",
+        );
+        if (rows[0].total <= 1) {
+          return res.status(400).json({
+            message:
+              "Este é o último administrador da loja. Promova outro antes de excluir.",
+          });
+        }
+      }
+
+      // Tudo ou nada: sem transacao, uma falha no meio deixava carrinho e
+      // endereco apagados com o usuario ainda de pe.
+      await client.query("BEGIN");
+
+      await this._clearUserData(client, userId);
+
+      // RETURNING das colunas necessarias, nunca `*`: o `*` devolvia o HASH DA
+      // SENHA e o CPF do usuario excluido para o navegador do administrador.
+      const result = await client.query(
+        "DELETE FROM users WHERE user_id = $1 RETURNING user_id, name, email",
+        [userId],
+      );
+
+      await client.query("COMMIT");
 
       if (result.rowCount === 0) {
         return res.status(404).json({ message: "Usuário não encontrado!" });
@@ -338,10 +425,10 @@ class LoginRepository {
         user: result.rows[0],
       });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       console.error("deleteUser error:", err);
-      return res
-        .status(500)
-        .json({ error: err.message, message: "Erro ao deletar o usuário" });
+      // `err.message` cru vazava nome de coluna e SQL para o cliente.
+      return res.status(500).json({ message: "Erro ao deletar o usuário" });
     } finally {
       client.release();
     }
@@ -352,10 +439,22 @@ class LoginRepository {
     if (!token) return res.sendStatus(401);
     const client = await pool.connect();
     try {
-      const payload = jwt.verify(token, process.env.JWT_SECRET_REFRESH);
+      const payload = jwt.verify(token, process.env.JWT_SECRET_REFRESH, {
+        algorithms: ["HS256"],
+      });
 
+      // Um access token roubado nao pode virar refresh token.
+      if (payload.typ && payload.typ !== "refresh") return res.sendStatus(403);
+
+      /**
+       * `expires_at` era gravado na tabela e NUNCA consultado: a validade valia
+       * so pela assinatura do JWT. Como consequencia, revogar uma sessao
+       * apagando a linha funcionava, mas encurtar a validade no banco nao — e
+       * a tabela crescia para sempre. O filtro abaixo faz a coluna valer.
+       */
       const result = await client.query(
-        "SELECT * FROM refresh_tokens WHERE token = $1 AND user_id = $2",
+        `SELECT token_id FROM refresh_tokens
+          WHERE token = $1 AND user_id = $2 AND expires_at > NOW()`,
         [token, payload.userId],
       );
 
@@ -363,15 +462,24 @@ class LoginRepository {
         return res.status(403).json({ message: "Token inválido ou expirado." });
       }
 
+      // Faxina oportunista: sem isto a tabela so cresce. Barato porque roda
+      // no maximo uma vez por refresh e usa indice de user_id.
+      client
+        .query("DELETE FROM refresh_tokens WHERE expires_at < NOW()")
+        .catch((e) => console.error("Falha ao expurgar refresh tokens:", e.message));
+
       const userRes = await client.query(
         "SELECT user_id, email, name, cpf, role FROM users WHERE user_id = $1",
         [payload.userId],
       );
 
       const newAccessToken = jwt.sign(
-        { userId: payload.userId, role: userRes.rows[0].role },
+        { userId: payload.userId, role: userRes.rows[0].role, typ: "access" },
         process.env.JWT_SECRET,
-        { expiresIn: process.env.ACCESS_TOKEN_EXPIRY },
+        {
+          expiresIn: process.env.ACCESS_TOKEN_EXPIRY || "15m",
+          algorithm: "HS256",
+        },
       );
 
       const user = userRes.rows[0]
@@ -412,7 +520,10 @@ class LoginRepository {
         return res.status(404).json({ message: "Usuário não encontrado." });
       }
 
-      res.clearCookie("refreshToken");
+      // Os atributos precisam bater com os de res.cookie no sign-in. Sem
+    // secure/sameSite/path iguais, o navegador nao identifica o mesmo cookie e
+    // o refreshToken SOBREVIVE ao logout em producao (cross-site, HTTPS).
+    res.clearCookie("refreshToken", OPCOES_COOKIE_REFRESH());
 
       return res
         .status(200)
@@ -459,9 +570,9 @@ class LoginRepository {
 
       try {
         await resend.emails.send({
-          from: "Shopnaw Segurança <nao-responda@shopnaw.com.br>",
+          from: REMETENTE.seguranca,
           to: [email],
-          subject: "Recuperação de Senha - Shopnaw",
+          subject: `Recuperação de senha — ${NOME_LOJA}`,
           html: `
           <h3>Olá, ${user.name}</h3>
           <p>Recebemos uma solicitação para redefinir sua senha.</p>
@@ -479,7 +590,7 @@ class LoginRepository {
       /* const mailOptions = {
         from: '"Shopnaw Suporte" <onboarding@resend.dev>', // <nao-responda@shopnaw.com>
         to: email,
-        subject: "Recuperação de Senha - Shopnaw",
+        subject: `Recuperação de senha — ${NOME_LOJA}`,
         html: `
           <h3>Olá, ${user.name}</h3>
           <p>Recebemos uma solicitação para redefinir sua senha.</p>

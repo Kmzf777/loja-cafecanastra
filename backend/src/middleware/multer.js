@@ -25,6 +25,40 @@ const storage = new CloudinaryStorage({
   },
 });
 
-const upload = multer({ storage: storage });
+/**
+ * Limites do upload de imagem do painel.
+ *
+ * Nao havia limite nenhum: qualquer arquivo, de qualquer tamanho, ia direto
+ * para a Cloudinary. Isso e conta de armazenamento aberta e um caminho barato
+ * de esgotar disco/banda com uploads grandes em sequencia.
+ *
+ * `allowed_formats` do CloudinaryStorage so age DEPOIS do arquivo subir. O
+ * fileFilter corta antes, na entrada — mas repare que ele confere o mimetype
+ * declarado, que o cliente controla; a garantia real de que o conteudo e mesmo
+ * uma imagem vem da Cloudinary, que recusa o que nao souber decodificar.
+ */
+const TIPOS_ACEITOS = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/avif",
+]);
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5 MB por arquivo
+    files: 2, // o formulario de config envia 2 banners
+  },
+  fileFilter: (req, file, cb) => {
+    if (!TIPOS_ACEITOS.has(file.mimetype)) {
+      return cb(
+        new Error("Formato não aceito. Envie JPG, PNG, WebP ou AVIF."),
+        false,
+      );
+    }
+    cb(null, true);
+  },
+});
 
 module.exports = { upload, cloudinary };

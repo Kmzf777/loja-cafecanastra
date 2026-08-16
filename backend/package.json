@@ -22,13 +22,14 @@
     "resend": "^6.8.0",
     "uuid": "^11.1.0"
   },
-  "name": "shopnaw-backend",
+  "name": "cafecanastra-backend",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test test/*.test.js",
     "dev": "nodemon ./src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "seed": "node db/seed.js"
   },
   "keywords": [],
   "author": "",
