@@ -1,8 +1,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Lote } from "@/lib/catalogo/tipos";
-import { precoMinimo, formatarPreco } from "@/lib/catalogo/repositorio";
-import { LINHAS, rotuloNota, formatarAltitude } from "@/lib/catalogo/rotulos";
+import { precoMinimo, formatarPreco, temEstoque } from "@/lib/catalogo/repositorio";
+import { LINHAS, rotuloNota } from "@/lib/catalogo/rotulos";
 import { SeloSCA } from "./SeloSCA";
 import { PontoTorra } from "./PontoTorra";
 
@@ -26,6 +26,7 @@ import { PontoTorra } from "./PontoTorra";
 export function CardCafe({ lote }: { lote: Lote }) {
   const linha = LINHAS[lote.linha];
   const preco = precoMinimo(lote);
+  const disponivel = temEstoque(lote);
 
   return (
     <article className="group relative h-full">
@@ -66,14 +67,13 @@ export function CardCafe({ lote }: { lote: Lote }) {
         </div>
 
         <div className="flex flex-1 flex-col border-t border-fuligem-20 p-5">
+          {/* Antes vinha "município · altitude", ambos inventados por lote.
+              A origem verdadeira é a mesma para toda a coleção, então o que
+              distingue um card do outro aqui é a torra — que é real. */}
           <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
-            {lote.lavoura.municipio.replace(" — MG", "")}
+            {lote.origem.regiao.replace(" — Minas Gerais", "")}
             <span aria-hidden> · </span>
-            {/* `normal-case` porque a unidade e "m", nao "M" — o uppercase do
-                rotulo nao pode alcancar o dado. */}
-            <span className="font-dado normal-case tracking-[0.06em]">
-              {formatarAltitude(lote.lavoura.altitude)}
-            </span>
+            <span className="normal-case">{lote.torra}</span>
           </p>
 
           <h3 className="mt-2 text-[20px] font-semibold leading-tight">
@@ -88,16 +88,35 @@ export function CardCafe({ lote }: { lote: Lote }) {
               terminam alinhados mesmo com numero diferente de linhas de nota. */}
           <PontoTorra valor={lote.pontoTorra} compacto className="mt-3 pt-1" />
 
+          {/* `preco` é nulo quando a linha não tem nenhuma variante com preço
+              na loja — hoje é o caso da Canela, cujos formatos capturados
+              estão todos esgotados. Mostrar "a partir de R$ 0,00" seria pior
+              do que dizer que não dá para comprar. */}
           <p className="mt-auto flex items-baseline gap-2 pt-4">
-            <span className="text-[11px] uppercase tracking-[0.14em] text-fuligem-55">
-              a partir de
-            </span>
-            <span
-              className="font-dado text-[17px] tracking-[0.02em]"
-              aria-label={formatarPreco(preco).replace("R$", "").trim() + " reais"}
-            >
-              {formatarPreco(preco)}
-            </span>
+            {preco === null ? (
+              <span className="text-[13px] uppercase tracking-[0.14em] text-fuligem-55">
+                Indisponível
+              </span>
+            ) : (
+              <>
+                <span className="text-[11px] uppercase tracking-[0.14em] text-fuligem-55">
+                  a partir de
+                </span>
+                <span
+                  className="font-dado text-[17px] tracking-[0.02em]"
+                  aria-label={
+                    formatarPreco(preco).replace("R$", "").trim() + " reais"
+                  }
+                >
+                  {formatarPreco(preco)}
+                </span>
+                {!disponivel ? (
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-vermelho">
+                    esgotado
+                  </span>
+                ) : null}
+              </>
+            )}
           </p>
         </div>
       </Link>

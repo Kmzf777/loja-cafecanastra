@@ -44,7 +44,9 @@ export default async function PaginaClube() {
   const lotes = await listarLotes();
   const comAssinatura = lotes.filter((l) => l.assinatura);
   const desconto = comAssinatura[0]?.assinatura?.desconto ?? 0.1;
-  const base = precoMinimo(comAssinatura[0] ?? lotes[0]);
+  // `precoMinimo` e nulo para linha sem variante com preco; o 250 g do
+  // Classico (R$ 39,70) e a referencia de fallback.
+  const base = precoMinimo(comAssinatura[0] ?? lotes[0]) ?? 3970;
   // 500 g custa aproximadamente o dobro do 250 g de referencia.
   const mensal = Math.round(base * 1.8 * (1 - desconto));
   const economia = Math.round(base * 1.8) - mensal;

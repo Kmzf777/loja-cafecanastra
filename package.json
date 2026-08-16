@@ -1,4 +1,17 @@
 {
+  "name": "loja-cafecanastra",
+  "private": true,
+  "description": "Loja do Café Canastra — vitrine Next 15 + API Express/PostgreSQL + painel administrativo.",
+  "scripts": {
+    "db:schema": "psql \"${DATABASE_URL:-postgres://postgres@127.0.0.1:5432/cafecanastra}\" -v ON_ERROR_STOP=1 -f backend/db/schema.sql",
+    "db:seed": "node backend/db/seed.js",
+    "db:setup": "npm run db:schema && npm run db:seed",
+    "dev:api": "npm --prefix backend run dev",
+    "dev:web": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "test": "npm --prefix frontend run test",
+    "verifica": "node frontend/scripts/verifica-fluxo.mjs"
+  },
   "dependencies": {
     "express-rate-limit": "^8.5.2",
     "resend": "^6.8.0"

@@ -1,8 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { listarLotes, faixaAltitude } from "@/lib/catalogo/repositorio";
-import { MOAGENS, ORDENACOES } from "@/lib/catalogo/tipos";
-import type { Filtros, Linha, Moagem, Ordenacao, PesoGramas } from "@/lib/catalogo/tipos";
+import { listarLotes } from "@/lib/catalogo/repositorio";
+import { FORMATOS, MOAGENS, ORDENACOES } from "@/lib/catalogo/tipos";
+import type {
+  Filtros,
+  Formato,
+  Linha,
+  Moagem,
+  Ordenacao,
+  PesoGramas,
+} from "@/lib/catalogo/tipos";
 import { LINHAS, PONTO_TORRA } from "@/lib/catalogo/rotulos";
 import { CardCafe } from "@/components/catalogo/CardCafe";
 import { BotaoLink } from "@/components/ui/Botao";
@@ -20,7 +27,7 @@ import { BotaoLink } from "@/components/ui/Botao";
 export const metadata: Metadata = {
   title: "Cafés — Café Canastra",
   description:
-    "Todos os lotes da Serra da Canastra, do Porteira a 900 metros ao Casca d'Anta a 1.320. Torrado sob demanda.",
+    "As linhas do Café Canastra: Clássico, Suave, Canela e Microlote. Origem única da Serra da Canastra, em grãos ou moído na hora do pedido.",
 };
 
 type Busca = Record<string, string | string[] | undefined>;
@@ -39,6 +46,7 @@ function numero(v: string | string[] | undefined): number | undefined {
 function lerFiltros(sp: Busca): { filtros: Filtros; ordenacao: Ordenacao } {
   const linha = texto(sp.linha) as Linha | undefined;
   const moagem = texto(sp.moagem) as Moagem | undefined;
+  const formato = texto(sp.formato) as Formato | undefined;
   const peso = numero(sp.peso) as PesoGramas | undefined;
   const ordem = texto(sp.ordem) as Ordenacao | undefined;
 
@@ -46,12 +54,11 @@ function lerFiltros(sp: Busca): { filtros: Filtros; ordenacao: Ordenacao } {
     filtros: {
       linha: linha && linha in LINHAS ? linha : undefined,
       moagem: moagem && MOAGENS.some((m) => m.valor === moagem) ? moagem : undefined,
+      formato: formato && FORMATOS.some((f) => f.valor === formato) ? formato : undefined,
       pesoGramas: peso === 250 || peso === 500 || peso === 1000 ? peso : undefined,
       pontoTorraMin: numero(sp.torraMin),
       pontoTorraMax: numero(sp.torraMax),
-      scaMin: numero(sp.sca),
-      altitudeMin: numero(sp.altMin),
-      altitudeMax: numero(sp.altMax),
+      soDisponiveis: texto(sp.disponivel) === "1",
     },
     ordenacao: ORDENACOES.some((o) => o.valor === ordem)
       ? (ordem as Ordenacao)
@@ -73,10 +80,14 @@ function ativos(f: Filtros, ordenacao: Ordenacao) {
       chave: "peso",
       rotulo: f.pesoGramas === 1000 ? "1 kg" : `${f.pesoGramas} g`,
     });
+  if (f.formato)
+    out.push({
+      chave: "formato",
+      rotulo: FORMATOS.find((x) => x.valor === f.formato)!.rotulo,
+    });
   if (f.pontoTorraMin)
     out.push({ chave: "torraMin", rotulo: PONTO_TORRA[f.pontoTorraMin] ?? "Torra" });
-  if (f.scaMin) out.push({ chave: "sca", rotulo: `SCA ${f.scaMin}+` });
-  if (f.altitudeMin) out.push({ chave: "altMin", rotulo: `Acima de ${f.altitudeMin} m` });
+  if (f.soDisponiveis) out.push({ chave: "disponivel", rotulo: "Só disponíveis" });
   if (ordenacao !== "relevancia")
     out.push({
       chave: "ordem",
@@ -98,7 +109,6 @@ export default async function PaginaCafes({
   const sp = await searchParams;
   const { filtros, ordenacao } = lerFiltros(sp);
   const lotes = await listarLotes(filtros, ordenacao);
-  const faixa = await faixaAltitude();
   const chips = ativos(filtros, ordenacao);
 
   return (
@@ -172,25 +182,30 @@ export default async function PaginaCafes({
             </select>
           </div>
 
-          {/* §7.2 pede slider sobre a silhueta da serra. Enquanto o <Serra>
-              interativo nao existe, o campo numerico entrega a mesma funcao e
-              sobrevive sem JS. */}
+          {/* Aqui havia "Altitude mínima".
+              O filtro caiu junto com o dado: a altitude por lote era inventada
+              e saiu do contrato. O estetica.md §6 antecipa exatamente este
+              caso — sem altitude real, troca-se o eixo de altitude pelo de
+              torra, que é o que a linha "Torra mínima" ao lado já faz.
+              O lugar virou o filtro de formato, que é o eixo de variação
+              verdadeiro deste catálogo: grãos, moído, drip, cápsula. */}
           <div>
-            <label htmlFor="f-alt" className={ROTULO}>
-              Altitude mínima
+            <label htmlFor="f-formato" className={ROTULO}>
+              Formato
             </label>
-            <input
-              id="f-alt"
-              name="altMin"
-              type="number"
-              inputMode="numeric"
-              min={faixa.min}
-              max={faixa.max}
-              step={10}
-              placeholder={`${faixa.min} – ${faixa.max} m`}
-              defaultValue={filtros.altitudeMin ?? ""}
-              className={`${CAMPO} mt-1.5 font-dado`}
-            />
+            <select
+              id="f-formato"
+              name="formato"
+              defaultValue={filtros.formato ?? ""}
+              className={`${CAMPO} mt-1.5`}
+            >
+              <option value="">Qualquer</option>
+              {FORMATOS.map((f) => (
+                <option key={f.valor} value={f.valor}>
+                  {f.rotulo}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -213,6 +228,17 @@ export default async function PaginaCafes({
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-[13px]">
+            <input
+              type="checkbox"
+              name="disponivel"
+              value="1"
+              defaultChecked={filtros.soDisponiveis}
+              className="size-4 accent-[var(--color-vermelho)]"
+            />
+            Só o que está disponível
+          </label>
+
           <button
             type="submit"
             className="h-11 rounded-bt bg-fuligem px-6 text-[12px] font-semibold uppercase tracking-[0.1em] text-cal transition-colors hover:bg-fuligem-80 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
@@ -257,9 +283,10 @@ export default async function PaginaCafes({
             Nenhum café com esses filtros.
           </p>
           <p className="mt-4 text-[17px] text-fuligem-80">
-            Tente afrouxar a torra ou a altitude — nossos lotes vão de{" "}
-            <span className="font-dado">{faixa.min} m</span> a{" "}
-            <span className="font-dado">{faixa.max} m</span>.
+            Tente afrouxar a torra ou o formato — a casa vai da{" "}
+            <span className="font-dado">torra média</span> do Suave à{" "}
+            <span className="font-dado">média-escura</span> do Clássico, em grãos
+            ou moído.
           </p>
           <div className="mt-8">
             <BotaoLink href="/cafes" variante="secundario">

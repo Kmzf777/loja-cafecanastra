@@ -30,11 +30,18 @@ app.use(
   }),
 );
 
+const isProd = process.env.NODE_ENV === "production";
+
 const allowedOrigins = [
   "https://www.shopnaw.com.br",
   "https://shopnaw.com.br",
   "https://shopnaw-web.onrender.com",
   "http://localhost:5173",
+  // A vitrine migrou de Vite (5173) para Next (3000) e o painel passou a ser
+  // servido pelo Next junto com ela. Sem esta origem, toda chamada do painel
+  // morre no CORS antes de chegar numa rota.
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
   process.env.CORS_ORIGIN,
 ].filter(Boolean);
 
@@ -67,12 +74,19 @@ app.use("/uploads", express.static("uploads"));
 app.post("/webhook/mercadopago", PaymentController.receiveWebhook);
 app.post("/shipping/calculate", ShippingController.calculate);
 
-// CSRF protection via cookie
+// CSRF protection via cookie.
+//
+// `secure: true` + `SameSite=None` e obrigatorio em producao, onde front e back
+// vivem em dominios diferentes sob HTTPS. Em desenvolvimento e o oposto: o
+// navegador DESCARTA silenciosamente um cookie `Secure` vindo de
+// http://localhost, entao o backend nunca reconhece o token que ele mesmo
+// emitiu e todo POST — inclusive o login — responde 403 "Formulario expirado".
+// Nada no log denuncia isso; o cookie simplesmente nao existe.
 const csrfProtection = csrf({
   cookie: {
     httpOnly: true,
-    secure: true,
-    sameSite: "None",
+    secure: isProd,
+    sameSite: isProd ? "None" : "Lax",
     signed: false,
   },
 });

@@ -1,4 +1,3 @@
-import LogoShopnaw from "../../assets/novalogo.jpeg";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import MenuAside from "../../components/DashboardSection/MenuAside/MenuAside";
 import {
@@ -29,13 +28,23 @@ function Dashboard() {
   return (
     <DashboardContainer>
       <HeaderComponent>
+        {/* Marca do painel: era o logo da Shopnaw, a loja de camisetas de onde
+            este codigo veio. Servido de /public pelo mesmo Next que serve a
+            ilha, entao caminho absoluto basta — sem import estatico. */}
         <div className="logoContent" onClick={() => navigate("/dashboard")}>
-          <img src={LogoShopnaw.src} alt="Logo-Shopnaw" />
+          <img src="/logo-canastra.png" alt="Café Canastra" />
         </div>
 
-        <span className="backShop" onClick={() => navigate("/site")}>
+        {/* navigate("/site") apontava para uma rota que nao existe em roteador
+            nenhum — nem nesta ilha, nem no App Router do Next. O clique nao
+            saia do painel. A vitrine e "/" e mora FORA da ilha, entao a saida
+            precisa ser navegacao dura. */}
+        <span
+          className="backShop"
+          onClick={() => window.location.assign("/")}
+        >
           {" "}
-          <FaArrowLeft /> Volar para loja
+          <FaArrowLeft /> Voltar para a loja
         </span>
 
         <ContainerHamburger>

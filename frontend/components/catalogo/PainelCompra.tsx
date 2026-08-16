@@ -5,6 +5,7 @@ import type { Lote, Moagem, PesoGramas } from "@/lib/catalogo/tipos";
 import { MOAGENS } from "@/lib/catalogo/tipos";
 import {
   acharVariante,
+  embalagensDe,
   formatarPreco,
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
@@ -31,8 +32,22 @@ function rotuloPeso(g: PesoGramas) {
 }
 
 export function PainelCompra({ lote }: { lote: Lote }) {
-  const [moagem, setMoagem] = useState<Moagem>("grao");
-  const [peso, setPeso] = useState<PesoGramas>(250);
+  /**
+   * O estado inicial sai do catalogo, nao de constantes.
+   *
+   * "Grao, 250 g" e o padrao do §5.5, mas nem toda linha o tem — o Microlote so
+   * existe em 250 g em grao, e uma linha so moida nao tem "grao" nenhum. Fixar
+   * o padrao no codigo abria a PDP ja num estado invalido, mostrando "Esgotado"
+   * num cafe disponivel.
+   */
+  const inicial =
+    lote.variantes.find((v) => v.moagem === "grao" && v.pesoGramas === 250) ??
+    lote.variantes.find((v) => v.estoque > 0) ??
+    lote.variantes[0];
+
+  const [moagem, setMoagem] = useState<Moagem>(inicial?.moagem ?? "grao");
+  const [peso, setPeso] = useState<PesoGramas>(inicial?.pesoGramas ?? 250);
+  const [pacotes, setPacotes] = useState<number>(inicial?.pacotes ?? 1);
   const [assinando, setAssinando] = useState(false);
   const [frequencia, setFrequencia] = useState(
     lote.assinatura?.frequenciasDias[1] ?? 30,
@@ -58,8 +73,26 @@ export function PainelCompra({ lote }: { lote: Lote }) {
     return () => obs.disconnect();
   }, []);
 
-  const variante = acharVariante(lote, moagem, peso);
+  const variante = acharVariante(lote, moagem, peso, pacotes);
   const indisponivel = !variante || variante.estoque === 0;
+
+  /** Embalagens (avulso, caixa com 3, caixa com 4) da combinação escolhida. */
+  const embalagens = useMemo(
+    () => embalagensDe(lote, moagem, peso),
+    [lote, moagem, peso],
+  );
+
+  /**
+   * Trocar de moagem ou de peso pode deixar `pacotes` apontando para uma caixa
+   * que não existe naquela combinação — e aí o painel mostra "Esgotado" sem que
+   * nada esteja esgotado. Este efeito puxa a seleção de volta para a embalagem
+   * mais próxima disponível.
+   */
+  useEffect(() => {
+    if (embalagens.length && !embalagens.includes(pacotes)) {
+      setPacotes(embalagens[0]);
+    }
+  }, [embalagens, pacotes]);
 
   const desconto = lote.assinatura?.desconto ?? 0;
   const precoBase = variante?.preco ?? 0;
@@ -204,6 +237,34 @@ export function PainelCompra({ lote }: { lote: Lote }) {
           })}
         </div>
       </fieldset>
+
+      {/* ── Embalagem ──────────────────────────────────────────────────────── */}
+      {/* Só aparece quando há mais de uma opção: a loja vende caixa fechada em
+          alguns pesos (3x250 g, 4x500 g) e só o pacote avulso em outros. Um
+          seletor com um botão só é ruído. */}
+      {embalagens.length > 1 ? (
+        <fieldset className="mt-6">
+          <legend className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
+            Embalagem
+          </legend>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {embalagens.map((n) => (
+              <button
+                key={n}
+                onClick={() => setPacotes(n)}
+                aria-pressed={pacotes === n}
+                className={`border px-4 py-2.5 text-[13px] transition-colors ${
+                  pacotes === n
+                    ? "border-fuligem bg-fuligem text-cal"
+                    : "border-fuligem-20 hover:border-fuligem"
+                }`}
+              >
+                {n === 1 ? "1 pacote" : `Caixa com ${n}`}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      ) : null}
 
       {/* ── Quantidade e CTA ───────────────────────────────────────────────── */}
       <div ref={ctaRef} className="mt-8 flex flex-wrap items-stretch gap-3">

@@ -1,4 +1,5 @@
 import type { Lote } from "@/lib/catalogo/tipos";
+import { formatarSca } from "@/lib/catalogo/rotulos";
 
 /**
  * estetica.md §5.4 — <details> RECOLHIDO por padrao.
@@ -10,36 +11,41 @@ import type { Lote } from "@/lib/catalogo/tipos";
  * Cada rotulo carrega uma definicao em uma frase, via <abbr title>. O §5.4 pede
  * um `?` com tooltip; `abbr` entrega isso com semantica nativa, sem JS e sem
  * quebrar no teclado ou no leitor de tela.
+ *
+ * O QUE MUDOU E POR QUE
+ * A ficha antiga listava Altitude, Safra, Produtor e Municipio POR LOTE, com
+ * valores inventados ("Sitio Boa Vista", "1.320 m", "Safra 2025"). O Cafe
+ * Canastra vende linhas de blend com origem unica na Serra da Canastra, nao
+ * micro-lotes rastreados por sitio — nao existe produtor por linha para
+ * declarar. Os campos sairam em vez de continuarem preenchidos com ficcao;
+ * ficaram os que a marca de fato afirma.
  */
 
 const DEFINICOES: Record<string, string> = {
-  Altitude:
-    "Altura da lavoura. Quanto mais alto, mais fria a noite e mais devagar o grão amadurece — o que costuma dar mais doçura e acidez.",
-  Variedade: "A cultivar do pé de café, como Bourbon, Catuaí ou Mundo Novo.",
-  Processo:
-    "Como o grão foi seco. Natural seca com a casca da fruta, o que costuma dar mais doçura e corpo.",
-  Safra: "O ano da colheita.",
-  Produtor: "O sítio ou fazenda onde este lote foi colhido.",
-  Município: "A cidade da lavoura, dentro da região da Serra da Canastra.",
+  Origem: "A região onde o café foi cultivado, colhido e beneficiado.",
+  Torra:
+    "Quanto tempo e a que temperatura o grão foi torrado. Torras mais escuras trazem mais corpo e amargor; mais claras preservam acidez e fruta.",
+  Corpo: "O peso do café na boca — de aquoso e leve a denso e encorpado.",
+  Variedades: "As cultivares do pé de café, como Bourbon, Catuaí ou Mundo Novo.",
   Pontuação:
-    "Nota de 0 a 100 dada em prova cega segundo o protocolo da SCA. Acima de 80 o café é classificado como especial.",
+    "Nota de 0 a 100 dada em prova cega segundo o protocolo da SCA. Acima de 80 o café é classificado como especial. A embalagem declara 80+, que é o piso da coleção.",
+  Preparo: "Os métodos em que esta linha costuma render melhor.",
 };
 
 export function FichaLavoura({ lote }: { lote: Lote }) {
   const linhas: [string, string][] = [
-    ["Altitude", `${lote.lavoura.altitude.toLocaleString("pt-BR")} m`],
-    ["Variedade", lote.lavoura.variedade],
-    ["Processo", lote.lavoura.processo],
-    ["Safra", String(lote.lavoura.safra)],
-    ["Produtor", lote.lavoura.produtor],
-    ["Município", lote.lavoura.municipio],
-    ["Pontuação", lote.sca.toLocaleString("pt-BR", { minimumFractionDigits: 2 })],
+    ["Origem", `${lote.origem.regiao} — ${lote.origem.estado}`],
+    ["Torra", lote.torra],
+    ["Corpo", lote.corpo],
+    ["Variedades", lote.origem.variedades.join(", ")],
+    ["Pontuação", formatarSca(lote.sca)],
+    ["Preparo", lote.preparoSugerido],
   ];
 
   return (
     <details className="group border-t border-fuligem-20 pt-4">
       <summary className="flex cursor-pointer list-none items-center justify-between text-[13px] font-semibold uppercase tracking-[0.14em] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho">
-        Ficha da lavoura
+        Ficha do café
         <span aria-hidden className="font-dado text-[16px] leading-none">
           <span className="group-open:hidden">+</span>
           <span className="hidden group-open:inline">−</span>
@@ -49,8 +55,8 @@ export function FichaLavoura({ lote }: { lote: Lote }) {
       <dl className="mt-4">
         {linhas.map(([rotulo, valor]) => (
           // §10: em mobile a ficha vira uma coluna, com o rotulo ACIMA do
-          // valor. Lado a lado em 390px, "Município" e "São Roque de Minas —
-          // MG" disputam a mesma linha e o valor quebra feio.
+          // valor. Lado a lado em 390px, "Variedades" e a lista das quatro
+          // cultivares disputam a mesma linha e o valor quebra feio.
           <div
             key={rotulo}
             className="flex flex-col gap-0.5 border-b border-fuligem-20 py-2.5 last:border-b-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4"
@@ -69,6 +75,18 @@ export function FichaLavoura({ lote }: { lote: Lote }) {
           </div>
         ))}
       </dl>
+
+      {/* Selos que valem para toda a coleção, não por lote. */}
+      <ul className="mt-4 flex flex-wrap gap-2">
+        {lote.origem.atributos.map((atributo) => (
+          <li
+            key={atributo}
+            className="border border-fuligem-20 px-2.5 py-1 text-[11px] uppercase tracking-[0.1em] text-fuligem-55"
+          >
+            {atributo}
+          </li>
+        ))}
+      </ul>
     </details>
   );
 }

@@ -7,7 +7,7 @@ import { BotaoLink } from "@/components/ui/Botao";
  * nunca e so "404". Aqui ela oferece saida: os cafes que existem.
  */
 export default async function LoteNaoEncontrado() {
-  const sugestoes = (await listarLotes({}, "sca-desc")).slice(0, 4);
+  const sugestoes = (await listarLotes({ soDisponiveis: true }, "relevancia")).slice(0, 4);
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-16 md:px-10 md:py-24">

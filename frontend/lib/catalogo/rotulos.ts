@@ -9,11 +9,18 @@ import type { Linha } from "./tipos";
  * legivel e responsabilidade desta camada, nunca do componente.
  */
 
-/** estetica.md §4.1 — cada linha herda a cor da propria embalagem. */
+/**
+ * estetica.md §4.1 — cada linha herda a cor da PROPRIA embalagem, nunca uma cor
+ * inventada. Preto (Clássico), kraft (Suave), vermelho (Canela) vêm da tabela
+ * de ativos do §1; o barro do Microlote vem do papel do stand-up pouch, e a
+ * mata do Néctar de Minas o separa do Clássico, com quem divide o pacote preto.
+ */
 export const LINHAS: Record<Linha, { rotulo: string; corVar: string }> = {
   classico: { rotulo: "Clássico", corVar: "var(--color-fuligem)" },
   suave: { rotulo: "Suave", corVar: "var(--color-juta)" },
-  aromatizado: { rotulo: "Aromatizado", corVar: "var(--color-vermelho)" },
+  canela: { rotulo: "Canela", corVar: "var(--color-vermelho)" },
+  microlote: { rotulo: "Microlote", corVar: "var(--color-barro)" },
+  "nectar-de-minas": { rotulo: "Néctar de Minas", corVar: "var(--color-mata)" },
 };
 
 /** estetica.md §5.3 — a escala 1-5 sempre acompanhada do texto, nunca so a barra. */
@@ -32,7 +39,13 @@ const NOTAS_IRREGULARES: Record<string, string> = {
   "chocolate-meio-amargo": "Chocolate meio amargo",
   "laranja-da-terra": "Laranja-da-terra",
   "milho-torrado": "Milho torrado",
+  amadeirado: "Amadeirado",
+  especiarias: "Especiarias",
+  chocolate: "Chocolate",
+  castanha: "Castanha",
   jabuticaba: "Jabuticaba",
+  frutado: "Frutado",
+  floral: "Floral",
   amendoa: "Amêndoa",
   pessego: "Pêssego",
   baunilha: "Baunilha",
@@ -40,6 +53,7 @@ const NOTAS_IRREGULARES: Record<string, string> = {
   cacau: "Cacau",
   canela: "Canela",
   cravo: "Cravo",
+  doce: "Doçura",
   cana: "Cana",
   mel: "Mel",
 };
@@ -52,7 +66,18 @@ export function rotuloNota(nota: string): string {
   );
 }
 
-/** "1.180 m" — separador de milhar pt-BR, para a Martian Mono. */
-export function formatarAltitude(metros: number): string {
-  return `${metros.toLocaleString("pt-BR")} m`;
+/**
+ * "250 g" / "1 kg" — o peso do pacote, na Martian Mono.
+ * Substitui `formatarAltitude`: a altitude por lote era dado inventado e saiu
+ * do contrato (ver o comentário sobre `Origem` em tipos.ts).
+ */
+export function formatarPeso(gramas: number): string {
+  return gramas >= 1000
+    ? `${(gramas / 1000).toLocaleString("pt-BR")} kg`
+    : `${gramas} g`;
+}
+
+/** "SCA 80+" — o piso declarado na embalagem, nunca uma nota exata. */
+export function formatarSca(sca: number): string {
+  return `SCA ${Math.floor(sca)}+`;
 }

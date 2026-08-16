@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import { listarLotes } from "@/lib/catalogo/repositorio";
-import { formatarAltitude } from "@/lib/catalogo/rotulos";
+import { MARCA } from "@/lib/catalogo/produtos";
+import { PONTO_TORRA } from "@/lib/catalogo/rotulos";
 import { Serra } from "@/components/marca/Serra";
 import { BotaoLink } from "@/components/ui/Botao";
 
@@ -16,19 +17,16 @@ import { BotaoLink } from "@/components/ui/Botao";
 export const metadata: Metadata = {
   title: "A Serra — Café Canastra",
   description:
-    "Desde 1985 na Serra da Canastra, entre 900 e 1.320 metros. O território, os produtores e a torra.",
+    "Desde 1985 na Serra da Canastra, em Minas Gerais. O território, as variedades e a torra de cada linha.",
 };
 
 export const revalidate = 3600;
 
 export default async function PaginaSerra() {
-  const lotes = await listarLotes({}, "altitude-desc");
-  const produtores = lotes.map((l) => ({
-    nome: l.lavoura.produtor,
-    municipio: l.lavoura.municipio.replace(" — MG", ""),
-    altitude: l.lavoura.altitude,
-    lote: l.nome,
-  }));
+  // Ordenado da torra mais clara à mais escura. Era "altitude-desc", que
+  // ordenava por um número inventado — ver o comentário sobre `Origem` em
+  // lib/catalogo/tipos.ts.
+  const lotes = await listarLotes({}, "torra-asc");
 
   return (
     <>
@@ -93,14 +91,20 @@ export default async function PaginaSerra() {
       {/* ── Território / altitudes ───────────────────────── superfície kraft */}
       <section className="bg-juta-claro py-16 md:py-24">
         <div className="mx-auto max-w-[1440px] px-4 md:px-10">
+          {/* Este bloco desenhava um eixo de ALTITUDE por lote (estetica.md §6).
+              O próprio §6 condiciona esse eixo a haver dado real de altitude por
+              lote — "senão o eixo vira ficção e a marca perde credibilidade" — e
+              prescreve o Plano B: mesma serra, mesmo mecanismo, eixo de Ponto de
+              Torra. Como o Canastra vende linhas de origem única, e não lotes de
+              altitudes distintas, é o Plano B que vale. */}
           <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
-            De 900 a 1.320 metros
+            Da torra clara à escura
           </h2>
           <p className="mt-5 max-w-[62ch] text-[17px] leading-relaxed text-fuligem-80">
-            Altitudes mais altas, noites mais frias: o grão amadurece devagar e
-            ganha doçura e acidez cítrica. Mais abaixo, o corpo cresce e a torra
-            aguenta ir mais longe. Nenhuma das duas é melhor — são xícaras
-            diferentes.
+            Torra mais clara guarda a fruta e a acidez do grão; mais escura traz
+            corpo, cacau e amargor. Nenhuma das duas é melhor — são xícaras
+            diferentes, e a serra dá conta das duas. Todas as variedades saem da
+            mesma origem: {MARCA.variedades.join(", ")}.
           </p>
 
           <div className="relative mt-12">
@@ -111,14 +115,14 @@ export default async function PaginaSerra() {
             />
             {/* Lista acessivel com o mesmo conteudo do desenho (§6). */}
             <ol className="mt-6 grid gap-px border border-fuligem/20 bg-fuligem/20 sm:grid-cols-2 lg:grid-cols-3">
-              {produtores.map((p) => (
-                <li key={p.lote} className="bg-juta-claro p-4">
+              {lotes.map((l) => (
+                <li key={l.slug} className="bg-juta-claro p-4">
                   <span className="font-dado text-[15px] tracking-[0.04em]">
-                    {formatarAltitude(p.altitude)}
+                    {l.pontoTorra} de 5
                   </span>
-                  <p className="mt-1 text-[15px] font-semibold">{p.lote}</p>
+                  <p className="mt-1 text-[15px] font-semibold">{l.nome}</p>
                   <p className="text-[13px] text-fuligem-80">
-                    {p.nome} · {p.municipio}
+                    {PONTO_TORRA[l.pontoTorra]} · {l.corpo}
                   </p>
                 </li>
               ))}

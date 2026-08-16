@@ -1,10 +1,10 @@
-import { LOTES } from "./mock";
+import { LOTES } from "./produtos";
 import type { Filtros, Lote, Ordenacao, Variante } from "./tipos";
 
 /**
  * Unica porta de entrada do catalogo. Nenhuma pagina conhece a origem do dado:
- * trocar o mock pela API real e reescrever so este arquivo. As funcoes sao
- * `async` de proposito — quando a API entrar, a assinatura nao muda.
+ * trocar a fonte local pela API real e reescrever so este arquivo. As funcoes
+ * sao `async` de proposito — quando a API entrar, a assinatura nao muda.
  */
 
 export async function listarLotes(
@@ -15,15 +15,20 @@ export async function listarLotes(
     if (filtros.linha && lote.linha !== filtros.linha) return false;
     if (filtros.pontoTorraMin && lote.pontoTorra < filtros.pontoTorraMin) return false;
     if (filtros.pontoTorraMax && lote.pontoTorra > filtros.pontoTorraMax) return false;
-    if (filtros.scaMin && lote.sca < filtros.scaMin) return false;
-    if (filtros.altitudeMin && lote.lavoura.altitude < filtros.altitudeMin) return false;
-    if (filtros.altitudeMax && lote.lavoura.altitude > filtros.altitudeMax) return false;
     if (filtros.moagem && !lote.variantes.some((v) => v.moagem === filtros.moagem)) return false;
+    if (filtros.formato) {
+      const emVariantes = lote.variantes.some((v) => v.formato === filtros.formato);
+      const emEspeciais = lote.formatosEspeciais.some(
+        (f) => f.formato === filtros.formato,
+      );
+      if (!emVariantes && !emEspeciais) return false;
+    }
     if (
       filtros.pesoGramas &&
       !lote.variantes.some((v) => v.pesoGramas === filtros.pesoGramas)
     )
       return false;
+    if (filtros.soDisponiveis && !temEstoque(lote)) return false;
     // AND deliberado — ver o comentario sobre `notas` em tipos.ts.
     if (filtros.notas?.length && !filtros.notas.every((n) => lote.notas.includes(n)))
       return false;
@@ -37,13 +42,13 @@ function ordenar(lotes: Lote[], ordenacao: Ordenacao): Lote[] {
   const copia = [...lotes];
   switch (ordenacao) {
     case "preco-asc":
-      return copia.sort((a, b) => precoMinimo(a) - precoMinimo(b));
+      return copia.sort((a, b) => precoOrdenavel(a) - precoOrdenavel(b));
     case "preco-desc":
-      return copia.sort((a, b) => precoMinimo(b) - precoMinimo(a));
-    case "altitude-desc":
-      return copia.sort((a, b) => b.lavoura.altitude - a.lavoura.altitude);
-    case "sca-desc":
-      return copia.sort((a, b) => b.sca - a.sca);
+      return copia.sort((a, b) => precoOrdenavel(b) - precoOrdenavel(a));
+    case "torra-asc":
+      return copia.sort((a, b) => a.pontoTorra - b.pontoTorra);
+    case "torra-desc":
+      return copia.sort((a, b) => b.pontoTorra - a.pontoTorra);
     default:
       return copia;
   }
@@ -57,22 +62,47 @@ export async function listarSlugs(): Promise<string[]> {
   return LOTES.map((l) => l.slug);
 }
 
-/** Lotes da mesma linha, exceto o proprio — a secao "Da mesma serra" da PDP. */
+/** Os outros cafés da casa — a seção "Da mesma serra" da PDP. */
 export async function lotesRelacionados(lote: Lote, limite = 4): Promise<Lote[]> {
-  const mesmaLinha = LOTES.filter((l) => l.slug !== lote.slug && l.linha === lote.linha);
-  const resto = LOTES.filter((l) => l.slug !== lote.slug && l.linha !== lote.linha);
-  return [...mesmaLinha, ...resto].slice(0, limite);
+  const torraParecida = LOTES.filter(
+    (l) => l.slug !== lote.slug && Math.abs(l.pontoTorra - lote.pontoTorra) <= 1,
+  );
+  const resto = LOTES.filter(
+    (l) => l.slug !== lote.slug && !torraParecida.includes(l),
+  );
+  return [...torraParecida, ...resto].slice(0, limite);
 }
 
-/** Faixa de altitude de toda a colecao — dominio do slider da PLP e do eixo §6. */
-export async function faixaAltitude(): Promise<{ min: number; max: number }> {
-  const alts = LOTES.map((l) => l.lavoura.altitude);
-  return { min: Math.min(...alts), max: Math.max(...alts) };
+/** Faixa de ponto de torra da coleção — domínio do eixo do §6 (Plano B). */
+export async function faixaTorra(): Promise<{ min: number; max: number }> {
+  const pontos = LOTES.map((l) => l.pontoTorra);
+  return { min: Math.min(...pontos), max: Math.max(...pontos) };
 }
 
-/** Menor preco entre as variantes — o "a partir de" do card. */
-export function precoMinimo(lote: Lote): number {
-  return Math.min(...lote.variantes.map((v) => v.preco));
+/**
+ * Menor preço entre as variantes — o "a partir de" do card.
+ *
+ * Devolve `null` quando a linha não tem nenhuma variante de pacote com preço:
+ * é o caso real da Canela, cujos únicos formatos capturados (drip e cápsula)
+ * estão esgotados e sem preço na loja. Inventar um número aqui seria mentir na
+ * vitrine; quem consome trata o `null` mostrando "Indisponível".
+ */
+export function precoMinimo(lote: Lote): number | null {
+  const precos = lote.variantes.filter((v) => v.preco > 0).map((v) => v.preco);
+  return precos.length ? Math.min(...precos) : null;
+}
+
+/** Como `precoMinimo`, mas com um valor alto no lugar do nulo, para ordenação. */
+function precoOrdenavel(lote: Lote): number {
+  return precoMinimo(lote) ?? Number.MAX_SAFE_INTEGER;
+}
+
+/** Há ao menos uma combinação comprável? */
+export function temEstoque(lote: Lote): boolean {
+  return (
+    lote.variantes.some((v) => v.estoque > 0) ||
+    lote.formatosEspeciais.some((f) => f.estoque > 0)
+  );
 }
 
 /**
@@ -84,10 +114,27 @@ export function acharVariante(
   lote: Lote,
   moagem: Variante["moagem"],
   pesoGramas: Variante["pesoGramas"],
+  pacotes = 1,
 ): Variante | undefined {
   return lote.variantes.find(
-    (v) => v.moagem === moagem && v.pesoGramas === pesoGramas,
+    (v) =>
+      v.moagem === moagem && v.pesoGramas === pesoGramas && v.pacotes === pacotes,
   );
+}
+
+/** Quantos pacotes por embalagem existem para uma combinação (1, 3, 4...). */
+export function embalagensDe(
+  lote: Lote,
+  moagem: Variante["moagem"],
+  pesoGramas: Variante["pesoGramas"],
+): number[] {
+  return [
+    ...new Set(
+      lote.variantes
+        .filter((v) => v.moagem === moagem && v.pesoGramas === pesoGramas)
+        .map((v) => v.pacotes),
+    ),
+  ].sort((a, b) => a - b);
 }
 
 /** Centavos para "R$ 42,00". */

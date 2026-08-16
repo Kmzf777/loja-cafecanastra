@@ -10,7 +10,7 @@ import {
   formatarPreco,
 } from "@/lib/catalogo/repositorio";
 import { MOAGENS } from "@/lib/catalogo/tipos";
-import { rotuloNota, formatarAltitude } from "@/lib/catalogo/rotulos";
+import { rotuloNota } from "@/lib/catalogo/rotulos";
 import { SeloSCA } from "@/components/catalogo/SeloSCA";
 import { PontoTorra } from "@/components/catalogo/PontoTorra";
 import { FichaLavoura } from "@/components/catalogo/FichaLavoura";
@@ -45,7 +45,7 @@ export async function generateMetadata({
   if (!lote) return { title: "Café não encontrado" };
 
   const notas = lote.notas.map(rotuloNota).join(", ");
-  const descricao = `${lote.descricao} Notas de ${notas.toLowerCase()}. SCA ${Math.floor(lote.sca)}, ${lote.lavoura.municipio}.`;
+  const descricao = `${lote.descricao} Notas de ${notas.toLowerCase()}. SCA ${Math.floor(lote.sca)}+, ${lote.origem.regiao}.`;
 
   return {
     title: `${lote.nome} — Café Canastra`,
@@ -104,21 +104,20 @@ export default async function PaginaLote({
 
           <div>
             <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
-              {lote.lavoura.municipio}
-              <span aria-hidden> · </span>
-              <span className="font-dado normal-case tracking-[0.06em]">
-                {formatarAltitude(lote.lavoura.altitude)}
-              </span>
+              {lote.origem.regiao}
             </p>
 
             <h1 className="mt-3 font-titulo text-[clamp(2.5rem,5vw,3.75rem)] leading-[1] tracking-[-0.015em]">
               {lote.nome}
             </h1>
 
+            {/* Antes esta linha trazia produtor e safra, ambos inventados por
+                lote. Torra e corpo são o que a marca de fato declara sobre
+                cada linha — e são o que diferencia uma da outra. */}
             <p className="mt-2 text-[15px] text-fuligem-55">
-              {lote.lavoura.produtor}
+              {lote.torra}
               <span aria-hidden> · </span>
-              <span className="font-dado">Safra {lote.lavoura.safra}</span>
+              {lote.corpo}
             </p>
 
             <SeloSCA sca={lote.sca} className="mt-6 inline-block" />
@@ -134,6 +133,32 @@ export default async function PaginaLote({
               <PainelCompra lote={lote} />
             </div>
 
+            {/* Drip coffee e cápsula existem na loja mas não têm peso de
+                pacote nem moagem a escolher — ficam fora do seletor, listados
+                com o estado real de estoque em vez de sumirem da página. */}
+            {lote.formatosEspeciais.length ? (
+              <section className="mt-10 border-t border-fuligem-20 pt-6">
+                <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
+                  Também nesta linha
+                </h2>
+                <ul className="mt-4 grid gap-2">
+                  {lote.formatosEspeciais.map((f) => (
+                    <li
+                      key={f.sku}
+                      className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border border-fuligem-20 px-4 py-3"
+                    >
+                      <span className="text-[14px]">{f.rotuloEmbalagem}</span>
+                      <span className="font-dado text-[13px] text-fuligem-55">
+                        {f.estoque > 0 && f.preco > 0
+                          ? formatarPreco(f.preco)
+                          : "Esgotado"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
             <div className="mt-10">
               <FichaLavoura lote={lote} />
             </div>
@@ -145,18 +170,19 @@ export default async function PaginaLote({
       <section className="bg-fuligem py-16 text-cal md:py-24">
         <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
-            A história deste lote
+            Sobre esta linha
           </p>
           <p className="mt-6 max-w-[62ch] titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
             {lote.descricao}
           </p>
+          {/* Origem única: a mesma serra para toda a coleção. O texto antigo
+              afirmava sítio, safra e altitude por lote — nada disso existe num
+              blend de origem única, e nada disso vinha de fonte. */}
           <p className="mt-6 max-w-[62ch] text-[17px] leading-relaxed text-cal/80">
-            Colhido em {lote.lavoura.produtor}, em {lote.lavoura.municipio}, a{" "}
-            <span className="font-dado">
-              {formatarAltitude(lote.lavoura.altitude)}
-            </span>
-            . Variedade {lote.lavoura.variedade}, processo{" "}
-            {lote.lavoura.processo.toLowerCase()}.
+            Origem única da {lote.origem.regiao}. Blend 100% arábica das
+            variedades {lote.origem.variedades.join(", ")}. {lote.torra},{" "}
+            {lote.corpo.toLowerCase()}. Rende melhor em{" "}
+            {lote.preparoSugerido.toLowerCase()}.
           </p>
         </div>
       </section>
@@ -213,9 +239,18 @@ export default async function PaginaLote({
             <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
               Da mesma serra
             </h2>
-            <span className="font-dado text-[13px] text-fuligem-55">
-              a partir de {formatarPreco(Math.min(...relacionados.map(precoMinimo)))}
-            </span>
+            {/* Linhas sem preço (tudo esgotado) não podem entrar no mínimo:
+                `precoMinimo` devolve null nesse caso e Math.min viraria NaN. */}
+            {(() => {
+              const precos = relacionados
+                .map(precoMinimo)
+                .filter((p): p is number => p !== null);
+              return precos.length ? (
+                <span className="font-dado text-[13px] text-fuligem-55">
+                  a partir de {formatarPreco(Math.min(...precos))}
+                </span>
+              ) : null;
+            })()}
           </div>
           <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {relacionados.map((l) => (

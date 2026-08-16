@@ -5,3 +5,5 @@ uploads
 .DS_Store
 estrutura.sql
 .idea
+# Artefato criado por engano ao rodar next fora de frontend/
+.next
