@@ -14,8 +14,67 @@
  * Por isso a chave é copiada, não inventada.
  */
 
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
+/**
+ * Origem da API.
+ *
+ * `NEXT_PUBLIC_*` e resolvido em tempo de BUILD e vai embutido no bundle. Se a
+ * variavel faltar no build de producao, o fallback de desenvolvimento e assado
+ * no JavaScript que o cliente baixa, e a loja publica tenta falar com a maquina
+ * de quem visita. Nao ha erro no servidor, nada no log: simplesmente nada
+ * funciona, para todo mundo.
+ *
+ * `conferirApiBase()`, logo abaixo, detecta exatamente esse estado em runtime.
+ */
+export const API_BASE = (
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333"
+).replace(/\/$/, "");
+
+/**
+ * Detecta a combinação que quebra tudo em silêncio: página servida de um
+ * domínio real, apontando para localhost.
+ *
+ * A checagem é aqui e não no build porque `next build` roda com
+ * NODE_ENV=production até quando é só uma verificação local — falhar ali
+ * impediria compilar o projeto sem ter uma API configurada. O que importa de
+ * fato é o runtime no navegador de quem visita, e isso só dá para saber
+ * comparando com o host de onde a página veio.
+ */
+let jaAvisou = false;
+function conferirApiBase() {
+  if (typeof window === "undefined" || jaAvisou) return;
+
+  const hostLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(
+    window.location.hostname,
+  );
+  const apiLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/.test(API_BASE);
+
+  if (!hostLocal && apiLocal) {
+    jaAvisou = true;
+    console.error(
+      `[config] Esta página foi servida de ${window.location.origin}, mas a API ` +
+        `está apontada para ${API_BASE}. Defina NEXT_PUBLIC_API_URL no build ` +
+        "de produção — nenhuma chamada vai funcionar assim.",
+    );
+  }
+}
+
+/**
+ * Destino de redirecionamento seguro.
+ *
+ * O `?de=` da tela de login era usado como veio. `?de=https://site-falso/`
+ * mandava a pessoa para fora logo apos ela digitar a senha — a montagem
+ * classica de phishing, com a credibilidade do dominio verdadeiro emprestada
+ * ao golpe. So caminho interno vale.
+ */
+export function destinoSeguro(bruto: string | null, padrao: string): string {
+  if (!bruto) return padrao;
+  // Precisa comecar com uma barra e NAO com duas: "//evil.com" e URL absoluta
+  // protocol-relative, que o navegador segue para fora do site.
+  if (!bruto.startsWith("/") || bruto.startsWith("//")) return padrao;
+  // "/\evil.com" e tratado como "//evil.com" por alguns navegadores.
+  if (bruto.startsWith("/\\")) return padrao;
+  return bruto;
+}
 
 /** Mesma chave gravada por `loginUser` no painel legado. */
 const CHAVE_REFRESH = "has_refresh";
@@ -34,6 +93,7 @@ export type Sessao = { usuario: Usuario; accessToken: string };
  * login responde 403 "Formulário expirado ou inválido".
  */
 async function obterCsrf(): Promise<string | null> {
+  conferirApiBase();
   try {
     const res = await fetch(`${API_BASE}/csrf-token`, {
       credentials: "include",

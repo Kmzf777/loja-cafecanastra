@@ -170,6 +170,7 @@ class DashboardRepository {
 
       const selectFields = [
         "product_id",
+        "sku",
         "name",
         "size",
         "category",

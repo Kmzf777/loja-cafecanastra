@@ -2,16 +2,82 @@ import { LOTES } from "./produtos";
 import type { Filtros, Lote, Ordenacao, Variante } from "./tipos";
 
 /**
- * Unica porta de entrada do catalogo. Nenhuma pagina conhece a origem do dado:
- * trocar a fonte local pela API real e reescrever so este arquivo. As funcoes
- * sao `async` de proposito — quando a API entrar, a assinatura nao muda.
+ * Unica porta de entrada do catalogo. Nenhuma pagina conhece a origem do dado.
+ *
+ * O catalogo tem duas metades, e elas moram em lugares diferentes de proposito:
+ *
+ *   EDITORIAL — linha, notas, ponto de torra, fotos, textos. Vive em
+ *   data/catalogo-canastra.json, versionado, revisado em pull request. Nao muda
+ *   sozinho e nao deveria ser editavel por um formulario.
+ *
+ *   COMERCIAL — preco e estoque. Vive no BANCO e e editado pelo painel. Muda
+ *   todo dia e nao passa por deploy.
+ *
+ * Ate agora a vitrine so lia o JSON: o administrador mudava o preco no painel e
+ * a loja continuava anunciando o preco antigo ate alguem recompilar o site.
+ * `aplicarDadosAoVivo` casa os dois pelo `sku` e deixa o banco mandar em preco
+ * e estoque. Se a API estiver fora, a vitrine continua de pe com o JSON — uma
+ * loja que nao abre e pior que uma loja com preco de ontem, e o checkout
+ * reconfere tudo no servidor antes de cobrar.
  */
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
+
+/** Quanto tempo o Next guarda a resposta da API antes de perguntar de novo. */
+const SEGUNDOS_DE_CACHE = 60;
+
+type ProdutoDaApi = { sku: string | null; price: string | number; quantity: number };
+
+async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
+  try {
+    const res = await fetch(`${API_BASE}/dashboard?limit=200`, {
+      next: { revalidate: SEGUNDOS_DE_CACHE },
+    });
+    if (!res.ok) return new Map();
+
+    const dados = await res.json();
+    const linhas: ProdutoDaApi[] = dados.products ?? [];
+
+    return new Map(
+      linhas.filter((p) => p.sku).map((p) => [p.sku as string, p]),
+    );
+  } catch {
+    // Silencioso de proposito: a vitrine cai para o JSON e continua vendendo.
+    return new Map();
+  }
+}
+
+/** Sobrepoe preco e estoque do banco sobre a estrutura editorial. */
+function aplicarDadosAoVivo(lote: Lote, aoVivo: Map<string, ProdutoDaApi>): Lote {
+  if (aoVivo.size === 0) return lote;
+
+  const atualizar = <T extends { skuLoja: string; preco: number; estoque: number }>(
+    v: T,
+  ): T => {
+    const vivo = aoVivo.get(v.skuLoja);
+    if (!vivo) return v;
+    return {
+      ...v,
+      preco: Math.round(Number(vivo.price) * 100),
+      estoque: Number(vivo.quantity),
+    };
+  };
+
+  return {
+    ...lote,
+    variantes: lote.variantes.map(atualizar),
+    formatosEspeciais: lote.formatosEspeciais.map(atualizar),
+  };
+}
 
 export async function listarLotes(
   filtros: Filtros = {},
   ordenacao: Ordenacao = "relevancia",
 ): Promise<Lote[]> {
-  const casa = LOTES.filter((lote) => {
+  const aoVivo = await buscarDadosAoVivo();
+  const catalogo = LOTES.map((l) => aplicarDadosAoVivo(l, aoVivo));
+
+  const casa = catalogo.filter((lote) => {
     if (filtros.linha && lote.linha !== filtros.linha) return false;
     if (filtros.pontoTorraMin && lote.pontoTorra < filtros.pontoTorraMin) return false;
     if (filtros.pontoTorraMax && lote.pontoTorra > filtros.pontoTorraMax) return false;
@@ -55,7 +121,9 @@ function ordenar(lotes: Lote[], ordenacao: Ordenacao): Lote[] {
 }
 
 export async function obterLote(slug: string): Promise<Lote | null> {
-  return LOTES.find((l) => l.slug === slug) ?? null;
+  const lote = LOTES.find((l) => l.slug === slug);
+  if (!lote) return null;
+  return aplicarDadosAoVivo(lote, await buscarDadosAoVivo());
 }
 
 export async function listarSlugs(): Promise<string[]> {

@@ -98,6 +98,19 @@ CREATE TABLE IF NOT EXISTS products (
   length      numeric(10,2) NOT NULL DEFAULT 20
 );
 
+-- Chave de negocio estavel do SKU, igual a `sku` em data/catalogo-canastra.json.
+--
+-- E o que costura a vitrine ao banco: a vitrine guarda a parte EDITORIAL do
+-- catalogo (linha, notas, torra, fotos, texto) num arquivo versionado, e o
+-- banco guarda a parte COMERCIAL (preco e estoque), que o admin edita no painel.
+-- Sem uma chave comum, casar os dois so daria por nome — que muda com qualquer
+-- correcao de texto e quebra a ligacao em silencio.
+--
+-- Nulavel porque produto cadastrado pela mao no painel nao tem SKU do catalogo.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sku text;
+CREATE UNIQUE INDEX IF NOT EXISTS products_sku_idx ON products (sku)
+  WHERE sku IS NOT NULL;
+
 -- A busca do painel (dashboardRepository.js) consulta `tsv @@ to_tsquery(...)`.
 -- Sem esta coluna, digitar qualquer termo na busca de produtos derruba a rota
 -- com "column tsv does not exist". Coluna gerada: nao ha trigger para manter.

@@ -4,7 +4,12 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Botao } from "@/components/ui/Botao";
-import { entrar, recuperarSessao, destinoDe } from "@/lib/conta/sessao";
+import {
+  entrar,
+  recuperarSessao,
+  destinoDe,
+  destinoSeguro,
+} from "@/lib/conta/sessao";
 
 /**
  * Entrar — a rota que faltava.
@@ -42,7 +47,7 @@ function FormularioDeLogin() {
     recuperarSessao()
       .then((sessao) => {
         if (!vivo) return;
-        if (sessao) router.replace(de || destinoDe(sessao.usuario));
+        if (sessao) router.replace(destinoSeguro(de, destinoDe(sessao.usuario)));
         else setConferindo(false);
       })
       .catch(() => vivo && setConferindo(false));
@@ -60,7 +65,8 @@ function FormularioDeLogin() {
       // Navegação "dura" de propósito quando o destino é o painel: /dashboard é
       // uma ilha client-only com o seu próprio react-router, e o push do Next
       // não faz o AuthProvider de lá reavaliar a sessão.
-      const destino = de || destinoDe(usuario);
+      // Parametro de URL nunca vira destino direto: ver destinoSeguro.
+      const destino = destinoSeguro(de, destinoDe(usuario));
       if (destino.startsWith("/dashboard")) window.location.assign(destino);
       else router.replace(destino);
     } catch (e) {

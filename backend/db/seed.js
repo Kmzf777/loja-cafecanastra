@@ -114,10 +114,11 @@ async function semearProdutos(client) {
     // nao considerar todo o catalogo recem-chegado a cada seed.
     const { rows } = await client.query(
       `INSERT INTO products
-         (product_id, name, size, category, price, image, "timestamp", quantity,
+         (product_id, sku, name, size, category, price, image, "timestamp", quantity,
           description, weight, width, height, length)
-       VALUES ($1,$2,$3,$4,$5,$6,now(),$7,$8,$9,$10,$11,$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,$9,$10,$11,$12,$13)
        ON CONFLICT (product_id) DO UPDATE SET
+         sku         = EXCLUDED.sku,
          name        = EXCLUDED.name,
          size        = EXCLUDED.size,
          category    = EXCLUDED.category,
@@ -129,6 +130,7 @@ async function semearProdutos(client) {
        RETURNING (xmax = 0) AS inserido`,
       [
         id,
+        produto.sku,
         produto.nome,
         produto.rotuloEmbalagem,
         categoria,
