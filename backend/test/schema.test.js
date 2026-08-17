@@ -1,6 +1,6 @@
 "use strict";
 
-const { test, before, after } = require("node:test");
+const { test, before, after, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { subirPostgres } = require("./ajuda/postgres.js");
 const { aplicarMigracoes } = require("../db/migrar.js");
@@ -14,6 +14,17 @@ before(async () => {
 
 after(async () => {
   await bd?.derrubar();
+});
+
+beforeEach(() => {
+  // Sem esta guarda, um before() que falha faz CADA teste morrer num
+  // "Cannot read properties of undefined (reading 'pool')", e o erro de boot —
+  // que e a informacao util — some sob N erros derivados.
+  if (!bd) {
+    throw new Error(
+      "O Postgres nao subiu no before(); a causa real esta no erro daquele hook.",
+    );
+  }
 });
 
 test("o schema canastra existe e os tres papeis o enxergam", async () => {
@@ -55,9 +66,14 @@ test("o default privilege alcanca tabela criada depois, pelo mesmo papel", async
         has_table_privilege('service_role', 'canastra.sonda_mesmo_dono', 'TRUNCATE') AS servico_tudo
     `);
     assert.deepEqual(rows[0], {
-      anon_le: true,
-      // `anon` le e so. GRANT de escrita para anonimo seria a falha grave desta
-      // migracao, e ela passaria despercebida sem asserir o lado negativo.
+      // O lado negativo e o que mais importa, e vale para LEITURA tambem: uma
+      // tabela nova nao pode nascer legivel por visitante anonimo. Se nascesse,
+      // `clientes`, `pedidos` e `enderecos` chegariam ao mundo com nome, CPF e
+      // telefone abertos, e a protecao passaria a depender de alguem lembrar de
+      // um REVOKE em cada migracao seguinte — uma escada que falha ABERTA.
+      // Invertido, o esquecimento vira 404 no PostgREST: barulhento e achado no
+      // primeiro teste da vitrine. Quem for de fato publico leva GRANT proprio.
+      anon_le: false,
       anon_escreve: false,
       auth_le: true,
       auth_apaga: true,

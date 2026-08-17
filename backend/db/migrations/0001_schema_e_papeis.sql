@@ -17,6 +17,16 @@ GRANT USAGE ON SCHEMA canastra TO anon, authenticated, service_role;
 -- camadas sao necessarias: sem GRANT nao ha leitura nenhuma, sem RLS ha leitura
 -- demais.
 --
+-- `anon` NAO ESTA AQUI, E E DE PROPOSITO
+-- Um `GRANT SELECT ON TABLES TO anon` por padrao faz toda tabela das migracoes
+-- seguintes nascer legivel por visitante anonimo — inclusive `clientes`,
+-- `pedidos` e `enderecos`. Cada uma dessas precisaria de um REVOKE depois, e uma
+-- escada de grant-e-revoga falha ABERTA: basta esquecer um REVOKE e o vazamento
+-- e silencioso, sem erro em lugar nenhum. Invertido, o esquecimento vira 404 no
+-- PostgREST — barulhento, achado no primeiro teste da vitrine, e nao em
+-- producao. Entao quem for genuinamente publico (catalogo, por exemplo) leva
+-- `GRANT SELECT ... TO anon` explicito na sua propria migracao.
+--
 -- ARMADILHA CONHECIDA, LEIA ANTES DE CRIAR TABELA FORA DAQUI
 -- ALTER DEFAULT PRIVILEGES so alcanca objetos criados pelo MESMO papel que
 -- rodou este comando (o default e `FOR ROLE current_user`). Aqui isso da certo
@@ -26,8 +36,6 @@ GRANT USAGE ON SCHEMA canastra TO anon, authenticated, service_role;
 -- nasce SEM nenhum destes GRANTs, e o sintoma e 404 no PostgREST com a RLS toda
 -- certa. Nesse caso o conserto e um GRANT explicito na propria tabela, nao
 -- mexer aqui.
-ALTER DEFAULT PRIVILEGES IN SCHEMA canastra
-  GRANT SELECT ON TABLES TO anon;
 ALTER DEFAULT PRIVILEGES IN SCHEMA canastra
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated;
 ALTER DEFAULT PRIVILEGES IN SCHEMA canastra
