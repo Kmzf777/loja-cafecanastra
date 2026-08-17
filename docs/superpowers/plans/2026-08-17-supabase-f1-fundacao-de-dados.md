@@ -1243,6 +1243,20 @@ Esta é a tarefa central da fase. Os testes negativos importam mais que os posit
 >    psql com outro login nasce sem `GRANT` nenhum para `anon`/`authenticated` —
 >    e o sintoma é PostgREST devolvendo 404 com a política de RLS perfeitamente
 >    correta. Toda tabela desta fase precisa nascer pelo runner de migrações.
+> 4. **O `anon` saiu do `ALTER DEFAULT PRIVILEGES` da 0001.** O desenho original
+>    dava `SELECT` a `anon` em toda tabela nova e mandava esta tarefa desfazer
+>    caso a caso — começando por `REVOKE SELECT ON canastra.produtos FROM anon`.
+>    Escada de conceder-e-revogar **falha aberta**: um `REVOKE` esquecido em
+>    `pedidos`, `enderecos` ou `carrinhos` é vazamento silencioso de dado
+>    pessoal. Agora nada é legível por `anon` por padrão, e cada migração concede
+>    explicitamente o que é público de verdade. **Consequência para esta tarefa:
+>    o `REVOKE SELECT ON canastra.produtos FROM anon` deixa de ser necessário —
+>    confira se ainda faz sentido antes de copiá-lo.**
+> 5. **A 0002 já liga `ENABLE ROW LEVEL SECURITY` em `clientes` e `admins`.**
+>    Sem isso, `nome`, `cpf` e `telefone` ficavam legíveis por `anon` via
+>    PostgREST desde o commit da 0002 até esta migração — e um deploy que
+>    aplicasse a 0002 e falhasse aqui deixaria dado pessoal exposto. O `ENABLE`
+>    desta tarefa é idempotente em cima disso; mantenha-o.
 
 **Files:**
 - Create: `backend/db/migrations/0006_rls.sql`
