@@ -1225,6 +1225,25 @@ git commit -m "feat: migracao 0005 — pedidos com idempotencia garantida por in
 
 Esta é a tarefa central da fase. Os testes negativos importam mais que os positivos.
 
+> **Herdado da execução da Task 4 — decidir antes de escrever as políticas.**
+>
+> 1. **`canastra.exigir_um_admin()` é `SECURITY INVOKER` e consulta
+>    `canastra.admins`**, que esta tarefa vai colocar sob RLS. Se a política de
+>    `admins` esconder linhas do papel que está apagando, `NOT EXISTS` fica
+>    verdadeiro com admins existindo, e o guard recusaria uma remoção legítima.
+>    Duas saídas: manter `admins` gravável só por `service_role` (que tem
+>    `BYPASSRLS`), ou tornar a função `SECURITY DEFINER` com `search_path` fixo —
+>    igual ao que `eh_cliente()` e `eh_admin()` já fazem nesta migração.
+> 2. **`TRUNCATE` ignora o trigger por completo**, e o `GRANT ALL ON TABLES TO
+>    service_role` da migração 0001 inclui `TRUNCATE`. Aceito: `service_role` é
+>    credencial de servidor, confiável por definição. Mas a docstring do trigger
+>    não pode alegar valer "por qualquer caminho".
+> 3. **`ALTER DEFAULT PRIVILEGES` da 0001 só alcança tabelas criadas pelo mesmo
+>    papel que rodou o `ALTER`.** Tabela criada pelo Studio do Supabase ou por um
+>    psql com outro login nasce sem `GRANT` nenhum para `anon`/`authenticated` —
+>    e o sintoma é PostgREST devolvendo 404 com a política de RLS perfeitamente
+>    correta. Toda tabela desta fase precisa nascer pelo runner de migrações.
+
 **Files:**
 - Create: `backend/db/migrations/0006_rls.sql`
 - Create: `backend/test/rls.test.js`
