@@ -20,23 +20,49 @@
 const EmbeddedPostgres = require("embedded-postgres").default;
 const path = require("node:path");
 const os = require("node:os");
+const net = require("node:net");
 const fs = require("node:fs/promises");
-const { Pool } = require("pg");
+const { Client, Pool } = require("pg");
 
 const SENHA = "postgres";
+const BANCO = "canastra_teste";
 
-/** Papeis que o Supabase cria e dos quais as politicas dependem. */
-const PAPEIS = `
+// Literal fixa em todo lugar (pool, cliente de setup, bind do cluster). Se um
+// caminho usasse "localhost" e outro "127.0.0.1", um host que resolve localhost
+// para ::1 antes de IPv4 daria bind parcial: o boot passa e a falha aparece
+// depois, longe da causa.
+const HOST = "127.0.0.1";
+
+const TENTATIVAS_DE_BOOT = 3;
+const LINHAS_DE_LOG = 50;
+const LIMITE_DE_PARADA_MS = 10_000;
+
+/**
+ * Papeis que o Supabase cria e dos quais as politicas dependem.
+ *
+ * Esta e a UNICA fonte da verdade sobre quais papeis existem: `sessao.js`
+ * importa as chaves daqui como whitelist, entao um papel novo entra num lugar
+ * so. NOINHERIT copia o Supabase, que cria os tres como `nologin noinherit` —
+ * sem ele um papel que herdasse privilegios de outro daria ao teste mais acesso
+ * do que a producao tem, e o teste passaria verde por motivo errado.
+ */
+const PAPEIS_SUPABASE = Object.freeze({
+  anon: "NOLOGIN NOINHERIT",
+  authenticated: "NOLOGIN NOINHERIT",
+  // BYPASSRLS e o que faz o service_role (usado pela API server-side) enxergar
+  // tudo, do mesmo jeito que na instancia real.
+  service_role: "NOLOGIN NOINHERIT BYPASSRLS",
+});
+
+const SQL_PAPEIS = `
   DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-      CREATE ROLE anon NOLOGIN;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-      CREATE ROLE authenticated NOLOGIN;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-      CREATE ROLE service_role NOLOGIN BYPASSRLS;
-    END IF;
+${Object.entries(PAPEIS_SUPABASE)
+  .map(
+    ([nome, atributos]) => `    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${nome}') THEN
+      CREATE ROLE ${nome} ${atributos};
+    END IF;`,
+  )
+  .join("\n")}
   END $$;
 `;
 
@@ -44,15 +70,10 @@ const PAPEIS = `
  * Shim do GoTrue. `auth.uid()` reproduz a definicao real do Supabase: le o
  * claim `sub` de `request.jwt.claims`, que o PostgREST injeta por requisicao.
  *
- * O `nullif` de fora do cast para jsonb nao e enfeite, e a razao de o Supabase
- * escrever a funcao assim. Um GUC personalizado que nunca foi setado devolve
- * NULL, mas depois do primeiro SET LOCAL ele volta para STRING VAZIA no fim da
- * transacao — nao para NULL. Como o pool reaproveita conexoes, a segunda
- * transacao de uma mesma conexao encontra '' e `''::jsonb` estoura
- * "invalid input syntax for type json". Sem esse nullif, toda politica de RLS
- * que chame auth.uid() quebraria na segunda requisicao de cada conexao.
+ * Os dois `nullif` protegem falhas DIFERENTES e nenhum dos dois e enfeite —
+ * cada um esta comentado no seu lugar abaixo.
  */
-const AUTH = `
+const SQL_SHIM_AUTH = `
   CREATE SCHEMA IF NOT EXISTS auth;
   CREATE TABLE IF NOT EXISTS auth.users (
     id    uuid PRIMARY KEY,
@@ -61,7 +82,15 @@ const AUTH = `
   CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
     LANGUAGE sql STABLE
   AS $$
+    -- nullif EXTERNO: cobre um claim presente porem com {"sub": ""}. Sem ele o
+    -- ''::uuid estoura "invalid input syntax for type uuid".
     SELECT nullif(
+      -- nullif INTERNO: este e o load-bearing, NAO REMOVA. Um GUC
+      -- personalizado nao volta a NULL quando a transacao que o setou termina,
+      -- volta a STRING VAZIA. Como o pool reaproveita conexoes, a segunda
+      -- transacao de uma mesma conexao encontra '' e o ''::jsonb estoura
+      -- "invalid input syntax for type json" — derrubando toda politica que
+      -- chame auth.uid() a partir da segunda requisicao de cada conexao.
       nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub',
       ''
     )::uuid
@@ -69,42 +98,219 @@ const AUTH = `
   GRANT USAGE ON SCHEMA auth TO anon, authenticated, service_role;
 `;
 
-async function subirPostgres() {
+/** Falha de boot do cluster, com o stderr do Postgres junto. */
+class ErroDeBoot extends Error {
+  constructor(porta, registro, causa) {
+    const cauda = registro.length
+      ? `\n\nUltimas linhas do Postgres:\n${registro.join("\n")}`
+      : "\n\n(o Postgres nao chegou a logar nada)";
+    super(`Postgres nao subiu em ${HOST}:${porta}.${cauda}`);
+    this.name = "ErroDeBoot";
+    this.porta = porta;
+    this.registro = registro;
+    if (causa) this.cause = causa;
+  }
+}
+
+/**
+ * Uma porta que o SO acabou de confirmar como livre.
+ *
+ * Derivar a porta do pid (`55000 + pid % 5000`) era chute, e o modo de falha
+ * era pessimo: com a porta ocupada o `start()` do pacote rejeita com `undefined`
+ * literal e o `stop()` seguinte nunca resolve, entao o `node --test` ficava
+ * pendurado para sempre sem dizer o motivo. Deixar o SO escolher (`listen(0)`)
+ * troca o chute por um fato.
+ */
+function portaLivre() {
+  return new Promise((resolve, reject) => {
+    const servidor = net.createServer();
+    servidor.once("error", reject);
+    servidor.listen(0, HOST, () => {
+      const { port } = servidor.address();
+      servidor.close(() => resolve(port));
+    });
+  });
+}
+
+/**
+ * Zera o handle interno do processo do pacote.
+ *
+ * O pacote guarda TODA instancia criada num Set global e, num AsyncExitHook,
+ * chama `stop()` em cada uma quando o processo sai. Uma instancia cujo `start()`
+ * falhou continua nesse Set com `process` preenchido porem morto, e o `stop()`
+ * dela registra `on('exit')` num processo que ja saiu — ou seja, nunca resolve
+ * e trava a saida do `node --test`. O Set nao e exportado, entao a unica
+ * alavanca e apagar o handle: com `process` undefined o `stop()` do pacote
+ * retorna de imediato no proprio guard.
+ */
+function neutralizar(pg) {
+  pg.process = undefined;
+}
+
+/**
+ * `maxRetries`/`retryDelay` sao para o Windows: depois do `taskkill /f /t` o
+ * postgres.exe ainda leva alguns milissegundos soltando os handles do datadir, e
+ * nesse intervalo o `fs.rm` bate em EBUSY/EPERM. O `force` cobre ENOENT, nao
+ * esses dois.
+ */
+function removerDiretorio(diretorio) {
+  return fs.rm(diretorio, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
+}
+
+/**
+ * Para o cluster com um teto de tempo.
+ *
+ * `stop()` fica pendurado para sempre se o processo ja morreu por conta propria
+ * (ele so registra `on('exit', resolve)` depois do fato). O limite transforma
+ * "o node --test nunca termina" em "o teardown demorou 10s e seguiu".
+ */
+async function pararCluster(pg) {
+  if (!pg.process) return;
+  const limite = new Promise((resolve) => {
+    setTimeout(resolve, LIMITE_DE_PARADA_MS).unref();
+  });
+  await Promise.race([pg.stop(), limite]);
+  neutralizar(pg);
+}
+
+/** Abre um cliente avulso, roda algo e fecha — para o setup antes do pool. */
+async function comCliente(porta, banco, acao) {
+  const cliente = new Client({
+    host: HOST,
+    port: porta,
+    user: "postgres",
+    password: SENHA,
+    database: banco,
+    // Sem teto, um socket que aceita a conexao mas nunca fala o protocolo do
+    // Postgres (qualquer processo alheio segurando a porta) deixa o connect()
+    // pendurado PARA SEMPRE. Foi assim que a colisao de porta travava o
+    // node --test sem dizer nada.
+    connectionTimeoutMillis: 5000,
+  });
+  await cliente.connect();
+  try {
+    return await acao(cliente);
+  } finally {
+    await cliente.end().catch(() => {});
+  }
+}
+
+async function tentarSubir() {
   const diretorio = await fs.mkdtemp(path.join(os.tmpdir(), "canastra-pg-"));
-  // Porta alta e derivada do pid: dois arquivos de teste em paralelo nao brigam.
-  const porta = 55000 + (process.pid % 5000);
+  const porta = await portaLivre();
+
+  // Ultimas linhas do stderr do Postgres. O pacote manda TUDO por `onLog` —
+  // inclusive o "could not bind IPv4 address ..." que explica uma porta
+  // ocupada — e nada por `onError`. Um `onLog: () => {}` para calar o ruido no
+  // TAP apaga junto a unica mensagem que diagnostica a falha de boot. Entao
+  // guardamos as ultimas linhas e so as revelamos se o boot falhar: silencio no
+  // sucesso, diagnostico no erro.
+  const registro = [];
+  const anotar = (mensagem) => {
+    for (const linha of String(mensagem).split("\n")) {
+      if (linha.trim()) registro.push(linha.trim());
+    }
+    if (registro.length > LINHAS_DE_LOG) {
+      registro.splice(0, registro.length - LINHAS_DE_LOG);
+    }
+  };
 
   const pg = new EmbeddedPostgres({
     databaseDir: diretorio,
     user: "postgres",
     password: SENHA,
     port: porta,
-    persistent: false,
-    // initdb e postgres escrevem dezenas de linhas no stdout. O padrao do pacote
-    // e console.log, o que afogaria a saida do `node --test`; so o erro
-    // interessa quando algo quebra.
-    onLog: () => {},
+    // `false` faria o proprio pacote apagar o diretorio dentro do stop(), com
+    // um fs.rm sem retentativa que no Windows bate em EBUSY/EPERM. Mantendo
+    // `true`, a remocao e nossa, em derrubar(), com maxRetries.
+    persistent: true,
+    onLog: anotar,
+    onError: anotar,
   });
 
-  await pg.initialise();
-  await pg.start();
-  await pg.createDatabase("canastra_teste");
+  try {
+    await pg.initialise();
+    await pg.start();
+  } catch (causa) {
+    // `start()` rejeita com `undefined` literal, entao nao ha mensagem alguma
+    // para propagar: e preciso fabricar uma que ao menos nomeie a porta.
+    // Aqui NAO se chama pararCluster/stop: o processo ja morreu e o stop()
+    // penduraria o teardown.
+    neutralizar(pg);
+    await removerDiretorio(diretorio).catch(() => {});
+    throw new ErroDeBoot(porta, registro, causa);
+  }
 
-  const connectionString = `postgres://postgres:${SENHA}@127.0.0.1:${porta}/canastra_teste`;
-  const pool = new Pool({ connectionString });
+  try {
+    // O Postgres NAO morre quando a porta esta ocupada: ele binda o que
+    // conseguir. Com o IPv4 tomado ele sobe so em "::1", anuncia "ready to
+    // accept connections" e o start() RESOLVE normalmente — medido, nao
+    // suposto. A falha so apareceria depois, como um connect() pendurado em
+    // HOST contra o processo alheio que segura a porta. Detectar aqui vira uma
+    // retentativa numa porta livre, em vez de um teardown misterioso.
+    // O casamento e especifico de IPv4 de proposito: numa maquina sem IPv6 o
+    // "could not bind IPv6" e esperado e inofensivo, e tratar os dois igual
+    // faria o harness nunca subir la.
+    if (registro.some((linha) => linha.includes("could not bind IPv4 address"))) {
+      throw new ErroDeBoot(porta, registro);
+    }
 
-  await pool.query(PAPEIS);
-  await pool.query(AUTH);
+    // O createDatabase() do pacote conecta em "localhost"; fazemos o CREATE
+    // DATABASE na mesma literal que o pool usa (ver HOST).
+    await comCliente(porta, "postgres", (c) =>
+      c.query(`CREATE DATABASE ${BANCO}`),
+    );
 
-  return {
-    connectionString,
-    pool,
-    async derrubar() {
-      await pool.end();
-      await pg.stop();
-      await fs.rm(diretorio, { recursive: true, force: true });
-    },
-  };
+    const connectionString = `postgres://postgres:${SENHA}@${HOST}:${porta}/${BANCO}`;
+    const pool = new Pool({
+      connectionString,
+      // Mesmo motivo documentado em src/pgPool.js: sem isso, esgotar o pool
+      // deixa cada pool.connect() pendurado PARA SEMPRE, sem erro e sem log.
+      // Num teste o sintoma seria o suite travado sem dizer por que.
+      connectionTimeoutMillis: 5000,
+    });
+
+    await pool.query(SQL_PAPEIS);
+    await pool.query(SQL_SHIM_AUTH);
+
+    return {
+      connectionString,
+      pool,
+      async derrubar() {
+        // Cada passo isolado: se o pool.end() estourar, o cluster ainda TEM que
+        // ser parado — senao ele fica de pe segurando a porta e o datadir, que e
+        // exatamente o cenario que quebrava a proxima execucao.
+        await pool.end().catch(() => {});
+        await pararCluster(pg).catch(() => {});
+        await removerDiretorio(diretorio).catch(() => {});
+      },
+    };
+  } catch (erro) {
+    // Aqui o cluster subiu de verdade, entao o stop() resolve normalmente.
+    await pararCluster(pg).catch(() => {});
+    await removerDiretorio(diretorio).catch(() => {});
+    throw erro;
+  }
 }
 
-module.exports = { subirPostgres };
+async function subirPostgres() {
+  let ultimoErro;
+  for (let tentativa = 1; tentativa <= TENTATIVAS_DE_BOOT; tentativa += 1) {
+    try {
+      return await tentarSubir();
+    } catch (erro) {
+      // portaLivre() confirma a porta livre, mas existe uma janela entre o
+      // close() dela e o bind do Postgres em que outro processo pode tomar a
+      // porta. E corrida, nao erro permanente: cada tentativa sorteia outra.
+      ultimoErro = erro;
+    }
+  }
+  throw ultimoErro;
+}
+
+module.exports = { subirPostgres, PAPEIS_SUPABASE, ErroDeBoot };
