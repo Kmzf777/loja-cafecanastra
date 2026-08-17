@@ -113,6 +113,35 @@ class ErroDeBoot extends Error {
 }
 
 /**
+ * Assinatura de porta ocupada no log do Postgres.
+ *
+ * Casar texto em ingles e seguro aqui, e nao por sorte: o initdb grava
+ * `lc_messages = C` no postgresql.conf, o `getBestLocale()` do pacote devolve
+ * 'C' incondicionalmente no win32, o `start()` ainda fixa `env.LC_MESSAGES`, e
+ * este harness nao passa `postgresFlags`. O locale do SO nao tem por onde
+ * chegar — conferido nesta maquina pt-BR, onde todo o resto e
+ * Portuguese_Brazil.1252.
+ *
+ * Se algum dia isso for forcado para outro locale, NAO existe rede de seguranca
+ * fina: a linha vira "nao foi possivel vincular o endereco IPv4" e, no mesmo
+ * movimento, quebra tambem a deteccao de "ready to accept connections" do
+ * proprio pacote — entao `start()` nem resolve nem rejeita, e nenhum connect
+ * chega a ser tentado (o connectionTimeoutMillis dos clientes nunca engata). O
+ * que sobra e o `timeout: 120_000` do before() no harness.test.js, que degrada
+ * para um teste lento e nomeado em vez de travar para sempre. Risco aceito.
+ */
+const LINHA_DE_COLISAO = "could not bind IPv4 address";
+
+/**
+ * O casamento e especifico de IPv4 de proposito: numa maquina sem IPv6 o
+ * "could not bind IPv6" e esperado e inofensivo, e tratar os dois igual faria o
+ * harness nunca subir la.
+ */
+function houveColisaoDePorta(registro) {
+  return registro.some((linha) => linha.includes(LINHA_DE_COLISAO));
+}
+
+/**
  * Uma porta que o SO acabou de confirmar como livre.
  *
  * Derivar a porta do pid (`55000 + pid % 5000`) era chute, e o modo de falha
@@ -168,6 +197,13 @@ function removerDiretorio(diretorio) {
  * `stop()` fica pendurado para sempre se o processo ja morreu por conta propria
  * (ele so registra `on('exit', resolve)` depois do fato). O limite transforma
  * "o node --test nunca termina" em "o teardown demorou 10s e seguiu".
+ *
+ * O troco, quando o limite estoura: o `neutralizar()` abaixo roda com o cluster
+ * possivelmente AINDA VIVO, e ai o `removerDiretorio()` seguinte esbarra nos
+ * handles abertos e falha — com o erro engolido no `.catch(() => {})` de quem
+ * chama. Ou seja, nesse caso o datadir fica para tras em %TEMP%. E vazamento
+ * conhecido e aceito, bem melhor que o hang infinito de antes: se aparecer um
+ * canastra-pg-* orfao, provavelmente veio daqui, nao de um bug novo.
  */
 async function pararCluster(pg) {
   if (!pg.process) return;
@@ -201,8 +237,11 @@ async function comCliente(porta, banco, acao) {
 }
 
 async function tentarSubir() {
-  const diretorio = await fs.mkdtemp(path.join(os.tmpdir(), "canastra-pg-"));
+  // A porta vem ANTES do mkdtemp de proposito: as duas chamadas estao fora do
+  // try/catch de baixo, entao criar o diretorio primeiro faria uma rejeicao de
+  // portaLivre() vazar sem passar por nenhum caminho de limpeza.
   const porta = await portaLivre();
+  const diretorio = await fs.mkdtemp(path.join(os.tmpdir(), "canastra-pg-"));
 
   // Ultimas linhas do stderr do Postgres. O pacote manda TUDO por `onLog` —
   // inclusive o "could not bind IPv4 address ..." que explica uma porta
@@ -253,10 +292,7 @@ async function tentarSubir() {
     // suposto. A falha so apareceria depois, como um connect() pendurado em
     // HOST contra o processo alheio que segura a porta. Detectar aqui vira uma
     // retentativa numa porta livre, em vez de um teardown misterioso.
-    // O casamento e especifico de IPv4 de proposito: numa maquina sem IPv6 o
-    // "could not bind IPv6" e esperado e inofensivo, e tratar os dois igual
-    // faria o harness nunca subir la.
-    if (registro.some((linha) => linha.includes("could not bind IPv4 address"))) {
+    if (houveColisaoDePorta(registro)) {
       throw new ErroDeBoot(porta, registro);
     }
 
@@ -304,10 +340,18 @@ async function subirPostgres() {
     try {
       return await tentarSubir();
     } catch (erro) {
-      // portaLivre() confirma a porta livre, mas existe uma janela entre o
-      // close() dela e o bind do Postgres em que outro processo pode tomar a
-      // porta. E corrida, nao erro permanente: cada tentativa sorteia outra.
       ultimoErro = erro;
+      // So a corrida de porta merece nova tentativa: portaLivre() confirma a
+      // porta livre, mas entre o close() dela e o bind do Postgres outro
+      // processo pode toma-la, e ai sortear outra porta resolve.
+      //
+      // Falha permanente (binario ausente, disco cheio, initialise() quebrado)
+      // nao melhora repetindo — so paga tres initdb antes de aparecer. Como o
+      // ErroDeBoot embrulha os dois casos, a classe sozinha nao distingue: quem
+      // decide e a linha de colisao no log.
+      if (!(erro instanceof ErroDeBoot && houveColisaoDePorta(erro.registro))) {
+        throw erro;
+      }
     }
   }
   throw ultimoErro;

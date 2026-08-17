@@ -50,15 +50,32 @@ async function comoPapel(pool, { papel, sub = null }, acao) {
     );
   }
 
-  // `sub: ""` (ou qualquer coisa falsy vinda de um campo errado, tipo
-  // `usuario.userId` quando a coluna e `user_id`) cairia numa sessao anonima
-  // silenciosa: auth.uid() vira NULL e o teste "usuario de outro projeto nao
-  // consegue X" passa porque ninguem estava autenticado, nao porque a politica
-  // funciona. Num harness cujo proposito e provar isolamento entre projetos,
-  // anonimo-por-acidente e o pior default possivel.
-  if (sub === "") {
+  // Ausencia de identidade e decidida pelo PAPEL, nunca pelo valor de `sub`.
+  //
+  // Checar valor a valor nao fecha o problema: `usuario.userId` quando o campo
+  // real e `user_id` vale `undefined`, e `undefined` some no default `sub = null`
+  // da desestruturacao acima. A sessao entao roda anonima em silencio, e um
+  // teste negativo do tipo
+  //
+  //   assert.rejects(() => comoPapel(pool, { papel: "authenticated", sub }, ...))
+  //
+  // passa verde com 42501 — mas porque o WITH CHECK bateu contra auth.uid()
+  // NULL, nao contra uma identidade estrangeira. Nada foi provado, e nem o
+  // PERMISSAO_NEGADA distingue os dois casos. Exigir sub para "authenticated" e
+  // proibi-lo para "anon" mata a classe inteira em vez de um valor.
+  const semSub = sub === null || sub === undefined || sub === "";
+
+  if (papel === "authenticated" && semSub) {
     throw new ErroDeHarness(
-      "sub vazio. Para rodar sem autenticacao passe { papel: 'anon' } sem sub.",
+      `Sessao de 'authenticated' exige sub, mas veio ${JSON.stringify(sub)}. ` +
+        "Se a intencao era rodar sem autenticacao, use { papel: 'anon' }.",
+    );
+  }
+
+  if (papel === "anon" && !semSub) {
+    throw new ErroDeHarness(
+      `Sessao de 'anon' nao aceita sub, mas veio ${JSON.stringify(sub)}. ` +
+        "Anonimo com identidade seria uma combinacao que o PostgREST nunca produz.",
     );
   }
 
@@ -71,7 +88,7 @@ async function comoPapel(pool, { papel, sub = null }, acao) {
       // (papel: "anon; SET LOCAL statement_timeout='1ms'" executava). Como GUC,
       // o valor viaja como parametro.
       await cliente.query("SELECT set_config('role', $1, true)", [papel]);
-      if (sub != null) {
+      if (!semSub) {
         await cliente.query(
           "SELECT set_config('request.jwt.claims', $1, true)",
           [JSON.stringify({ sub, role: papel })],
@@ -85,8 +102,16 @@ async function comoPapel(pool, { papel, sub = null }, acao) {
     }
     return await acao(cliente);
   } finally {
-    await cliente.query("ROLLBACK").catch(() => {});
-    cliente.release();
+    let falhaNoRollback;
+    try {
+      await cliente.query("ROLLBACK");
+    } catch (erro) {
+      falhaNoRollback = erro;
+    }
+    // Um cliente que nao conseguiu sair da transacao voltaria ao pool ainda
+    // dentro dela e contaminaria os proximos testes. `release(erro)` destroi a
+    // conexao em vez de reaproveita-la; sem argumento, e um release normal.
+    cliente.release(falhaNoRollback);
   }
 }
 

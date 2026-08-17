@@ -55,12 +55,26 @@ test("papel fora do whitelist e recusado", async () => {
   );
 });
 
-test("sub vazio e recusado em vez de virar sessao anonima", async () => {
-  await assert.rejects(
-    () =>
-      comoPapel(bd.pool, { papel: "authenticated", sub: "" }, (c) =>
-        c.query("SELECT 1"),
-      ),
-    ErroDeHarness,
-  );
+test("sessao sem identidade valida e recusada em vez de rodar anonima", async () => {
+  // Cada um destes rodaria anonimo em silencio, e um assert.rejects num INSERT
+  // passaria verde com 42501 por causa de auth.uid() NULL — nao por causa de
+  // uma identidade estrangeira. `sub: undefined` e o caso realista: e o que
+  // `usuario.userId` devolve quando o campo real e `user_id`.
+  const casos = [
+    ["sub ausente", { papel: "authenticated" }],
+    ["sub undefined", { papel: "authenticated", sub: undefined }],
+    ["sub null", { papel: "authenticated", sub: null }],
+    ["sub vazio", { papel: "authenticated", sub: "" }],
+    // E o inverso: anonimo COM identidade nao e combinacao que o PostgREST
+    // produza, entao provavelmente e engano de quem escreveu o teste.
+    ["anon com sub", { papel: "anon", sub: "11111111-1111-1111-1111-111111111111" }],
+  ];
+
+  for (const [rotulo, sessao] of casos) {
+    await assert.rejects(
+      () => comoPapel(bd.pool, sessao, (c) => c.query("SELECT 1")),
+      ErroDeHarness,
+      rotulo,
+    );
+  }
 });
