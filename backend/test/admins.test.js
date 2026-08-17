@@ -3,15 +3,17 @@
 const { test, before, after, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { subirPostgres } = require("./ajuda/postgres.js");
+const {
+  comoPapel,
+  PERMISSAO_NEGADA,
+  REMOCAO_BARRADA,
+} = require("./ajuda/sessao.js");
 const { aplicarMigracoes } = require("../db/migrar.js");
 
 let bd;
 
 const ANA = "aaaaaaaa-0000-0000-0000-000000000001";
 const BRUNO = "bbbbbbbb-0000-0000-0000-000000000002";
-
-/** SQLSTATE `restrict_violation` — o codigo com que a trava do ultimo admin recusa. */
-const REMOCAO_BARRADA = "23001";
 
 before(async () => {
   bd = await subirPostgres();
@@ -67,7 +69,16 @@ test("apagar o ULTIMO admin e recusado pelo banco", async () => {
 
   await assert.rejects(
     () => bd.pool.query("DELETE FROM canastra.admins WHERE user_id = $1", [ANA]),
-    /sem administrador/i,
+    (erro) => {
+      // O SQLSTATE, e nao so o texto: o painel precisa transformar ESTA recusa
+      // numa mensagem util e qualquer outra num 500. Com o P0001 que o RAISE da
+      // de graca, distinguir exigiria casar texto de mensagem — que muda com a
+      // redacao e com o locale, a fragilidade que ajuda/sessao.js ja registrou a
+      // proposito do 42501.
+      assert.equal(erro.code, REMOCAO_BARRADA);
+      assert.match(erro.message, /sem administrador/i);
+      return true;
+    },
   );
 });
 
@@ -96,17 +107,41 @@ test("apagar o cliente apaga o vinculo de admin junto", async () => {
   assert.deepEqual(rows.map((r) => r.user_id), [ANA]);
 });
 
-test("a recusa vem com SQLSTATE proprio, nao com o P0001 generico", async () => {
-  // O painel precisa transformar esta recusa numa mensagem util e as demais num
-  // 500. Com o P0001 padrao do RAISE, a unica forma de distinguir seria casar o
-  // TEXTO da mensagem — que muda com a redacao e com o locale, exatamente a
-  // fragilidade que test/ajuda/sessao.js registrou a proposito do 42501.
-  await bd.pool.query("INSERT INTO canastra.admins (user_id) VALUES ($1)", [ANA]);
+test("a trava vale tambem para o service_role, que e quem escreve admins", async () => {
+  // Os demais testes rodam como `postgres`, superusuario e dono das tabelas —
+  // que ignora RLS. Em producao quem mexe em `admins` e o `service_role`, e a
+  // partir da migracao de politicas e ele, nao o superusuario, que precisa ver a
+  // trava funcionar. Sem este caso, uma trava que so vale para superusuario
+  // passaria despercebida.
+  await comoPapel(bd.pool, { papel: "service_role" }, async (cliente) => {
+    await cliente.query("INSERT INTO canastra.admins (user_id) VALUES ($1)", [ANA]);
+
+    await assert.rejects(
+      () => cliente.query("DELETE FROM canastra.admins WHERE user_id = $1", [ANA]),
+      (erro) => {
+        assert.equal(erro.code, REMOCAO_BARRADA);
+        return true;
+      },
+    );
+  });
+});
+
+test("nao da para virar admin sem ser cliente da loja", async () => {
+  // A regra que justifica o arquivo inteiro, e a unica ate agora sem medicao:
+  // `admins` referencia `clientes`, nao `auth.users`. Como a instancia Supabase
+  // e compartilhada, um usuario de OUTRO projeto existe em `auth.users` sem
+  // nunca ter passado pelo cadastro da loja — e nao pode ser promovido a
+  // administrador daqui. Se um dia alguem "simplificar" a FK apontando para
+  // `auth.users`, e este teste que grita.
+  const ESTRANHO = "dddddddd-0000-0000-0000-000000000004";
+  await bd.pool.query("INSERT INTO auth.users (id, email) VALUES ($1,'d@ex.com')", [
+    ESTRANHO,
+  ]);
 
   await assert.rejects(
-    () => bd.pool.query("DELETE FROM canastra.admins WHERE user_id = $1", [ANA]),
+    () => bd.pool.query("INSERT INTO canastra.admins (user_id) VALUES ($1)", [ESTRANHO]),
     (erro) => {
-      assert.equal(erro.code, REMOCAO_BARRADA);
+      assert.equal(erro.code, "23503");
       return true;
     },
   );
@@ -210,16 +245,21 @@ test("cpf e opcional para muitos, mas unico para quem tem", async () => {
   );
 });
 
-test("os GRANTs padrao de 0001 alcancaram as duas tabelas de 0002", async () => {
-  // A duvida que 0001 deixou em aberto, agora contra tabelas de verdade:
-  // ALTER DEFAULT PRIVILEGES so vale para o que o papel que o executou criar. Se
-  // nao valesse, cada rota da loja daria 404 no PostgREST com a RLS perfeita, e
-  // a investigacao comecaria pela politica — o lugar errado.
+test("os GRANTs padrao de 0001 alcancaram as duas tabelas, e anon ficou de fora", async () => {
+  // Duas perguntas de uma vez. A primeira e a duvida que 0001 deixou em aberto,
+  // agora contra tabelas de verdade: ALTER DEFAULT PRIVILEGES so vale para o que
+  // o papel que o executou criar. Se nao valesse, cada rota da loja daria 404 no
+  // PostgREST com a RLS perfeita, e a investigacao comecaria pela politica — o
+  // lugar errado.
+  //
+  // A segunda e o lado negativo, e vale mais: `anon` NAO entra por padrao. Se
+  // entrasse, `clientes` — com nome, CPF e telefone — nasceria legivel por
+  // visitante anonimo, e a protecao dependeria de alguem lembrar de um REVOKE
+  // numa migracao posterior.
   const { rows } = await bd.pool.query(`
     SELECT
       t.tabela,
       has_table_privilege('anon',          'canastra.' || t.tabela, 'SELECT') AS anon_le,
-      has_table_privilege('anon',          'canastra.' || t.tabela, 'INSERT') AS anon_escreve,
       has_table_privilege('authenticated', 'canastra.' || t.tabela, 'SELECT') AS auth_le,
       has_table_privilege('authenticated', 'canastra.' || t.tabela, 'DELETE') AS auth_apaga,
       has_table_privilege('service_role',  'canastra.' || t.tabela, 'INSERT') AS servico_escreve
@@ -230,19 +270,56 @@ test("os GRANTs padrao de 0001 alcancaram as duas tabelas de 0002", async () => 
   assert.deepEqual(rows, [
     {
       tabela: "admins",
-      anon_le: true,
-      anon_escreve: false,
+      anon_le: false,
       auth_le: true,
       auth_apaga: true,
       servico_escreve: true,
     },
     {
       tabela: "clientes",
-      anon_le: true,
-      anon_escreve: false,
+      anon_le: false,
       auth_le: true,
       auth_apaga: true,
       servico_escreve: true,
     },
   ]);
+});
+
+test("as duas tabelas ja saem de 0002 com a RLS ligada", async () => {
+  // A chave geral, e nao uma politica. Entre o COMMIT de 0002 e o da migracao
+  // que escreve as politicas ha uma janela real — cada migracao commita na
+  // propria transacao —, e um deploy que pare no meio (a migracao de RLS
+  // falhando e o caso obvio) deixaria `nome`, `cpf` e `telefone` servidos pelo
+  // PostgREST. Com ENABLE aqui e sem policy, ninguem alem do dono e de quem tem
+  // BYPASSRLS passa: a sequencia falha FECHADA.
+  //
+  // A asercao e so `relrowsecurity`, de proposito. Conferir tambem "zero
+  // politicas" descreveria o banco de HOJE e obrigaria a migracao de politicas a
+  // apagar este teste — um teste que atrapalha em vez de proteger. O que precisa
+  // valer para sempre e a chave estar ligada.
+  const { rows } = await bd.pool.query(`
+    SELECT c.relname AS tabela, c.relrowsecurity AS ligada
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'canastra' AND c.relname IN ('clientes', 'admins')
+    ORDER BY c.relname
+  `);
+
+  assert.deepEqual(rows, [
+    { tabela: "admins", ligada: true },
+    { tabela: "clientes", ligada: true },
+  ]);
+
+  // E o efeito, nao so o catalogo: como `anon` nem GRANT tem, a recusa vem antes
+  // da RLS, com 42501. As duas camadas negam, e e assim que tem de ser.
+  await assert.rejects(
+    () =>
+      comoPapel(bd.pool, { papel: "anon" }, (cliente) =>
+        cliente.query("SELECT count(*) FROM canastra.clientes"),
+      ),
+    (erro) => {
+      assert.equal(erro.code, PERMISSAO_NEGADA);
+      return true;
+    },
+  );
 });

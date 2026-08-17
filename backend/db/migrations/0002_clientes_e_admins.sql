@@ -41,7 +41,8 @@ CREATE TABLE canastra.admins (
  * A loja nao pode ficar sem quem a administre.
  *
  * Isto era regra de aplicacao e dependia de o painel lembrar de checar. Como
- * trigger, vale para qualquer caminho — painel, psql, PostgREST ou script.
+ * trigger, vale para qualquer DELETE, por qualquer caminho — painel, psql,
+ * PostgREST ou script. TRUNCATE e a excecao, ver LIMITE CONHECIDO abaixo.
  *
  * AFTER DELETE ... FOR EACH STATEMENT, e nao FOR EACH ROW: um `DELETE FROM
  * canastra.admins` sem WHERE apaga tudo, e a checagem por linha veria sempre
@@ -71,16 +72,35 @@ CREATE TABLE canastra.admins (
  * e ALL inclui TRUNCATE). Os dois ja sao credenciais totalmente confiaveis do
  * lado servidor; a trava existe contra engano operacional, nao contra elas.
  *
- * ATENCAO PARA A MIGRACAO DE RLS: esta funcao e SECURITY INVOKER, entao o
- * `SELECT ... FROM canastra.admins` daqui passa pelas politicas do papel que
- * disparou o DELETE. Se algum dia `canastra.admins` ganhar RLS que esconda
- * linhas de quem apaga, este NOT EXISTS pode dar verdadeiro com admins
- * existindo, e a trava recusaria uma remocao legitima. Ao ligar a RLS, decidir
- * conscientemente entre manter admins so no alcance do `service_role` (que tem
- * BYPASSRLS) ou tornar esta funcao SECURITY DEFINER com search_path fixo.
+ * SECURITY DEFINER PORQUE A CONTAGEM NAO PODE PASSAR PELA RLS. Como SECURITY
+ * INVOKER, o `SELECT ... FROM canastra.admins` daqui rodaria sob as politicas do
+ * papel que disparou o DELETE, e a trava passava a recusar remocao legitima.
+ * Medido, com RLS ligada em `admins`, uma politica de DELETE
+ * `USING (user_id = auth.uid())` e nenhuma politica ampla de SELECT: Ana, admin,
+ * roda `DELETE FROM canastra.admins` SEM WHERE; o Postgres apaga so a linha dela
+ * e Bruno continua admin, mas a funcao nao enxerga Bruno e recusa com 23001. A
+ * forma sem WHERE e o que torna o caso alcancavel — com WHERE, as politicas de
+ * SELECT tambem se aplicam, a linha nem e casada e `apagados` fica vazia.
+ *
+ * Nao adianta contar com a politica futura ser generosa: quem escreve a RLS nao
+ * tem como saber que uma trigger depende dela, e um comentario nao impede nada.
+ * Contar admin e decisao do banco, nao do papel que apaga.
+ *
+ * `SET search_path` NAO E OPCIONAL numa funcao SECURITY DEFINER: sem ele, quem
+ * chama escolhe em que schema `admins` sera procurada e executa o que quiser com
+ * os privilegios do dono da funcao — que aqui e o dono do banco. Com o caminho
+ * fixo, so `canastra` e o `pg_temp` obrigatorio (que vai por ultimo de proposito:
+ * na frente, uma tabela temporaria do proprio chamador sequestraria o nome).
+ *
+ * O REVOKE e higiene. `proacl` nasce nulo, o que significa EXECUTE para PUBLIC.
+ * Chamar a funcao fora de uma trigger ja falha sozinho, entao nao ha exploracao
+ * hoje; nao ha tambem razao para deixar EXECUTE aberto numa funcao SECURITY
+ * DEFINER do dono do banco.
  */
 CREATE FUNCTION canastra.exigir_um_admin() RETURNS trigger
   LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
 AS $$
 BEGIN
   IF EXISTS (SELECT 1 FROM apagados)
@@ -93,8 +113,28 @@ BEGIN
 END;
 $$;
 
+REVOKE EXECUTE ON FUNCTION canastra.exigir_um_admin() FROM PUBLIC;
+
 CREATE TRIGGER admins_nunca_zero
   AFTER DELETE ON canastra.admins
   REFERENCING OLD TABLE AS apagados
   FOR EACH STATEMENT
   EXECUTE FUNCTION canastra.exigir_um_admin();
+
+-- Chave geral fechada, ainda sem politica nenhuma.
+--
+-- Sem esta linha as duas tabelas ficam legiveis por qualquer papel entre o
+-- COMMIT desta migracao e o da migracao que liga a RLS de verdade — e como cada
+-- migracao commita na propria transacao, a janela existe mesmo dentro de uma
+-- unica execucao do runner. Pior: se a migracao da RLS falhar, o deploy PARA
+-- exatamente ai, com `nome`, `cpf` e `telefone` servidos pelo PostgREST a quem
+-- pedir. Medido: como `anon`, `SELECT count(*) FROM canastra.clientes` devolvia
+-- linhas.
+--
+-- ENABLE sem policy nao e politica de acesso, e o contrario disso: sem policy
+-- nenhuma linha passa, para ninguem alem do dono da tabela e de quem tem
+-- BYPASSRLS (o `service_role`). Ou seja, a sequencia de migracoes passa a falhar
+-- FECHADA. A migracao que escreve as politicas repete o ENABLE, que e
+-- idempotente.
+ALTER TABLE canastra.clientes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.admins   ENABLE ROW LEVEL SECURITY;

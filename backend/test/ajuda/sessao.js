@@ -21,6 +21,18 @@ const PAPEIS_VALIDOS = Object.keys(PAPEIS_SUPABASE);
 const PERMISSAO_NEGADA = "42501";
 
 /**
+ * SQLSTATE `restrict_violation` — com ele que as travas de regra de negocio da
+ * loja recusam uma remocao (hoje a do ultimo administrador, em 0002).
+ *
+ * Mora aqui pelo mesmo motivo que PAPEIS_SUPABASE mora em postgres.js: e o
+ * codigo que varios arquivos de teste vao assertar, e duas copias divergem sem
+ * ninguem perceber. E e um codigo ESCOLHIDO, nao o P0001 que o RAISE daria de
+ * graca — P0001 e o mesmo de qualquer outro RAISE do banco, entao asserir nele
+ * casaria com falha alheia e o teste passaria verde por motivo errado.
+ */
+const REMOCAO_BARRADA = "23001";
+
+/**
  * Falha do proprio harness (BEGIN, troca de papel, injecao do claim), nao da
  * politica sob teste.
  *
@@ -115,4 +127,9 @@ async function comoPapel(pool, { papel, sub = null }, acao) {
   }
 }
 
-module.exports = { comoPapel, ErroDeHarness, PERMISSAO_NEGADA };
+module.exports = {
+  comoPapel,
+  ErroDeHarness,
+  PERMISSAO_NEGADA,
+  REMOCAO_BARRADA,
+};
