@@ -35,5 +35,8 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "description": ""
+  "description": "",
+  "devDependencies": {
+    "embedded-postgres": "^16.14.0-beta.17"
+  }
 }
