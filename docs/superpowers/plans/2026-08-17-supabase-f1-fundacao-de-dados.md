@@ -235,6 +235,33 @@ git add backend/test/ajuda backend/test/harness.test.js backend/package.json bac
 git commit -m "test: harness de Postgres real para testar RLS sem Docker"
 ```
 
+> **Correção após execução (commits `3b23d75`, `3675113`, `945902d`).** O código
+> desta tarefa acima está **superado** — leia os arquivos, não este bloco. Quatro
+> coisas mudaram, e três afetam as tarefas seguintes:
+>
+> 1. **`auth.uid()` estava errado aqui.** O `nullif` precisa envolver o
+>    `current_setting` **antes** do cast para `jsonb`, não o `sub` extraído. Um
+>    GUC customizado volta a **string vazia** (não NULL) quando a transação
+>    termina, e como o pool reusa conexões, a segunda transação de cada conexão
+>    estourava com `22P02 invalid input syntax for type json`. Isso quebraria
+>    toda política de RLS das tarefas 8 e 9.
+> 2. **`comoPapel` passou a exigir identidade coerente com o papel:**
+>    `authenticated` **exige** `sub`; `anon` **proíbe** `sub`. Motivo: `sub:
+>    undefined` (o caso real de escrever `usuario.userId` quando a coluna é
+>    `user_id`) rodava anônimo e produzia um `42501` indistinguível de uma
+>    negação de RLS — teste negativo verde sem ter provado nada.
+> 3. **Erros de setup do harness não podem mais ser confundidos com negação de
+>    política.** `sessao.js` lança `ErroDeHarness` (sem `code`) para falhas de
+>    `BEGIN`/`SET ROLE`/`set_config`, e exporta `PERMISSAO_NEGADA = "42501"`.
+>    **Nas tarefas 8 e 9, prefira `assert.rejects(..., (e) => e.code ===
+>    PERMISSAO_NEGADA)` a casar mensagem** — `/permission denied/i` casa também
+>    com `permission denied for schema canastra`, que é um `GRANT` faltando na
+>    migração 0001, não uma política funcionando.
+> 4. `embedded-postgres@16.4.0-beta.17` não existe; a versão instalada é
+>    `16.14.0-beta.17`. O pacote é ESM, então o construtor sai em `.default`, e a
+>    porta é sondada livre em vez de derivada do pid — Postgres **não morre** com
+>    a porta ocupada, sobe só em IPv6 e `start()` resolve com sucesso.
+
 ---
 
 ### Task 2: Runner de migrações
