@@ -174,6 +174,26 @@ test("recusa migracao vazia ou so com comentario", async () => {
   assert.deepEqual(await aplicarMigracoes(bd.pool, pasta), ["0001_com_comentario"]);
 });
 
+test("migracao salva com BOM (Bloco de Notas do Windows) aplica normalmente", async () => {
+  // O BOM nao e hipotese: e o que o Bloco de Notas grava ao salvar um .sql em
+  // UTF-8, e as sete migracoes desta fase serao editadas nesta maquina Windows.
+  // Sem o corte na leitura o arquivo passa por temComandoSql() e morre so no
+  // Postgres, com 22P05 ("character with byte sequence 0xef 0xbb 0xbf") — uma
+  // mensagem que nao aponta para o editor e manda procurar erro de sintaxe onde
+  // nao ha nenhum.
+  await fs.writeFile(
+    path.join(pasta, "0001_com_bom.sql"),
+    "\uFEFF-- salva com BOM\nCREATE TABLE canastra.i (id int);",
+  );
+
+  assert.deepEqual(await aplicarMigracoes(bd.pool, pasta), ["0001_com_bom"]);
+
+  const tabelas = await bd.pool.query(
+    "SELECT tablename FROM pg_tables WHERE schemaname = 'canastra' ORDER BY tablename",
+  );
+  assert.deepEqual(tabelas.rows.map((r) => r.tablename), ["i", "migracoes"]);
+});
+
 test("falha de leitura nomeia a versao e nao aplica nada antes dela", async () => {
   await fs.writeFile(
     path.join(pasta, "0001_boa.sql"),

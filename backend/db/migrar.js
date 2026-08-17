@@ -147,7 +147,17 @@ async function listarMigracoes(pasta) {
     const versao = arquivo.replace(/\.sql$/, "");
     let sql;
     try {
-      sql = await fs.readFile(path.join(pasta, arquivo), "utf8");
+      // `readFile(..., "utf8")` NAO remove o BOM: o U+FEFF entra como primeiro
+      // caractere da string, passa por temComandoSql() sem chamar atencao e so
+      // estoura la no Postgres, com 22P05 ("character with byte sequence 0xef
+      // 0xbb 0xbf"). Essa mensagem nao cita BOM nem editor, entao o operador
+      // acaba cacando erro de sintaxe num arquivo que esta correto. E o caminho
+      // comum no Windows: basta abrir uma das migracoes no Bloco de Notas e
+      // salvar. Cortar na leitura fecha isso no unico ponto por onde todo
+      // arquivo de migracao passa.
+      sql = (
+        await fs.readFile(path.join(pasta, arquivo), "utf8")
+      ).replace(/^\uFEFF/, "");
     } catch (erro) {
       throw new ErroDeMigracao(
         `Não foi possível ler a migração ${arquivo}: ${erro.message}`,
