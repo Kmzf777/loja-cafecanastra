@@ -5,8 +5,12 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs/promises");
+const { execFile } = require("node:child_process");
+const { promisify } = require("node:util");
 const { subirPostgres } = require("./ajuda/postgres.js");
 const { aplicarMigracoes } = require("../db/migrar.js");
+
+const executar = promisify(execFile);
 
 let bd;
 let pasta;
@@ -30,6 +34,14 @@ after(async () => {
 });
 
 beforeEach(async () => {
+  // Sem esta guarda, um before() que falha faz CADA teste morrer num
+  // "Cannot read properties of undefined (reading 'pool')" — e o erro de boot,
+  // que e a informacao util, fica soterrado sob N erros derivados.
+  if (!bd) {
+    throw new Error(
+      "O Postgres nao subiu no before(); a causa real esta no erro daquele hook.",
+    );
+  }
   pasta = await fs.mkdtemp(path.join(os.tmpdir(), "canastra-mig-"));
   pastasCriadas.push(pasta);
   await bd.pool.query("DROP SCHEMA IF EXISTS canastra CASCADE");
@@ -126,6 +138,83 @@ test("recusa arquivo sem prefixo numerico, mesmo sendo o unico", async () => {
   assert.deepEqual(
     tabelas.rows.map((r) => r.tablename),
     ["migracoes"],
+  );
+});
+
+test("recusa migracao vazia ou so com comentario", async () => {
+  // A armadilha real: criar o arquivo, rodar o migrar por habito e SO ENTAO
+  // escrever o SQL. A versao fica registrada como aplicada para sempre, o
+  // conteudo nunca roda, e o migrar seguinte responde "nada pendente". Como nao
+  // ha checksum (e nao deve haver), recusar o arquivo vazio e o unico ponto em
+  // que isso da para pegar.
+  await fs.writeFile(path.join(pasta, "0001_vazia.sql"), "");
+  await assert.rejects(() => aplicarMigracoes(bd.pool, pasta), /0001_vazia\.sql/);
+  await fs.rm(path.join(pasta, "0001_vazia.sql"));
+
+  await fs.writeFile(
+    path.join(pasta, "0001_so_comentario.sql"),
+    "-- TODO: escrever o ALTER\n/* nada aqui ainda */\n",
+  );
+  await assert.rejects(
+    () => aplicarMigracoes(bd.pool, pasta),
+    /0001_so_comentario\.sql/,
+  );
+  await fs.rm(path.join(pasta, "0001_so_comentario.sql"));
+
+  const registro = await bd.pool.query("SELECT versao FROM canastra.migracoes");
+  assert.deepEqual(registro.rows, []);
+
+  // E o outro lado, que importa tanto quanto: comentario junto de SQL de
+  // verdade tem de passar. Uma heuristica de vazio agressiva demais barraria
+  // toda migracao bem documentada — que e justamente o estilo desta base.
+  await fs.writeFile(
+    path.join(pasta, "0001_com_comentario.sql"),
+    "-- cria a tabela de teste\nCREATE TABLE canastra.g (id int); -- fim\n",
+  );
+  assert.deepEqual(await aplicarMigracoes(bd.pool, pasta), ["0001_com_comentario"]);
+});
+
+test("falha de leitura nomeia a versao e nao aplica nada antes dela", async () => {
+  await fs.writeFile(
+    path.join(pasta, "0001_boa.sql"),
+    "CREATE TABLE canastra.h (id int);",
+  );
+  // Um diretorio no lugar do arquivo e a forma barata de forcar erro de leitura.
+  await fs.mkdir(path.join(pasta, "0002_diretorio.sql"));
+
+  await assert.rejects(() => aplicarMigracoes(bd.pool, pasta), (erro) => {
+    assert.equal(erro.name, "ErroDeMigracao");
+    assert.equal(erro.versao, "0002_diretorio");
+    assert.equal(erro.code, "EISDIR");
+    return true;
+  });
+
+  // O ponto do teste: como a leitura de TODOS os arquivos acontece antes da
+  // primeira transacao, nem a 0001 — que e perfeitamente valida — chega a ser
+  // aplicada. Lendo sob demanda, ela ficava commitada e o EISDIR escapava cru,
+  // sem versao e sem tratamento, com o banco ja meio migrado.
+  const registro = await bd.pool.query("SELECT versao FROM canastra.migracoes");
+  assert.deepEqual(registro.rows, []);
+});
+
+test("a CLI recusa rodar sem DATABASE_URL", async () => {
+  // A unica defesa aqui que existe puramente por seguranca de producao: sem ela
+  // o pg cai no padrao do libpq e migra qualquer banco alcancavel, em silencio.
+  // Precisa de teste justamente por nunca ser exercitada pelo caminho normal.
+  const ambiente = { ...process.env };
+  delete ambiente.DATABASE_URL;
+
+  await assert.rejects(
+    () =>
+      executar(process.execPath, [require.resolve("../db/migrar.js")], {
+        env: ambiente,
+        timeout: 15_000,
+      }),
+    (erro) => {
+      assert.equal(erro.code, 1);
+      assert.match(erro.stderr, /DATABASE_URL não está definida/);
+      return true;
+    },
   );
 });
 

@@ -59,7 +59,24 @@ function numeroDaVersao(arquivo) {
 }
 
 /**
- * Lista as migracoes da pasta ja validadas e em ordem.
+ * Responde "este arquivo manda alguma coisa para o banco?".
+ *
+ * A remocao de comentarios e deliberadamente ingenua e NAO serve para reescrever
+ * SQL — so para saber se sobrou algo. Um `--` dentro de um literal de string faz
+ * a heuristica cortar demais, e mesmo assim o que sobra continua nao-vazio: todo
+ * erro dela cai para o lado de ACEITAR o arquivo, que e o lado seguro. O bloco e
+ * nao-guloso pelo mesmo motivo (comentario de bloco aninha no Postgres; casar de
+ * menos deixa resto e o arquivo passa, casar demais e que seria ruim).
+ */
+function temComandoSql(sql) {
+  const semComentarios = sql
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--[^\n]*/g, " ");
+  return semComentarios.trim() !== "";
+}
+
+/**
+ * Lista as migracoes da pasta ja validadas, lidas e em ordem.
  *
  * A validacao acontece AQUI, num passo separado, e nao dentro do comparador do
  * `sort()`. Dois motivos, os dois medidos:
@@ -77,14 +94,31 @@ function numeroDaVersao(arquivo) {
  * ordem de hash no ext4. Ou seja, a mesma pasta rodaria numa ordem nesta
  * maquina e noutra no VPS, sem aviso nenhum. Dois branches criando `0003_` e um
  * acidente de merge banal; descobri-lo aqui custa renomear um arquivo.
+ *
+ * A LEITURA DOS ARQUIVOS TAMBEM ACONTECE AQUI, antes de qualquer transacao, e
+ * nao dentro do laco que aplica. Ler sob demanda criava uma janela em que a
+ * primeira migracao ja estava COMMITADA e a leitura da segunda falhava fora de
+ * todo o tratamento de erro — medido com um diretorio no lugar de um arquivo:
+ * escapava um EISDIR cru, sem versao e sem sequer o caminho. Lendo tudo antes,
+ * essa falha simplesmente nao alcanca um banco ja meio migrado.
  */
 async function listarMigracoes(pasta) {
-  const arquivos = (await fs.readdir(pasta)).filter((a) => a.endsWith(".sql"));
+  let entradas;
+  try {
+    entradas = await fs.readdir(pasta);
+  } catch (erro) {
+    throw new ErroDeMigracao(
+      `Não foi possível ler a pasta de migrações ${pasta}: ${erro.message}`,
+      erro,
+    );
+  }
+
+  const arquivos = entradas.filter((a) => a.endsWith(".sql"));
 
   const semNumero = arquivos.filter((a) => numeroDaVersao(a) === null);
   if (semNumero.length) {
     throw new ErroDeMigracao(
-      `Migracao sem prefixo numerico: ${semNumero.join(", ")}. ` +
+      `Migração sem prefixo numérico: ${semNumero.join(", ")}. ` +
         "Use NNNN_descricao.sql (ex.: 0003_pedidos.sql).",
     );
   }
@@ -100,29 +134,69 @@ async function listarMigracoes(pasta) {
   const repetidos = [...porNumero.values()].filter((g) => g.length > 1);
   if (repetidos.length) {
     throw new ErroDeMigracao(
-      "Numero de migracao repetido, a ordem ficaria indefinida: " +
+      "Número de migração repetido, a ordem ficaria indefinida: " +
         repetidos.map((g) => g.sort().join(" e ")).join("; ") +
         ". Renumere uma delas.",
     );
   }
 
-  return arquivos
-    .sort((a, b) => numeroDaVersao(a) - numeroDaVersao(b))
-    .map((arquivo) => ({ arquivo, versao: arquivo.replace(/\.sql$/, "") }));
+  arquivos.sort((a, b) => numeroDaVersao(a) - numeroDaVersao(b));
+
+  const migracoes = [];
+  for (const arquivo of arquivos) {
+    const versao = arquivo.replace(/\.sql$/, "");
+    let sql;
+    try {
+      sql = await fs.readFile(path.join(pasta, arquivo), "utf8");
+    } catch (erro) {
+      throw new ErroDeMigracao(
+        `Não foi possível ler a migração ${arquivo}: ${erro.message}`,
+        erro,
+        versao,
+      );
+    }
+
+    // Arquivo vazio (ou so com comentario) e uma armadilha silenciosa, nao um
+    // caso inofensivo: criar 0004_enderecos.sql, rodar o migrar por habito e SO
+    // ENTAO escrever o SQL deixa a versao registrada para sempre como aplicada,
+    // com o conteudo real nunca executado — e o proximo migrar responde "nada
+    // pendente". Sem checksum (fora de escopo, e continua fora), recusar o
+    // arquivo vazio e o que fecha essa porta.
+    if (!temComandoSql(sql)) {
+      throw new ErroDeMigracao(
+        `A migração ${arquivo} não tem nenhum comando SQL (está vazia ou só tem ` +
+          "comentários). Ela seria registrada como aplicada e o SQL escrito " +
+          "depois nunca rodaria. Escreva o SQL antes de migrar, ou apague o arquivo.",
+        null,
+        versao,
+      );
+    }
+
+    migracoes.push({ arquivo, versao, sql });
+  }
+
+  return migracoes;
 }
 
 async function aplicarMigracoes(pool, pasta = PASTA_PADRAO) {
   try {
     await pool.query(BOOTSTRAP);
   } catch (erro) {
-    // Sem este embrulho o operador ve so "permission denied for database
-    // postgres" e nenhuma pista de que quem pediu foi o runner, nem do que ele
-    // estava tentando criar. Numa instancia compartilhada com os outros
-    // projetos do VPS, a causa mais provavel e o papel do DATABASE_URL nao ter
-    // direito de CREATE — e a mensagem precisa dizer isso.
+    // Dizer QUEM estava pedindo vale para qualquer falha aqui: sem o embrulho o
+    // operador ve so a mensagem crua do pg, sem pista de que foi o runner nem
+    // do que ele tentava criar.
+    //
+    // Ja a dica do GRANT so vale para 42501 (insufficient_privilege). Colada em
+    // toda falha, ela mandava cacar permissao quando o problema era outro
+    // completamente — um pool ja encerrado, por exemplo, saia como "Cannot use a
+    // pool after calling end on the pool. O papel do DATABASE_URL precisa de
+    // CREATE no banco.". Diagnostico errado custa mais que dica ausente.
+    const dica =
+      erro.code === "42501"
+        ? " O papel do DATABASE_URL precisa de CREATE no banco."
+        : "";
     throw new ErroDeMigracao(
-      `Nao foi possivel preparar o schema canastra e a tabela canastra.migracoes: ${erro.message}. ` +
-        "O papel do DATABASE_URL precisa de CREATE no banco.",
+      `Não foi possível preparar o schema canastra e a tabela canastra.migracoes: ${erro.message}.${dica}`,
       erro,
     );
   }
@@ -137,10 +211,9 @@ async function aplicarMigracoes(pool, pasta = PASTA_PADRAO) {
 
   const aplicadas = [];
 
-  for (const { arquivo, versao } of migracoes) {
+  for (const { versao, sql } of migracoes) {
     if (jaAplicadas.has(versao)) continue;
 
-    const sql = await fs.readFile(path.join(pasta, arquivo), "utf8");
     const cliente = await pool.connect();
     let falhaNoRollback;
 
@@ -161,7 +234,7 @@ async function aplicarMigracoes(pool, pasta = PASTA_PADRAO) {
       }
       const sqlstate = erro.code ? ` (SQLSTATE ${erro.code})` : "";
       throw new ErroDeMigracao(
-        `Migracao ${versao} falhou${sqlstate}: ${erro.message}`,
+        `Migração ${versao} falhou${sqlstate}: ${erro.message}`,
         erro,
         versao,
       );
@@ -192,9 +265,9 @@ if (require.main === module) {
   // segura.
   if (!process.env.DATABASE_URL) {
     console.error(
-      "\n❌ DATABASE_URL nao esta definida.\n" +
-        "   Sem ela a conexao cairia no padrao do libpq e as migracoes poderiam\n" +
-        "   ser aplicadas num banco que nao e o pretendido.\n",
+      "\n❌ DATABASE_URL não está definida.\n" +
+        "   Sem ela a conexão cairia no padrão do libpq e as migrações poderiam\n" +
+        "   ser aplicadas num banco que não é o pretendido.\n",
     );
     process.exit(1);
   }
@@ -205,7 +278,7 @@ if (require.main === module) {
     .then((aplicadas) => {
       console.log(
         aplicadas.length
-          ? `${aplicadas.length} migracao(oes) aplicada(s).`
+          ? `${aplicadas.length} migração(ões) aplicada(s).`
           : "Nada pendente.",
       );
       return pool.end();
