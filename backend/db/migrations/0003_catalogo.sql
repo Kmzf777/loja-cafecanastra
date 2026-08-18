@@ -207,13 +207,16 @@ REVOKE INSERT, UPDATE, DELETE ON canastra.produtos, canastra.produto_opcoes
  * administrador desta loja — exatamente o ataque que 0002 inteira existe para
  * impedir quando fez `admins` referenciar `clientes` em vez de `auth.users`.
  *
- * Por que neste arquivo: 0002 ja foi aplicada, e o runner nunca reexecuta uma
- * versao registrada — corrigir la fecharia o furo apenas em instalacoes novas e
- * deixaria a instancia do VPS aberta, com as duas populacoes divergindo sem
- * aviso. O conserto tem de vir numa migracao NOVA, e 0003 e a primeira que roda
- * depois de `admins` existir: escolhida por ser a mais cedo possivel, que e o
- * criterio certo para janela de exposicao. A arrumacao por assunto perde para
- * isso.
+ * Por que neste arquivo, e nao dentro de 0002, ao lado da tabela: porque quem
+ * escreve uma migracao nao pode saber onde ela ja rodou. Hoje nada desta fase
+ * foi aplicado em lugar nenhum, entao emendar 0002 daria no mesmo — mas essa
+ * informacao vale so hoje, e migracao e permanente. Assim que 0002 tocar
+ * qualquer banco, o runner nunca mais a reexecuta, e um conserto feito la
+ * fecharia o furo apenas em instalacao nova, deixando a que ja rodou aberta,
+ * com as duas populacoes divergindo sem aviso. Corrigir privilegio numa
+ * migracao NOVA e a forma que continua certa nos dois mundos, e 0003 e a mais
+ * cedo que roda depois de `admins` existir — o criterio certo para janela de
+ * exposicao. A arrumacao por assunto perde para isso.
  *
  * `clientes` NAO leva REVOKE, e nem `enderecos`, `carrinhos`, `carrinho_itens`
  * (0004) ou `pedidos` (0005): nessas o cliente logado escreve de verdade — cria
