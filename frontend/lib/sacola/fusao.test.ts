@@ -523,15 +523,100 @@ describe("fundir uma vez e só uma", () => {
     expect(JSON.parse(dados.get(CHAVE_DA_SACOLA)!)[0].product_id).toBe(UUID_B);
   });
 
-  it("outra conta na mesma máquina funde a sacola de novo, para ela", async () => {
+  /**
+   * COMPUTADOR COMPARTILHADO. `sair()` não apaga a sacola, então a sacola de
+   * quem saiu continua no `localStorage` quando a próxima pessoa entra. Os itens
+   * dela levam selo — prova de que já estão numa conta, a da primeira pessoa —,
+   * então não são somados na conta da segunda: ela vê a sacola DELA, e a
+   * primeira não perde nada, porque os itens continuam na conta dela.
+   */
+  it("a segunda conta na mesma máquina não herda a sacola já fundida", async () => {
     await fundirSacola();
     reiniciarFusao();
 
     cenario.sessao = { usuario: { userId: "u-2" }, accessToken: "outro" };
+    cenario.itensDaConta = [];
     const resultado = await fundirSacola();
 
+    expect(falso.rpc).toHaveBeenCalledTimes(1);
+    expect(resultado.situacao === "fundida" && resultado.itens).toEqual([]);
+  });
+
+  it("mas o que a segunda pessoa acrescentou deslogada vai para a conta dela", async () => {
+    await fundirSacola();
+    const carimbada = JSON.parse(dados.get(CHAVE_DA_SACOLA)!) as ItemDaSacola[];
+    dados.set(
+      CHAVE_DA_SACOLA,
+      JSON.stringify([...carimbada, item({ product_id: UUID_B, quantity: 1 })]),
+    );
+    reiniciarFusao();
+
+    cenario.sessao = { usuario: { userId: "u-2" }, accessToken: "outro" };
+    await fundirSacola();
+
     expect(falso.rpc).toHaveBeenCalledTimes(2);
-    expect(resultado.situacao).toBe("fundida");
+    const segunda = cenario.chamadas[1]?.argumentos as {
+      itens: { produto_id: string }[];
+    };
+    expect(segunda.itens.map((i) => i.produto_id)).toEqual([UUID_B]);
+  });
+
+  /* ---------------------------------------------------------------- *
+   * A base e a sacola são uma unidade lógica gravada em duas chaves
+   * ---------------------------------------------------------------- */
+
+  /**
+   * `localStorage` não grava duas chaves atomicamente, e elas se separam de
+   * verdade: limpeza parcial de dados do site, extensão, script de QA, cota
+   * estourando entre uma gravação e a outra. Sem o selo, a sacola já fundida
+   * volta a parecer pendente e as quantidades DOBRAM a cada carga de página.
+   */
+  it("base sumida não faz a sacola já fundida ser fundida de novo", async () => {
+    await fundirSacola();
+    expect(JSON.parse(dados.get(CHAVE_DA_SACOLA)!)[0].selo).toBeTruthy();
+
+    dados.delete("cart:na_conta");
+    reiniciarFusao();
+
+    const resultado = await fundirSacola();
+
+    expect(falso.rpc).toHaveBeenCalledTimes(1);
+    // A quantidade é a da conta, não o dobro dela.
+    expect(resultado.situacao === "fundida" && resultado.itens[0]?.quantity).toBe(2);
+  });
+
+  it("com a base sumida, o item sem selo ainda é fundido", async () => {
+    await fundirSacola();
+    const carimbada = JSON.parse(dados.get(CHAVE_DA_SACOLA)!) as ItemDaSacola[];
+
+    dados.delete("cart:na_conta");
+    dados.set(
+      CHAVE_DA_SACOLA,
+      JSON.stringify([...carimbada, item({ product_id: UUID_B, quantity: 4 })]),
+    );
+    reiniciarFusao();
+
+    await fundirSacola();
+
+    expect(falso.rpc).toHaveBeenCalledTimes(2);
+    const segunda = cenario.chamadas[1]?.argumentos as {
+      itens: { produto_id: string; quantidade: number }[];
+    };
+    expect(segunda.itens).toEqual([
+      expect.objectContaining({ produto_id: UUID_B, quantidade: 4 }),
+    ]);
+  });
+
+  it("base com selo de outra gravação também é divergência", async () => {
+    await fundirSacola();
+    const base = JSON.parse(dados.get("cart:na_conta")!);
+    dados.set("cart:na_conta", JSON.stringify({ ...base, selo: "de-outra-vida" }));
+    reiniciarFusao();
+
+    const resultado = await fundirSacola();
+
+    expect(falso.rpc).toHaveBeenCalledTimes(1);
+    expect(resultado.situacao === "fundida" && resultado.itens[0]?.quantity).toBe(2);
   });
 });
 
@@ -575,6 +660,32 @@ describe("quando a fusão falha", () => {
       expect.stringContaining("42501"),
       expect.anything(),
     );
+  });
+
+  /**
+   * A releitura é o lugar natural de carimbar a sacola, e por isso a fusão SEM
+   * releitura precisa carimbar também: senão existe um estado "já fundida e sem
+   * selo", e nele perder a base volta a significar fundir tudo de novo.
+   */
+  it("fusão sem releitura carimba a sacola: perder a base depois não dobra", async () => {
+    cenario.erroDaLeitura = { code: "PGRST301", message: "sem rede" };
+
+    await fundirSacola();
+    expect(falso.rpc).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(dados.get(CHAVE_DA_SACOLA)!)[0].selo).toBeTruthy();
+
+    // A base some depois, por qualquer motivo.
+    dados.delete("cart:na_conta");
+    cenario.erroDaLeitura = null;
+    cenario.itensDaConta = [
+      { produto_id: UUID_A, quantidade: 2, preco: 39.9, nome: "x", imagem: "", tamanho: "", moagem: null },
+    ];
+    reiniciarFusao();
+
+    const segunda = await fundirSacola();
+
+    expect(falso.rpc).toHaveBeenCalledTimes(1);
+    expect(segunda.situacao === "fundida" && segunda.itens[0]?.quantity).toBe(2);
   });
 
   /**
@@ -623,6 +734,27 @@ describe("duas abas entrando ao mesmo tempo", () => {
     const resultado = await fundirSacola();
 
     expect(resultado.situacao).toBe("fundida");
+    expect(falso.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ADIAR NÃO PODE VIRAR DESISTIR. Se a trava de memória continuasse presa
+   * depois de um `adiada`, esta aba não tentaria mais nada até a próxima carga
+   * de página — e uma fusão que não acontece em silêncio é a classe de falha que
+   * este módulo existe para eliminar. Note que NÃO há `reiniciarFusao()` entre
+   * as duas chamadas: é justamente isso que o caso afirma.
+   */
+  it("adiar para outra aba não impede a tentativa seguinte", async () => {
+    dados.set(CHAVE_DA_SACOLA, JSON.stringify([item({ quantity: 2 })]));
+    dados.set("cart:fundindo", String(Date.now()));
+
+    expect((await fundirSacola()).situacao).toBe("adiada");
+
+    // A outra aba terminou e soltou a marca.
+    dados.delete("cart:fundindo");
+    const segunda = await fundirSacola();
+
+    expect(segunda.situacao).toBe("fundida");
     expect(falso.rpc).toHaveBeenCalledTimes(1);
   });
 

@@ -58,9 +58,14 @@
  * descreve, só que em câmera lenta. A defesa é `CHAVE_DA_BASE`: uma cópia do que
  * SABEMOS estar na conta, gravada junto. O que se manda para a RPC é só o que
  * excede essa base (`calcularPendentes`), então uma segunda fusão da mesma
- * sacola manda lista vazia e não acontece. A base é por `userId` — outra conta
- * na mesma máquina começa do zero, que é o comportamento certo: a sacola do
- * aparelho vai para quem entrou.
+ * sacola manda lista vazia e não acontece. A base é por `userId`.
+ *
+ * E COMO A BASE E A SACOLA SÃO DUAS CHAVES, ELAS PODEM SE SEPARAR — `localStorage`
+ * não grava duas coisas de uma vez. Separadas, a sacola já fundida voltaria a
+ * parecer pendente e as quantidades dobrariam. Por isso cada item gravado leva um
+ * `selo`, o mesmo que vai na base: se um dia eles não baterem, a fusão sabe que
+ * não sabe, funde apenas o que não tem selo e relê a conta em vez de somar tudo
+ * de novo. Ver `novoSelo()` e o bloco de divergência em `executarFusao`.
  */
 import { recuperarSessao } from "../conta/sessao";
 import { clienteNavegador } from "../supabase/cliente";
@@ -75,11 +80,50 @@ export const CHAVE_DA_SACOLA = "cart";
  *
  * Não é cache de exibição — ninguém desenha tela com isto. É a única coisa que
  * impede a fusão de somar de novo o que ela mesma acabou de somar.
+ *
+ * ESTA CHAVE E A `cart` SÃO UMA COISA SÓ GRAVADA EM DUAS, e `localStorage` não
+ * tem escrita atômica de duas chaves. Elas se separam de verdade: uma limpeza
+ * parcial de dados do site, uma extensão, um script de QA, ou a cota estourando
+ * entre a primeira gravação e a segunda. Separadas, a sacola JÁ FUNDIDA volta a
+ * parecer sacola anônima pendente e as quantidades DOBRAM. O `selo` logo abaixo
+ * existe para que essa divergência seja DETECTÁVEL — ver `executarFusao`.
  */
 const CHAVE_DA_BASE = "cart:na_conta";
 
 /** Marca de "uma aba está fundindo agora". Ver `reivindicarEntreAbas()`. */
 const CHAVE_ENTRE_ABAS = "cart:fundindo";
+
+/**
+ * O SELO: o mesmo valor gravado NA SACOLA e NA BASE, para uma poder ser
+ * conferida contra a outra.
+ *
+ * POR QUE ELE VIAJA DENTRO DE CADA ITEM, e não numa terceira chave: uma terceira
+ * chave teria exatamente o problema que ele veio resolver — sumiria sozinha, ou
+ * junto com a errada, e a divergência voltaria a ser invisível. Dentro do item,
+ * o selo só se perde quando a sacola inteira se perde, e sacola perdida não
+ * dobra nada.
+ *
+ * `ItemDaSacola.selo` é campo INTERNO: nenhuma tela o lê e nenhuma requisição o
+ * manda (checkout e frete montam o corpo campo a campo, e `traduzirParaFusao`
+ * também). Ele sobrevive às edições da sacola porque `adicionar`,
+ * `alterarQuantidade` e `remover` copiam o item com `...spread`.
+ *
+ * NÃO precisa ser imprevisível — precisa ser DIFERENTE do anterior, para que uma
+ * base velha ao lado de uma sacola nova não passe por coerente. Daí o relógio
+ * mais um pedaço aleatório, sem depender de `crypto.randomUUID`, que não existe
+ * em todo contexto onde este módulo é carregado.
+ */
+function novoSelo(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** O selo que a sacola local carrega, ou `null` se ela nunca foi fundida. */
+export function seloDaSacola(itens: ItemDaSacola[]): string | null {
+  for (const item of itens) {
+    if (item.selo) return item.selo;
+  }
+  return null;
+}
 
 /**
  * Espelha o `TETO_DE_QUANTIDADE` da 0007. Lá ele existe para a soma não
@@ -196,6 +240,9 @@ export function limparItens(bruto: unknown[]): ItemDaSacola[] {
       ...(typeof item.moagem === "string" && item.moagem
         ? { moagem: item.moagem }
         : {}),
+      // O selo atravessa a limpeza: sem isto, passar a sacola por aqui apagaria
+      // a prova de que ela já está na conta, e a fusão seguinte dobraria tudo.
+      ...(typeof item.selo === "string" && item.selo ? { selo: item.selo } : {}),
     });
   }
 
@@ -316,15 +363,23 @@ function lerLista(chave: string): unknown[] {
   }
 }
 
-function gravarSacola(itens: ItemDaSacola[]): void {
+/**
+ * Grava a sacola JÁ CARIMBADA. A base tem de ser gravada com o mesmo selo, e as
+ * duas gravações ficam sempre lado a lado em `executarFusao` — a ordem é sacola
+ * primeiro, base depois, porque a sacola é o que a pessoa vê.
+ */
+function gravarSacola(itens: ItemDaSacola[], selo: string): void {
   try {
-    localStorage.setItem(CHAVE_DA_SACOLA, JSON.stringify(itens));
+    localStorage.setItem(
+      CHAVE_DA_SACOLA,
+      JSON.stringify(itens.map((item) => ({ ...item, selo }))),
+    );
   } catch {
     // Sem cota, a sacola vive só em memória nesta aba. A fusão já aconteceu.
   }
 }
 
-type BaseDaConta = { userId: string; itens: ItemDaSacola[] };
+type BaseDaConta = { userId: string; selo: string | null; itens: ItemDaSacola[] };
 
 /**
  * `null` quer dizer "ESTE APARELHO AINDA NÃO CONHECE A SACOLA DESTA CONTA", e a
@@ -332,7 +387,7 @@ type BaseDaConta = { userId: string; itens: ItemDaSacola[] };
  * `executarFusao`. `[]` é uma afirmação (a conta estava vazia da última vez);
  * `null` é a ausência de afirmação.
  */
-function lerBase(userId: string): ItemDaSacola[] | null {
+function lerBase(userId: string): BaseDaConta | null {
   if (typeof window === "undefined") return null;
   try {
     const bruto = JSON.parse(localStorage.getItem(CHAVE_DA_BASE) || "null");
@@ -340,7 +395,12 @@ function lerBase(userId: string): ItemDaSacola[] | null {
     const base = bruto as Partial<BaseDaConta>;
     // Conta diferente: a base não vale. A sacola deste aparelho é de quem entrou.
     if (base.userId !== userId) return null;
-    return Array.isArray(base.itens) ? limparItens(base.itens) : null;
+    if (!Array.isArray(base.itens)) return null;
+    return {
+      userId,
+      selo: typeof base.selo === "string" ? base.selo : null,
+      itens: limparItens(base.itens),
+    };
   } catch {
     return null;
   }
@@ -483,7 +543,42 @@ async function executarFusao(): Promise<ResultadoDaFusao> {
 
   const local = limparItens(lerLista(CHAVE_DA_SACOLA));
   const naConta = lerBase(userId);
-  const pendentes = calcularPendentes(local, naConta ?? []);
+
+  /**
+   * A SACOLA DIZ QUE JÁ FOI FUNDIDA E A BASE NÃO CONFIRMA: as duas chaves se
+   * separaram, e é o único estado em que este módulo pode dobrar a sacola de
+   * alguém. Ele é alcançável — limpeza parcial de dados do site, extensão,
+   * script de QA, ou a cota estourando entre gravar a sacola e gravar a base.
+   *
+   * Sem o selo, este estado é indistinguível de "sacola anônima pendente", e a
+   * resposta óbvia (fundir tudo) DOBRA as quantidades. Com ele, cada item diz
+   * por si: quem tem selo já está na conta e não é remandado; quem não tem é
+   * novidade de verdade e vai. É a mesma conta de sempre, com a base
+   * reconstruída a partir do que a própria sacola carimbada afirma.
+   *
+   * O QUE SE PERDE NESTE CAMINHO, e é deliberado: um item carimbado cuja
+   * quantidade AUMENTOU depois da última fusão volta ao valor da conta na
+   * releitura, porque a base perdida era a única coisa que sabia a quantidade
+   * antiga. Uma unidade a menos, visível na tela e corrigível em um clique,
+   * contra dobrar a sacola inteira em silêncio.
+   */
+  const carimbados = local.filter((item) => Boolean(item.selo));
+  const seloLocal = seloDaSacola(local);
+  const divergiu =
+    seloLocal !== null && (naConta === null || naConta.selo !== seloLocal);
+
+  if (divergiu) {
+    // Dois caminhos chegam aqui, e os dois são tratados igual: a base sumiu, ou
+    // ela é de OUTRA conta (computador compartilhado — quem sai deixa a sacola).
+    console.warn(
+      "[sacola] A sacola local diz que já está numa conta, e a base que " +
+        "provaria isso sumiu ou é de outra conta. Só os itens sem selo serão " +
+        "fundidos, e a sacola da conta será relida.",
+    );
+  }
+
+  const jaNaConta = divergiu ? carimbados : (naConta?.itens ?? []);
+  const pendentes = calcularPendentes(local, jaNaConta);
 
   /**
    * A PRIMEIRA VEZ DESTA CONTA NESTE APARELHO é o único momento em que a sacola
@@ -502,16 +597,26 @@ async function executarFusao(): Promise<ResultadoDaFusao> {
    * remoção local para desfazer, porque não houve nenhuma ainda. Depois disso, a
    * lista local é a versão mais recente — é ela que a pessoa vem editando — e a
    * base guardada basta para a subtração.
+   *
+   * A divergência de selo entra pela mesma porta: lá também a base é
+   * desconhecida, e relê-la é como ela volta a existir.
    */
-  const primeiraVezNesteAparelho = naConta === null;
+  const precisaReler = naConta === null || divergiu;
 
   // Sacola vazia, ou nada além do que a conta já tem. Não é erro nem exceção: é
   // o caso comum de toda visita depois da primeira, e a RPC nem precisa saber.
-  if (pendentes.length === 0 && !primeiraVezNesteAparelho) {
+  if (pendentes.length === 0 && !precisaReler) {
     return { situacao: "semNovidade" };
   }
 
   const supabase = clienteNavegador();
+
+  /**
+   * UM selo por execução, usado nos dois caminhos de gravação abaixo. Dois selos
+   * diferentes na mesma execução fariam sacola e base divergirem por conta
+   * própria, que é exatamente o que o selo veio detectar.
+   */
+  const selo = novoSelo();
 
   if (pendentes.length > 0) {
     if (!reivindicarEntreAbas()) return { situacao: "adiada" };
@@ -542,13 +647,21 @@ async function executarFusao(): Promise<ResultadoDaFusao> {
        * queda de rede virar uma segunda fusão da mesma sacola na visita
        * seguinte, que é o desastre da 0007 em câmera lenta.
        */
-      gravarBase({ userId, itens: somarSacolas(naConta ?? [], pendentes) });
+      /**
+       * A SACOLA É CARIMBADA AQUI TAMBÉM, e não só na releitura. Ela continua
+       * com os mesmos itens — o selo é campo interno, nada muda na tela —, mas
+       * sem esta linha existiria um estado "já fundida e sem selo": bastaria a
+       * releitura falhar. Nesse estado, perder a base voltaria a significar
+       * fundir tudo de novo, que é o buraco que o selo fecha.
+       */
+      gravarSacola(local, selo);
+      gravarBase({ userId, selo, itens: somarSacolas(jaNaConta, pendentes) });
     } finally {
       liberarEntreAbas();
     }
   }
 
-  if (primeiraVezNesteAparelho) {
+  if (precisaReler) {
     const daConta = await lerSacolaDaConta(supabase);
 
     if (daConta) {
@@ -556,9 +669,12 @@ async function executarFusao(): Promise<ResultadoDaFusao> {
       // local — é o mesmo gesto que "apagar `localStorage['cart']` depois da
       // resposta", sem deixar ninguém sem sacola na tela enquanto a leitura da
       // sacola logada não migra para o PostgREST (F5). Ver o item 3 do topo.
-      gravarSacola(daConta);
-      gravarBase({ userId, itens: daConta });
-      return { situacao: "fundida", itens: daConta };
+      //
+      // Sacola e base gravadas com o MESMO selo: é o que as torna conferíveis
+      // uma contra a outra na próxima visita.
+      gravarSacola(daConta, selo);
+      gravarBase({ userId, selo, itens: daConta });
+      return { situacao: "fundida", itens: daConta.map((i) => ({ ...i, selo })) };
     }
 
     // Releitura falhou e não havia nada a fundir: este aparelho continua sem
@@ -571,7 +687,8 @@ async function executarFusao(): Promise<ResultadoDaFusao> {
 
   // Fundiu, mas a lista da conta não foi (ou não precisava ser) relida: o que a
   // pessoa vê continua sendo a sacola local, que contém tudo o que ela montou.
-  return { situacao: "fundida", itens: local };
+  // Com o selo, para bater com o que acabou de ser gravado.
+  return { situacao: "fundida", itens: local.map((item) => ({ ...item, selo })) };
 }
 
 /**

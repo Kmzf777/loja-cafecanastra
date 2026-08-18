@@ -58,6 +58,19 @@ export type ItemDaSacola = {
   size: string;
   /** Moagem escolhida. Não existe no backend legado; viaja só localmente. */
   moagem?: string;
+  /**
+   * Campo INTERNO da fusão — não é dado de produto e nenhuma tela o lê.
+   *
+   * Presente, ele diz "este item já está dentro da sacola da conta", e é o que
+   * permite `fusao.ts` perceber que a base guardada em `localStorage` sumiu ou
+   * não bate, em vez de refundir a sacola inteira e dobrar as quantidades. Ver
+   * o comentário do selo em `fusao.ts`.
+   *
+   * Ele sobrevive às edições porque `adicionar`, `alterarQuantidade` e `remover`
+   * copiam o item com `...spread`. Quem monta corpo de requisição (checkout,
+   * frete, `/cart/replace`) escolhe os campos um a um, então ele não vaza.
+   */
+  selo?: string;
 };
 
 type Sacola = {
@@ -127,6 +140,16 @@ export function ProvedorDaSacola({ children }: { children: ReactNode }) {
           .then((r) => (r.ok ? r.json() : null))
           .then((d) => {
             /**
+             * TASK 5: este ramo inteiro sai junto com as rotas de carrinho do
+             * Express. Enquanto ele existir, há um perigo NOVO além do descrito
+             * abaixo: no dia em que `GET /cart` voltar a responder, a sacola da
+             * CONTA chegaria por aqui até o `localStorage` SEM selo, e a fusão a
+             * leria como sacola anônima pendente — cada carga de página somaria
+             * a sacola da conta nela mesma. Hoje isso não acontece porque o
+             * endpoint responde 500 (`findOrCreateCart` relança o 42P01 de
+             * `carts`, tabela que nenhuma migração cria), e por isso a correção
+             * é apagar o ramo, não remendá-lo.
+             *
              * A SACOLA REMOTA SÓ PREENCHE A LOCAL VAZIA — ELA NÃO SUBSTITUI
              * MAIS, e esta linha mudou de sentido nesta fase.
              *
