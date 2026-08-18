@@ -44,6 +44,15 @@ const BRUNO = "bbbbbbbb-0000-0000-0000-000000000002";
 const VETERANA = "cccccccc-0000-0000-0000-000000000003";
 /** Cadastrou-se e nao clicou no link: `email_confirmed_at` NULL. */
 const PENDENTE = "dddddddd-0000-0000-0000-000000000004";
+/**
+ * Ja e cliente E esta com `email_confirmed_at` NULL ao mesmo tempo.
+ *
+ * O GoTrue normalmente nao desconfirma ninguem, entao esta combinacao chega por
+ * fora: conta migrada a mao, restauracao parcial de backup, troca de e-mail em
+ * alguma versao. Ela existe aqui para fixar a ORDEM dos blocos da RPC — ver o
+ * teste "cliente estabelecido nao fica trancado do lado de fora".
+ */
+const ANTIGA = "eeeeeeee-0000-0000-0000-000000000005";
 
 const SESSAO_ANA = { papel: "authenticated", sub: ANA };
 const SESSAO_VETERANA = { papel: "authenticated", sub: VETERANA };
@@ -63,13 +72,15 @@ before(async () => {
        ($1, 'ana@ex.com',      now()),
        ($2, 'bruno@ex.com',    now()),
        ($3, 'veterana@ex.com', now()),
-       ($4, 'pendente@ex.com', NULL)`,
-    [ANA, BRUNO, VETERANA, PENDENTE],
+       ($4, 'pendente@ex.com', NULL),
+       ($5, 'antiga@ex.com',   NULL)`,
+    [ANA, BRUNO, VETERANA, PENDENTE, ANTIGA],
   );
   await bd.pool.query(
-    `INSERT INTO canastra.clientes (user_id, nome, telefone, cpf)
-     VALUES ($1, 'Veterana Como Ela Se Escreveu', '31988887777', '11122233344')`,
-    [VETERANA],
+    `INSERT INTO canastra.clientes (user_id, nome, telefone, cpf) VALUES
+       ($1, 'Veterana Como Ela Se Escreveu', '31988887777', '11122233344'),
+       ($2, 'Antiga',                        NULL,          NULL)`,
+    [VETERANA, ANTIGA],
   );
 }, { timeout: 120_000 });
 
@@ -87,6 +98,48 @@ beforeEach(() => {
     );
   }
 });
+
+/**
+ * Duas identidades `authenticated` DIFERENTES dentro de UMA transacao.
+ *
+ * POR QUE ISTO NAO E `comoPapel`, e por que nao pode ser: aquele helper amarra
+ * uma identidade por transacao de proposito (um `sub` que some vira teste
+ * falso-verde, e o comentario dele explica). Aqui a pergunta e sobre um INDICE
+ * UNICO, e um indice so ve as duas linhas se as duas estiverem na MESMA
+ * transacao.
+ *
+ * E NAO ADIANTARIA ABRIR DUAS: a segunda transacao bateria no indice unico
+ * enquanto a primeira ainda esta aberta, e o Postgres nao recusa nesse caso — ele
+ * BLOQUEIA esperando a primeira terminar. Como a primeira so termina quando o
+ * teste devolver, o resultado de uma regressao no `nullif` seria o suite
+ * PENDURADO ate o `connectionTimeoutMillis` do pool, e nao um vermelho. Numa
+ * transacao so, a mesma regressao levanta 23505 na hora.
+ *
+ * `set_config(..., true)` e transacional e pode ser reescrito quantas vezes se
+ * quiser dentro da mesma transacao — e disso que a troca de identidade vive.
+ */
+async function comSessoesEncadeadas(acao) {
+  const cliente = await bd.pool.connect();
+  const entrarComo = (sub) =>
+    cliente.query("SELECT set_config('request.jwt.claims', $1, true)", [
+      JSON.stringify({ sub, role: "authenticated" }),
+    ]);
+  try {
+    await cliente.query("BEGIN");
+    await cliente.query("SELECT set_config('role', 'authenticated', true)");
+    return await acao(cliente, entrarComo);
+  } finally {
+    let falhaNoRollback;
+    try {
+      await cliente.query("ROLLBACK");
+    } catch (erro) {
+      falhaNoRollback = erro;
+    }
+    // Mesmo motivo de sessao.js: um cliente que nao saiu da transacao voltaria
+    // ao pool ainda dentro dela e contaminaria os proximos testes.
+    cliente.release(falhaNoRollback);
+  }
+}
 
 /** Le a linha de cliente de um uid, como dono do banco (por baixo da RLS). */
 async function lerCliente(uid) {
@@ -180,10 +233,63 @@ test("NAO sobrescreve o cadastro de quem ja e cliente", async () => {
   });
 });
 
-test("nome em branco nao vira cliente sem nome, e a recusa vem da propria coluna", async () => {
-  // `nullif(btrim(...), '')` transforma "   " em NULL e a coluna NOT NULL de 0002
-  // recusa com 23502. O contrario — aceitar — criaria um cliente que aparece em
-  // branco no painel e no rotulo da encomenda, sem erro nenhum na hora.
+test("telefone e CPF vazios viram NULL, e por isso DOIS cadastros vazios convivem", async () => {
+  // O QUE ESTE TESTE GUARDA: as tres linhas de `nullif(btrim(...), '')` da RPC.
+  // Antes dele, o `nullif` do `cpf` era defendido por catorze linhas de
+  // comentario e por teste NENHUM — apagar aquela linha deixava a suite inteira
+  // verde. Um comentario nao fica vermelho.
+  //
+  // O DESFECHO QUE IMPORTA E O DA SEGUNDA PESSOA. `cpf` e UNIQUE. Duas clientes
+  // que deixam o campo em branco mandam '' as duas; sem o `nullif`, a SEGUNDA
+  // leva 23505 no proprio cadastro, falando de um CPF que ela nao digitou. Com
+  // NULL, o indice trata cada ausencia como distinta (NULLS DISTINCT, o padrao) e
+  // as duas passam — que e o que 0002 documentou querer.
+  //
+  // `telefone` vem junto porque a regra de "nao informado" tem de ser a MESMA nos
+  // tres campos: um '' aqui e um NULL ali fariam a tela de perfil testar as duas
+  // formas para sempre.
+  const linhas = await comSessoesEncadeadas(async (cliente, entrarComo) => {
+    // O SEGUNDO `GARANTIR` E O TESTE. Com o `nullif` no lugar as duas linhas
+    // guardam NULL e o indice unico nao ve conflito nenhum; sem ele, as duas
+    // guardariam '' e ESTA chamada morreria com 23505 aqui mesmo.
+    await entrarComo(ANA);
+    await cliente.query(GARANTIR, ["Ana Souza", "", ""]);
+    await entrarComo(BRUNO);
+    await cliente.query(GARANTIR, ["Bruno Dias", "  ", "  "]);
+
+    // A conferencia e feita por CADA uma, e nao num SELECT so: `clientes_dono_le`
+    // de 0006 mostra apenas a propria linha, entao uma leitura unica traria so a
+    // ultima identidade — foi o que este teste devolveu na primeira versao. Sair
+    // da RLS para ler as duas de uma vez resolveria o sintoma trocando o assunto.
+    const lidas = [];
+    for (const sub of [ANA, BRUNO]) {
+      await entrarComo(sub);
+      const { rows } = await cliente.query(
+        "SELECT user_id, telefone, cpf FROM canastra.clientes WHERE user_id = $1",
+        [sub],
+      );
+      lidas.push(...rows);
+    }
+    return lidas;
+  });
+
+  assert.deepEqual(linhas, [
+    { user_id: ANA, telefone: null, cpf: null },
+    { user_id: BRUNO, telefone: null, cpf: null },
+  ]);
+});
+
+test("nome em branco recusa com mensagem CURADA, e nao com o texto da constraint", async () => {
+  // ALTO e CURADO sao propriedades diferentes. Sem o RAISE explicito da RPC a
+  // recusa acontece do mesmo jeito (o NOT NULL de 0002 barra), mas chega no
+  // navegador como "null value in column nome of relation clientes violates
+  // not-null constraint" — nome de tabela e de coluna na cara de quem so errou um
+  // campo do formulario. Este e, junto do CPF repetido, o erro de cadastro mais
+  // provavel de todos; nao da para exigir SQLSTATE escolhido do resto do arquivo
+  // e entregar cru justamente ele.
+  //
+  // O CODIGO CONTINUA 23502 DE PROPOSITO: e o que a propria coluna usaria, entao
+  // quem chama trata UM caso, venha a recusa do RAISE ou da tabela.
   await assert.rejects(
     () =>
       comoPapel(bd.pool, SESSAO_ANA, (cliente) =>
@@ -191,6 +297,39 @@ test("nome em branco nao vira cliente sem nome, e a recusa vem da propria coluna
       ),
     (erro) => {
       assert.equal(erro.code, "23502");
+      assert.match(erro.message, /nome/i);
+      assert.ok(erro.hint, "a recusa curada tem de trazer HINT");
+      // Se o RAISE for removido, quem responde e a coluna — e ai estes dois
+      // campos vem preenchidos pelo Postgres. E a diferenca que o teste mede.
+      assert.equal(erro.column, undefined);
+      assert.equal(erro.table, undefined);
+      return true;
+    },
+  );
+});
+
+test("CPF ja usado por outra conta recusa com mensagem CURADA", async () => {
+  // VETERANA foi semeada com '11122233344'. Ana manda o mesmo numero.
+  //
+  // Sem o handler da RPC isto chega no navegador como 23505 com
+  // `clientes_cpf_key` no corpo — e "clientes_cpf_key" nao e uma frase que se
+  // mostre a alguem. O codigo segue 23505 pelo mesmo motivo do 23502 acima.
+  //
+  // A TRADUCAO SO E CORRETA POR CAUSA DE UMA INVARIANTE: depois do
+  // `ON CONFLICT (user_id) DO NOTHING` a chave primaria nao pode mais levantar
+  // 23505, e `UNIQUE (cpf)` e a unica outra restricao de unicidade de `clientes`.
+  // Um UNIQUE novo naquela tabela faz esta mensagem mentir — e e por isso que
+  // 0002 leva o aviso preso a ele.
+  await assert.rejects(
+    () =>
+      comoPapel(bd.pool, SESSAO_ANA, (cliente) =>
+        cliente.query(GARANTIR, ["Ana Souza", null, "11122233344"]),
+      ),
+    (erro) => {
+      assert.equal(erro.code, "23505");
+      assert.match(erro.message, /CPF/);
+      assert.ok(erro.hint, "a recusa curada tem de trazer HINT");
+      assert.equal(erro.constraint, undefined, "o nome da constraint nao pode vazar");
       return true;
     },
   );
@@ -248,6 +387,35 @@ test("DEPOIS da chamada, a mesma sessao escreve e le o proprio endereco e a prop
   // As contagens sao sem WHERE de proposito: sob RLS elas contam o que a SESSAO
   // enxerga, entao 1 e 1 diz tanto "escreveu" quanto "le de volta".
   assert.deepEqual(visto, { enderecos: 1, carrinhos: 1, eh_cliente: true });
+});
+
+test("cliente estabelecido nao fica trancado do lado de fora sem confirmacao", async () => {
+  // ISTO E UM TESTE DE ORDEM DOS BLOCOS, e a ordem ja esteve invertida.
+  //
+  // A checagem de e-mail guarda o ato de VIRAR cliente. Rodando ANTES da saida
+  // de "ja e cliente", ela passa a valer tambem para quem ja entrou: um uid com
+  // linha em `clientes` e `email_confirmed_at` nulo — conta migrada a mao,
+  // restauracao parcial, troca de e-mail em alguma versao do GoTrue — receberia
+  // 28000 em TODA sessao. E se o front leu 28000 como "voce ainda nao tem
+  // vinculo", o cliente antigo entra em laco pedindo a confirmacao de um link que
+  // ja clicou.
+  //
+  // A prova foi dada uma vez; a linha em `clientes` e o recibo.
+  const resultado = await comoPapel(
+    bd.pool,
+    { papel: "authenticated", sub: ANTIGA },
+    async (cliente) => {
+      await cliente.query(GARANTIR, ["Antiga", null, null]);
+      const { rows } = await cliente.query(
+        `SELECT canastra.eh_cliente()                                     AS eh_cliente,
+                (SELECT count(*)::int FROM canastra.clientes WHERE user_id = $1) AS linhas`,
+        [ANTIGA],
+      );
+      return rows[0];
+    },
+  );
+
+  assert.deepEqual(resultado, { eh_cliente: true, linhas: 1 });
 });
 
 /* ------------------------------------------------------------------------- *
@@ -450,25 +618,52 @@ test("LIMITE CONHECIDO: qualquer conta confirmada da instancia consegue virar cl
   assert.equal(virou, true);
 });
 
-test("LIMITE CONHECIDO: conta sem linha em `auth.users` recebe a MESMA recusa do e-mail pendente", async () => {
+test("conta sem linha em `auth.users` responde BYTE A BYTE como o e-mail pendente", async () => {
   // Um uid que nao existe em `auth.users` (conta apagada, token de uma instancia
-  // que nao e esta) cai no mesmo 28000 de quem nao confirmou o e-mail, e nao num
-  // codigo proprio.
+  // que nao e esta) e um e-mail nao confirmado sao causas DIFERENTES com remedios
+  // OPOSTOS — "reenvie o link" contra "esta conta nao existe mais". Mesmo assim a
+  // RESPOSTA e a mesma, e este teste compara os campos um a um em vez de so
+  // conferir o SQLSTATE: mensagem, hint e detail tambem separam os dois casos se
+  // alguem os deixar divergir.
   //
-  // E DELIBERADO: dois codigos distintos aqui transformariam a RPC num oraculo
-  // sobre `auth.users` — quem chamasse saberia se um uid existe na instancia. Que
-  // hoje isso exija ja possuir um token daquele uid nao torna o vazamento
-  // aceitavel; e o mesmo argumento pelo qual `eh_admin()` de 0006 nao recebe
-  // parametro.
+  // POR QUE UNIFICAR: codigos ou textos distintos fariam da RPC um oraculo sobre
+  // o `auth.users` da instancia compartilhada. O argumento de que "so da para
+  // perguntar pelo proprio uid, porque e preciso ter o token dele" vale HOJE, com
+  // o PostgREST na frente — um canal lateral fechado por acidente de topologia
+  // nao esta fechado.
+  //
+  // O DIAGNOSTICO NAO SE PERDE: a RPC faz `RAISE LOG` do uid sem linha, que vai
+  // para o log do SERVIDOR e nao para o cliente (`client_min_messages` e NOTICE
+  // por padrao, acima de LOG na ordem do cliente; `log_min_messages` e WARNING,
+  // abaixo de LOG na ordem do servidor). Se um dia aquele LOG virar NOTICE por
+  // engano, a mensagem passa a viajar na resposta — e este teste nao veria, mas o
+  // 'notice' abaixo veria.
   const FANTASMA = "ffffffff-0000-0000-0000-00000000000f";
-  await assert.rejects(
-    () =>
-      comoPapel(bd.pool, { papel: "authenticated", sub: FANTASMA }, (cliente) =>
-        cliente.query(GARANTIR, ["Fantasma", null, null]),
-      ),
-    (erro) => {
-      assert.equal(erro.code, EMAIL_NAO_CONFIRMADO);
-      return true;
-    },
-  );
+
+  async function recusaDe(sub) {
+    const avisos = [];
+    try {
+      await comoPapel(bd.pool, { papel: "authenticated", sub }, (cliente) => {
+        cliente.on("notice", (aviso) => avisos.push(aviso.message));
+        return cliente.query(GARANTIR, ["Nome Qualquer", null, null]);
+      });
+    } catch (erro) {
+      return {
+        code: erro.code,
+        message: erro.message,
+        hint: erro.hint,
+        detail: erro.detail,
+        avisos,
+      };
+    }
+    throw new Error(`a RPC deveria ter recusado ${sub}`);
+  }
+
+  const pendente = await recusaDe(PENDENTE);
+  const fantasma = await recusaDe(FANTASMA);
+
+  assert.equal(pendente.code, EMAIL_NAO_CONFIRMADO);
+  assert.deepEqual(fantasma, pendente);
+  // O uid nao pode ter chegado ao cliente por nenhum canal, nem como aviso.
+  assert.deepEqual(fantasma.avisos, []);
 });

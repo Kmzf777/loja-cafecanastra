@@ -98,10 +98,6 @@ const SQL_SHIM_AUTH = `
     -- junto com o GoTrue sem nenhum teste dependendo disso.
     email_confirmed_at timestamptz
   );
-  -- Bancos criados por uma execucao anterior do harness nao existem (cada teste
-  -- sobe um cluster novo), mas o CREATE TABLE acima e IF NOT EXISTS: se um dia
-  -- ele passar a rodar sobre um banco reaproveitado, a coluna nova nao apareceria.
-  ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;
   CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
     LANGUAGE sql STABLE
   AS $$

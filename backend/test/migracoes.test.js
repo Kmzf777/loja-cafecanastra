@@ -176,7 +176,7 @@ test("recusa migracao vazia ou so com comentario", async () => {
 
 test("migracao salva com BOM (Bloco de Notas do Windows) aplica normalmente", async () => {
   // O BOM nao e hipotese: e o que o Bloco de Notas grava ao salvar um .sql em
-  // UTF-8, e as sete migracoes desta fase serao editadas nesta maquina Windows.
+  // UTF-8, e as migracoes desta fase serao editadas nesta maquina Windows.
   // Sem o corte na leitura o arquivo passa por temComandoSql() e morre so no
   // Postgres, com 22P05 ("character with byte sequence 0xef 0xbb 0xbf") — uma
   // mensagem que nao aponta para o editor e manda procurar erro de sintaxe onde

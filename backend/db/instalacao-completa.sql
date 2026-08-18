@@ -1743,6 +1743,16 @@ INSERT INTO canastra.migracoes (versao) VALUES ('0007_fundir_sacola')
 -- `user_id = auth.uid()` para alcancar qualquer dado. Se um dia a loja quiser
 -- cadastro fechado (convite, lista de espera), a regra entra AQUI, e o teste
 -- "LIMITE CONHECIDO" de test/garantir_cliente.test.js e o que fica vermelho.
+--
+-- E O TROCO CONCRETO DISSO, que e onde alguem vai de fato procurar um dia:
+-- `clientes.cpf` e UNIQUE. Uma conta estrangeira que chame esta RPC pode OCUPAR
+-- o CPF de uma pessoa real, e o cadastro legitimo dessa pessoa passa a falhar
+-- com 23505 sobre um numero que e dela. NAO e regressao — o formulario publico
+-- da loja sempre permitiu exatamente isso, e continua permitindo —, mas e o
+-- primeiro sintoma que chega ao suporte, e daqui ate a causa nao ha pista
+-- nenhuma. Quem for fechar essa porta: ela nao se fecha AQUI, e sim exigindo
+-- prova do CPF (o checkout com nota e quem tem essa prova), porque uma RPC nao
+-- tem como distinguir o dono do numero de quem apenas o digitou.
 
 /**
  * SECURITY DEFINER, E AQUI ISSO E PRIVILEGIO MESMO — nao e o caso de 0002/0006.
@@ -1850,6 +1860,51 @@ BEGIN
   END IF;
 
   /**
+   * QUEM JA E CLIENTE SAI AQUI, SEM ESCREVER NADA E SEM MAIS NENHUMA PERGUNTA.
+   *
+   * TRES coisas dependem deste retorno antecipado, e nenhuma e obvia:
+   *
+   *   1. O CADASTRO DA PESSOA NAO PODE SER REVERTIDO POR UM LOGIN. A cliente
+   *      corrige o proprio nome no perfil (a politica `clientes_dono_atualiza` de
+   *      0006 existe para isso) e entra noutro aparelho; um `DO UPDATE` aqui
+   *      devolveria o nome que o formulario de cadastro guardou. Perda de dado
+   *      silenciosa, disparada por um login. Vale igual para telefone e ainda
+   *      mais para `cpf`, que e UNIQUE: sobrescrever levantaria 23505.
+   *   2. A CHAMADA REPETIDA NAO PODE EXIGIR OS DADOS DE NOVO. A RPC roda em toda
+   *      sessao autenticada, e nao so no cadastro — e assim que o vinculo aparece
+   *      para quem confirma o e-mail dias depois. Sem esta saida, um
+   *      `garantir_cliente(NULL)` de quem JA e cliente morreria no NOT NULL de
+   *      `nome` (23502) antes de o ON CONFLICT ter chance de opinar: o NOT NULL e
+   *      verificado na linha proposta, nao no desfecho do conflito. Ou seja,
+   *      quebraria justamente o caso que a funcao existe para servir.
+   *   3. POR QUE ELE VEM ANTES DA CHECAGEM DE E-MAIL, e nao depois — esta ordem e
+   *      deliberada e ja esteve invertida. A confirmacao guarda o ato de VIRAR
+   *      cliente; aplica-la a quem JA e cliente tranca do lado de fora alguem que
+   *      ja entrou. Basta `email_confirmed_at` voltar a NULL por qualquer caminho
+   *      — troca de e-mail em alguma versao do GoTrue, conta migrada a mao,
+   *      restauracao parcial de backup — para um cliente antigo passar a receber
+   *      28000 em TODA sessao; e se o front leu 28000 como "voce ainda nao tem
+   *      vinculo", ele entra em laco pedindo a confirmacao de um link que a
+   *      pessoa ja clicou. Quem ja e cliente nao precisa reprovar nada: a prova
+   *      foi dada uma vez, e a linha e o recibo.
+   *
+   * O `ON CONFLICT` ABAIXO CONTINUA SENDO NECESSARIO, e nao e redundancia deste
+   * IF: entre o EXISTS e o INSERT ha uma janela, e duas sessoes da mesma pessoa
+   * (duas abas, `onAuthStateChange` disparando em paralelo) chegam nela. Sem o
+   * ON CONFLICT, uma das duas leva 23505 na chave primaria no meio do login. O IF
+   * cobre o caso comum sem escrever; o ON CONFLICT cobre a corrida.
+   *
+   * A LEITURA AQUI PASSA POR BAIXO DA RLS, por ser SECURITY DEFINER, e isso e o
+   * que se quer: a politica `clientes_dono_le` de 0006 mostraria a mesma linha,
+   * mas depender dela faria esta funcao quebrar em silencio se aquela politica
+   * fosse estreitada um dia — e "quebrar em silencio" aqui significa tentar
+   * inserir de novo.
+   */
+  IF EXISTS (SELECT 1 FROM canastra.clientes c WHERE c.user_id = id_do_usuario) THEN
+    RETURN;
+  END IF;
+
+  /**
    * E-MAIL CONFIRMADO, LIDO DE `auth.users` E NAO DE CLAIM NO JWT.
    *
    * O que isto impede: alguem se cadastra com o e-mail de OUTRA pessoa e vira
@@ -1875,14 +1930,6 @@ BEGIN
    * gerada e ausente em versoes antigas do GoTrue). Se um dia entrar login por
    * telefone, e ESTA linha que precisa mudar, e nao a tela de cadastro.
    *
-   * UID SEM LINHA EM `auth.users` CAI AQUI TAMBEM, com a MESMA recusa — conta
-   * apagada, ou token de uma instancia que nao e esta. `confirmado_em` fica NULL
-   * quando o SELECT nao acha nada, e o ramo e o mesmo. Isso e deliberado: dois
-   * codigos distintos fariam desta RPC um oraculo sobre `auth.users` — quem
-   * chamasse saberia se um uid existe na instancia compartilhada. Que hoje isso
-   * exija ja possuir um token daquele uid nao torna o vazamento aceitavel; e o
-   * mesmo argumento pelo qual `eh_admin()` de 0006 nao recebe parametro.
-   *
    * ERRCODE `invalid_authorization_specification` (28000) E SEPARADO DO 42501 DE
    * PROPOSITO, e essa e a unica distincao que quem chama precisa fazer: 42501
    * quer dizer "nao esta logado" e leva a tela de login; 28000 quer dizer "esta
@@ -1894,6 +1941,37 @@ BEGIN
   FROM auth.users u
   WHERE u.id = id_do_usuario;
 
+  /**
+   * UID SEM LINHA EM `auth.users`: a RESPOSTA e a mesma do e-mail pendente, e o
+   * DIAGNOSTICO vai para o log do servidor. As duas metades importam.
+   *
+   * A RESPOSTA E A MESMA de proposito. Dois SQLSTATEs distintos fariam desta RPC
+   * um oraculo sobre o `auth.users` da instancia compartilhada. O argumento de
+   * que "so da para perguntar sobre o proprio uid, porque e preciso ter o token
+   * dele" e mais fraco do que parece: ele vale HOJE, com o PostgREST na frente,
+   * e deixa de valer no dia em que qualquer outro caminho chamar esta funcao. Um
+   * canal lateral fechado por acidente de topologia nao esta fechado.
+   *
+   * MAS OS DOIS CASOS TEM REMEDIOS OPOSTOS — "reenvie o link" contra "esta conta
+   * nao existe mais, ou este token e de outra instancia" —, e quem for depurar
+   * "esta pessoa nao consegue terminar o cadastro" recebia a orientacao errada.
+   * O `RAISE LOG` atende os dois lados de uma vez: a verdade vai para o log do
+   * servidor e NAO para o cliente. Com os defaults, `client_min_messages` e
+   * NOTICE, que fica ACIMA de LOG na ordem do CLIENTE, entao a mensagem nao viaja
+   * na resposta; e `log_min_messages` e WARNING, que fica ABAIXO de LOG na ordem
+   * do SERVIDOR, entao ela e gravada. (As duas ordens sao diferentes, e essa
+   * assimetria e justamente o que torna LOG util aqui.) A resposta ao cliente
+   * fica byte a byte identica nos dois ramos — test/garantir_cliente.test.js
+   * compara `code`, `message` e `hint` dos dois lado a lado para provar isso.
+   *
+   * `NOT FOUND`, e nao `confirmado_em IS NULL`: o segundo nao distingue "nao ha
+   * linha" de "ha linha, com a coluna nula", que e exatamente a distincao que
+   * este log existe para registrar.
+   */
+  IF NOT FOUND THEN
+    RAISE LOG 'garantir_cliente: uid % sem linha em auth.users', id_do_usuario;
+  END IF;
+
   IF confirmado_em IS NULL THEN
     RAISE EXCEPTION 'Confirme o e-mail desta conta antes de continuar.'
       USING ERRCODE = 'invalid_authorization_specification',
@@ -1901,47 +1979,12 @@ BEGIN
   END IF;
 
   /**
-   * QUEM JA E CLIENTE SAI AQUI, SEM ESCREVER NADA.
-   *
-   * Duas coisas dependem deste retorno antecipado, e nenhuma e obvia:
-   *
-   *   1. O CADASTRO DA PESSOA NAO PODE SER REVERTIDO POR UM LOGIN. A cliente
-   *      corrige o proprio nome no perfil (a politica `clientes_dono_atualiza` de
-   *      0006 existe para isso) e entra noutro aparelho; um `DO UPDATE` aqui
-   *      devolveria o nome que o formulario de cadastro guardou. Perda de dado
-   *      silenciosa, disparada por um login. Vale igual para telefone e ainda
-   *      mais para `cpf`, que e UNIQUE: sobrescrever levantaria 23505.
-   *   2. A CHAMADA REPETIDA NAO PODE EXIGIR OS DADOS DE NOVO. A RPC roda em toda
-   *      sessao autenticada, e nao so no cadastro — e assim que o vinculo aparece
-   *      para quem confirma o e-mail dias depois. Sem esta saida, um
-   *      `garantir_cliente(NULL)` de quem JA e cliente morreria no NOT NULL de
-   *      `nome` (23502) antes de o ON CONFLICT ter chance de opinar: o NOT NULL e
-   *      verificado na linha proposta, nao no desfecho do conflito. Ou seja,
-   *      quebraria justamente o caso que a funcao existe para servir.
-   *
-   * O `ON CONFLICT` ABAIXO CONTINUA SENDO NECESSARIO, e nao e redundancia deste
-   * IF: entre o EXISTS e o INSERT ha uma janela, e duas sessoes da mesma pessoa
-   * (duas abas, `onAuthStateChange` disparando em paralelo) chegam nela. Sem o
-   * ON CONFLICT, uma das duas leva 23505 na chave primaria no meio do login. O IF
-   * cobre o caso comum sem escrever; o ON CONFLICT cobre a corrida.
-   *
-   * A LEITURA AQUI PASSA POR BAIXO DA RLS, por ser SECURITY DEFINER, e isso e o
-   * que se quer: a politica `clientes_dono_le` de 0006 mostraria a mesma linha,
-   * mas depender dela faria esta funcao quebrar em silencio se aquela politica
-   * fosse estreitada um dia — e "quebrar em silencio" aqui significa tentar
-   * inserir de novo.
-   */
-  IF EXISTS (SELECT 1 FROM canastra.clientes c WHERE c.user_id = id_do_usuario) THEN
-    RETURN;
-  END IF;
-
-  /**
    * `nullif(btrim(...), '')` nos tres, e cada um resolve um problema diferente:
    *
    *   nome ...... "   " vindo de um formulario passa pelo NOT NULL de 0002 e cria
    *               um cliente que aparece em BRANCO no painel e no rotulo da
-   *               encomenda, sem erro nenhum na hora. Virando NULL, a propria
-   *               coluna recusa com 23502, no momento em que da para consertar.
+   *               encomenda, sem erro nenhum na hora. Virando NULL, ele cai no
+   *               RAISE logo abaixo, no momento em que da para consertar.
    *   cpf ....... e UNIQUE. Duas pessoas que deixam o campo vazio mandariam '' as
    *               duas, e a SEGUNDA levaria 23505 — no cadastro dela, falando de
    *               um CPF que ela nao digitou. Com NULL, o indice trata cada
@@ -1950,10 +1993,38 @@ BEGIN
    *   telefone .. sem UNIQUE nem NOT NULL, entra so para os tres campos guardarem
    *               a MESMA nocao de "nao informado" — um '' aqui e um NULL ali
    *               fariam a tela de perfil precisar testar as duas formas.
+   *
+   * OS TRES ESTAO MEDIDOS em test/garantir_cliente.test.js, inclusive o desfecho
+   * do `cpf` com dois cadastros vazios na mesma transacao. Antes disso, este
+   * paragrafo era a unica coisa segurando as tres linhas abaixo — e um paragrafo
+   * nao fica vermelho quando alguem apaga a linha que ele defende.
    */
   nome_limpo     := nullif(btrim(nome), '');
   telefone_limpo := nullif(btrim(telefone), '');
   cpf_limpo      := nullif(btrim(cpf), '');
+
+  /**
+   * NOME EM BRANCO: recusa CURADA, e nao a da coluna.
+   *
+   * Sem este RAISE a recusa acontece do mesmo jeito — o NOT NULL de 0002 barra —,
+   * mas ela chega no navegador como "null value in column nome of relation
+   * clientes violates not-null constraint", com nome de tabela e de coluna
+   * dentro. ALTO e CURADO sao propriedades diferentes, e este arquivo gasta
+   * dezenas de linhas defendendo a segunda: nao da para exigir que quem chama
+   * ramifique por SQLSTATE escolhido e entregar cru justamente o erro de
+   * formulario mais provavel de todos.
+   *
+   * O ERRCODE CONTINUA SENDO 23502, E ISSO E A ESCOLHA, nao a preguica: e o
+   * codigo que a propria coluna usaria, entao quem chama trata UM caso, venha a
+   * recusa daqui ou da tabela — inclusive se um dia este RAISE for removido por
+   * engano. Dentro desta funcao 23502 nao e ambiguo: `user_id` ja foi garantido
+   * nao-nulo la em cima, e `nome` e a unica outra coluna NOT NULL de `clientes`.
+   */
+  IF nome_limpo IS NULL THEN
+    RAISE EXCEPTION 'O nome é obrigatório para criar o cadastro.'
+      USING ERRCODE = 'not_null_violation',
+            HINT = 'Preencha o nome de quem vai receber a encomenda.';
+  END IF;
 
   /**
    * O uid vem de `auth.uid()` e de lugar nenhum mais — REGRA 1 DO CABECALHO.
@@ -1965,10 +2036,40 @@ BEGIN
    * PRE-REQUISITO de administrador — e nao pode, nem por engano futuro, dar o
    * segundo passo. Virar administrador continua sendo escrita de `service_role`,
    * pelo servico, e o REVOKE de 0003 continua valendo.
+   *
+   * O `EXCEPTION` E O SEGUNDO ERRO DE FORMULARIO CURADO, pelo mesmo motivo do
+   * nome em branco: um CPF ja cadastrado chegaria no navegador como 23505 com
+   * `clientes_cpf_key` no corpo, e "clientes_cpf_key" nao e uma frase que se
+   * mostre a alguem.
+   *
+   * O QUE TORNA A TRADUCAO CORRETA, e ela depende disto: depois do
+   * `ON CONFLICT (user_id) DO NOTHING` a chave primaria NAO PODE MAIS levantar
+   * 23505, e `UNIQUE (cpf)` e a unica outra restricao de unicidade de
+   * `canastra.clientes` (0002). Logo todo `unique_violation` que chega neste
+   * handler E o CPF. ACRESCENTAR OUTRO UNIQUE AQUELA TABELA QUEBRA A INFERENCIA —
+   * e o sintoma seria uma mensagem confiante falando de CPF sobre um conflito que
+   * nao e de CPF. Quem mexer em 0002 tem de reler isto.
+   *
+   * NAO E UMA PRE-CHECAGEM, de proposito: um `SELECT ... WHERE cpf = ...` antes
+   * do INSERT teria a mesma janela de corrida do EXISTS la em cima, e duas
+   * sessoes simultaneas voltariam a produzir o 23505 cru que ele existe para
+   * traduzir. O handler ve o desfecho, nao a intencao.
+   *
+   * NAO VAZA NADA DE NOVO: "este CPF ja esta cadastrado" ja era dedutivel do
+   * 23505 cru e do nome da constraint. O que muda e so quem consegue ler a frase.
+   *
+   * ERRCODE `unique_violation` (23505) mantido pela mesma razao do 23502 acima: e
+   * o codigo que o indice usaria, entao a tela trata um caso so.
    */
-  INSERT INTO canastra.clientes (user_id, nome, telefone, cpf)
-  VALUES (id_do_usuario, nome_limpo, telefone_limpo, cpf_limpo)
-  ON CONFLICT (user_id) DO NOTHING;
+  BEGIN
+    INSERT INTO canastra.clientes (user_id, nome, telefone, cpf)
+    VALUES (id_do_usuario, nome_limpo, telefone_limpo, cpf_limpo)
+    ON CONFLICT (user_id) DO NOTHING;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'Este CPF já está cadastrado em outra conta desta loja.'
+      USING ERRCODE = 'unique_violation',
+            HINT = 'Confira o número digitado, ou entre com a conta que já usa este CPF.';
+  END;
 END;
 $garantir_cliente$;
 
