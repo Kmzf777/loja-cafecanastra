@@ -1788,6 +1788,7 @@ ON CONFLICT (id) DO NOTHING;
 DO $conta_admin$
 DECLARE
   id_do_usuario uuid;
+  coluna        text;
 BEGIN
   SELECT id INTO id_do_usuario FROM auth.users WHERE email = 'admin@canastra.teste';
 
@@ -1826,6 +1827,35 @@ BEGIN
     RAISE NOTICE 'Conta já existia, senha preservada: %', 'admin@canastra.teste';
   END IF;
 
+  -- OS CAMPOS DE TOKEN PRECISAM SER '' — NUNCA NULL.
+  --
+  -- Medido contra um Supabase de verdade: com eles em NULL, o login responde
+  -- 500 com "Database error querying schema" e nada no erro aponta para a
+  -- causa. O GoTrue e escrito em Go e mapeia essas colunas como `string`, nao
+  -- `*string`; ler NULL ali estoura na desserializacao, antes de qualquer
+  -- verificacao de senha. A conta existe, a senha esta certa, e o login falha.
+  --
+  -- Feito em UPDATE, e coluna a coluna com checagem de existencia, porque a
+  -- lista muda entre versoes do GoTrue: um INSERT citando coluna que a versao
+  -- instalada nao tem quebraria a instalacao inteira.
+  FOREACH coluna IN ARRAY ARRAY[
+    'confirmation_token', 'recovery_token', 'email_change',
+    'email_change_token_new', 'email_change_token_current',
+    'phone_change', 'phone_change_token', 'reauthentication_token'
+  ]
+  LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'auth' AND table_name = 'users'
+        AND column_name = coluna
+    ) THEN
+      EXECUTE format(
+        'UPDATE auth.users SET %I = '''' WHERE id = %L AND %I IS NULL',
+        coluna, id_do_usuario, coluna
+      );
+    END IF;
+  END LOOP;
+
   -- O vinculo com a loja. E ESTA linha, e nao o token, que faz alguem ser
   -- cliente daqui: as politicas de RLS todas passam por canastra.eh_cliente().
   INSERT INTO canastra.clientes (user_id, nome)
@@ -1841,6 +1871,7 @@ END $conta_admin$;
 DO $conta_cliente$
 DECLARE
   id_do_usuario uuid;
+  coluna        text;
 BEGIN
   SELECT id INTO id_do_usuario FROM auth.users WHERE email = 'cliente@canastra.teste';
 
@@ -1878,6 +1909,35 @@ BEGIN
   ELSE
     RAISE NOTICE 'Conta já existia, senha preservada: %', 'cliente@canastra.teste';
   END IF;
+
+  -- OS CAMPOS DE TOKEN PRECISAM SER '' — NUNCA NULL.
+  --
+  -- Medido contra um Supabase de verdade: com eles em NULL, o login responde
+  -- 500 com "Database error querying schema" e nada no erro aponta para a
+  -- causa. O GoTrue e escrito em Go e mapeia essas colunas como `string`, nao
+  -- `*string`; ler NULL ali estoura na desserializacao, antes de qualquer
+  -- verificacao de senha. A conta existe, a senha esta certa, e o login falha.
+  --
+  -- Feito em UPDATE, e coluna a coluna com checagem de existencia, porque a
+  -- lista muda entre versoes do GoTrue: um INSERT citando coluna que a versao
+  -- instalada nao tem quebraria a instalacao inteira.
+  FOREACH coluna IN ARRAY ARRAY[
+    'confirmation_token', 'recovery_token', 'email_change',
+    'email_change_token_new', 'email_change_token_current',
+    'phone_change', 'phone_change_token', 'reauthentication_token'
+  ]
+  LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'auth' AND table_name = 'users'
+        AND column_name = coluna
+    ) THEN
+      EXECUTE format(
+        'UPDATE auth.users SET %I = '''' WHERE id = %L AND %I IS NULL',
+        coluna, id_do_usuario, coluna
+      );
+    END IF;
+  END LOOP;
 
   -- O vinculo com a loja. E ESTA linha, e nao o token, que faz alguem ser
   -- cliente daqui: as politicas de RLS todas passam por canastra.eh_cliente().

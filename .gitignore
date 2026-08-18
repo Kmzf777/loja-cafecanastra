@@ -13,3 +13,8 @@ estrutura.sql
 # Nao versionar. Ver docs/seguranca-dados-pessoais.md.
 *.csv
 .dumps-antigos/
+
+# Variantes de env (.env.local, .env.production...). O padrao ".env" acima
+# casa so o nome exato, e um .env.local com credencial iria para o repositorio.
+.env*
+!.env.example
