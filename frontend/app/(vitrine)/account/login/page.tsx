@@ -2,13 +2,17 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Botao } from "@/components/ui/Botao";
 import {
+  CODIGO_EMAIL_NAO_CONFIRMADO,
+  ErroDeLogin,
   entrar,
   recuperarSessao,
   destinoDe,
   destinoSeguro,
 } from "@/lib/conta/sessao";
+import { reenviarConfirmacao } from "@/lib/conta/cadastro";
 
 /**
  * Entrar — a rota que faltava.
@@ -21,6 +25,12 @@ import {
  *
  * `?de=` carrega para onde voltar depois de entrar, para quem chegou aqui
  * empurrado pelo guard não ser jogado numa página genérica.
+ *
+ * O QUE MUDOU COM O GoTrue: a autenticação inteira vive em `lib/conta/sessao.ts`
+ * e a assinatura não mudou, então esta tela quase não mudou. O que ela ganhou é
+ * a AÇÃO que faltava — `email_not_confirmed` não se resolve digitando a senha
+ * de novo, e antes a pessoa lia a recusa sem ter para onde ir. Agora o botão de
+ * reenviar o link aparece exatamente nesse caso, e em nenhum outro.
  */
 
 const CAMPO =
@@ -39,6 +49,12 @@ function FormularioDeLogin() {
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [conferindo, setConferindo] = useState(true);
+  // Só vira `true` quando o GoTrue devolve `email_not_confirmed`. Sem esta
+  // separação o botão de reenviar apareceria também para quem errou a senha —
+  // e aí a tela estaria oferecendo reenviar confirmação de uma conta que talvez
+  // nem exista, o que é um verificador de e-mail cadastrado de graça.
+  const [faltaConfirmar, setFaltaConfirmar] = useState(false);
+  const [reenvio, setReenvio] = useState<string | null>(null);
 
   // Quem já tem sessão válida não precisa ver o formulário de novo.
   useEffect(() => {
@@ -55,9 +71,23 @@ function FormularioDeLogin() {
     };
   }, [router, de]);
 
+  async function aoReenviar() {
+    setReenvio("enviando");
+    try {
+      await reenviarConfirmacao(email);
+      setReenvio("Enviamos o link de novo. Confira também o lixo eletrônico.");
+    } catch (e) {
+      setReenvio(
+        e instanceof Error ? e.message : "Não foi possível reenviar agora.",
+      );
+    }
+  }
+
   async function aoEnviar(evento: React.FormEvent) {
     evento.preventDefault();
     setErro(null);
+    setFaltaConfirmar(false);
+    setReenvio(null);
     setEnviando(true);
     try {
       const { usuario } = await entrar(email, senha);
@@ -70,6 +100,12 @@ function FormularioDeLogin() {
       else router.replace(destino);
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Não foi possível entrar.");
+      // O código vem do GoTrue e atravessa `sessao.ts` intacto justamente para
+      // esta decisão. Casar o TEXTO da mensagem para descobrir o mesmo quebraria
+      // no dia em que a frase fosse melhorada.
+      setFaltaConfirmar(
+        e instanceof ErroDeLogin && e.codigo === CODIGO_EMAIL_NAO_CONFIRMADO,
+      );
       setEnviando(false);
     }
   }
@@ -116,16 +152,35 @@ function FormularioDeLogin() {
         />
       </div>
 
-      {/* §11: o erro explica e resolve. A mensagem vem do backend — "Email ou
-          senha inválidos", "Sua conta ainda não foi ativada" — e não é
-          substituída por um genérico. */}
+      {/* §11: o erro explica e RESOLVE. A mensagem já vem traduzida para o
+          português da loja por `sessao.ts` — o GoTrue diria "Invalid login
+          credentials", em inglês, que é mensagem de depuração de outra empresa.
+          E quando a recusa é "e-mail não confirmado", a saída vem junto. */}
       {erro ? (
-        <p
+        <div
           role="alert"
           className="mt-5 border-l-2 border-vermelho bg-cal-puro py-2 pl-3 text-[14px]"
         >
-          {erro}
-        </p>
+          <p>{erro}</p>
+          {faltaConfirmar ? (
+            <p className="mt-2">
+              {reenvio && reenvio !== "enviando" ? (
+                reenvio
+              ) : (
+                <button
+                  type="button"
+                  onClick={aoReenviar}
+                  disabled={reenvio === "enviando"}
+                  className="text-vermelho underline underline-offset-4 disabled:text-fuligem-55"
+                >
+                  {reenvio === "enviando"
+                    ? "Enviando…"
+                    : "Reenviar o link de confirmação"}
+                </button>
+              )}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       <Botao
@@ -137,12 +192,28 @@ function FormularioDeLogin() {
         {enviando ? "Entrando…" : "Entrar"}
       </Botao>
 
-      {/* Sem link para "/#contato": aquela âncora não existe em página
-          nenhuma, e link quebrado numa tela de login é onde menos se pode ter.
-          O rodapé, presente em toda a vitrine, já leva aos canais de contato. */}
+      {/* O texto anterior — "fale com a gente pelos canais no rodapé, o
+          cadastro pela loja entra em breve" — era a confissão de que a vitrine
+          não conseguia adquirir cliente nenhum. Agora consegue. */}
       <p className="mt-6 text-[14px] text-fuligem-55">
-        Ainda não tem conta? Fale com a gente pelos canais no rodapé — o
-        cadastro pela loja entra em breve.
+        Ainda não tem conta?{" "}
+        <Link
+          href="/account/cadastro"
+          className="text-vermelho underline underline-offset-4"
+        >
+          Criar conta
+        </Link>
+        .
+      </p>
+      <p className="mt-2 text-[14px] text-fuligem-55">
+        Esqueceu a senha?{" "}
+        <Link
+          href="/account/reset-password"
+          className="text-vermelho underline underline-offset-4"
+        >
+          Receber um link para redefinir
+        </Link>
+        .
       </p>
     </form>
   );
