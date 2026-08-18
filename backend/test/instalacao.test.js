@@ -29,7 +29,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
 const { subirPostgres } = require("./ajuda/postgres.js");
-const { aplicarMigracoes } = require("../db/migrar.js");
+const { aplicarMigracoes, listarMigracoes, PASTA_PADRAO } = require("../db/migrar.js");
 const { semearProdutos, semearOpcoes, semearConfig } = require("../db/seed.js");
 const {
   gerar,
@@ -150,7 +150,7 @@ test("os dois arquivos aplicam num banco que nao seja UTF-8", () => {
   }
 });
 
-test("as mesmas sete migracoes ficam registradas nos dois caminhos", async () => {
+test("as mesmas migracoes ficam registradas nos dois caminhos", async () => {
   // E isto que faz `npm run db:migrar` ser um no-op depois da instalacao pelo
   // SQL. Sem o registro, o runner tentaria reaplicar tudo e morreria no primeiro
   // CREATE de objeto existente.
@@ -158,7 +158,17 @@ test("as mesmas sete migracoes ficam registradas nos dois caminhos", async () =>
     "canastra.migracoes",
     "SELECT versao FROM canastra.migracoes ORDER BY versao",
   );
-  assert.equal(versoes.length, 7);
+  // A contagem vem da PASTA, e nao de um numero escrito aqui: com o literal, toda
+  // migracao nova reprovava este teste por um motivo que nao e o dele — e o
+  // reflexo de quem visse o vermelho seria trocar o numero, sem conferir se as
+  // duas listas continuam iguais. `iguais()` acima ja compara os dois bancos; o
+  // que falta e provar que nenhum dos dois PULOU uma migracao, e disso quem sabe
+  // e o disco.
+  const naPasta = await listarMigracoes(PASTA_PADRAO);
+  assert.deepEqual(
+    versoes.map((linha) => linha.versao),
+    naPasta.map((m) => m.versao),
+  );
 });
 
 test("tabelas, colunas, tipos e defaults sao identicos", async () => {

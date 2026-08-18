@@ -5,7 +5,7 @@
  * SQL do Supabase para levantar a loja inteira de uma vez.
  *
  * POR QUE UM GERADOR, E NAO UM ARQUIVO ESCRITO A MAO
- * O arquivo colavel precisa conter as mesmas sete migracoes e o mesmo catalogo
+ * O arquivo colavel precisa conter as mesmas oito migracoes e o mesmo catalogo
  * que `db:migrar` e `db:seed` aplicam. Mantido a mao, ele diverge na primeira
  * migracao nova — e a divergencia nao levanta erro: leva a um banco instalado
  * pelo SQL diferente do instalado pelo runner, e isso so aparece quando alguem
@@ -141,7 +141,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 async function secaoDasMigracoes() {
   const migracoes = await listarMigracoes(PASTA_PADRAO);
-  let sql = `${moldura("1. Estrutura: as sete migrações, na ordem do runner")}
+  let sql = `${moldura(`1. Estrutura: as ${migracoes.length} migrações, na ordem do runner`)}
 -- Identico ao BOOTSTRAP de db/migrar.js — inclusive os REVOKE em
 -- canastra.migracoes, que mantem o livro-caixa das migracoes fora do PostgREST.
 ${BOOTSTRAP.trim()}
@@ -329,8 +329,8 @@ ${FIM_DAS_CONTAS}
 
 function rodape() {
   return `${moldura("4. Conferência")}
--- Sete linhas: a instalacao ficou registrada e \`npm run db:migrar\` nao tem mais
--- nada a fazer. Se aqui vier menos de 7, alguma migracao nao rodou.
+-- Uma linha por migracao: a instalacao ficou registrada e \`npm run db:migrar\` nao
+-- tem mais nada a fazer. Se aqui vier menos, alguma migracao nao rodou.
 SELECT versao, aplicada_em FROM canastra.migracoes ORDER BY versao;
 
 -- 29 produtos, 1 configuracao, 2 clientes, 1 administrador.

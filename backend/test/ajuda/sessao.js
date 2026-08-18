@@ -33,6 +33,25 @@ const PERMISSAO_NEGADA = "42501";
 const REMOCAO_BARRADA = "23001";
 
 /**
+ * SQLSTATE `invalid_authorization_specification` — com ele que
+ * `canastra.garantir_cliente` (migracao 0008) recusa quem ainda nao confirmou o
+ * e-mail.
+ *
+ * E UM CODIGO SEPARADO DE `PERMISSAO_NEGADA` DE PROPOSITO, e a distincao e
+ * exatamente o que quem chama precisa: 42501 quer dizer "voce nao esta logado
+ * nesta loja" (e o que `anon` recebe do REVOKE, e o que uma sessao sem
+ * `auth.uid()` recebe da propria funcao) e leva a tela de login; 28000 quer dizer
+ * "voce esta logado, falta confirmar o e-mail" e leva a "reenviar confirmacao".
+ * Um codigo so para os dois obrigaria a tela a adivinhar — ou, pior, a casar
+ * TEXTO de mensagem, que e o que este arquivo existe para impedir.
+ *
+ * Mora aqui, e nao no arquivo de teste da RPC, porque a tela de cadastro e o
+ * script de aceitacao vao assertar o mesmo codigo: duas copias divergem sem
+ * ninguem perceber.
+ */
+const EMAIL_NAO_CONFIRMADO = "28000";
+
+/**
  * Falha do proprio harness (BEGIN, troca de papel, injecao do claim), nao da
  * politica sob teste.
  *
@@ -132,4 +151,5 @@ module.exports = {
   ErroDeHarness,
   PERMISSAO_NEGADA,
   REMOCAO_BARRADA,
+  EMAIL_NAO_CONFIRMADO,
 };

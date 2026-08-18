@@ -77,8 +77,31 @@ const SQL_SHIM_AUTH = `
   CREATE SCHEMA IF NOT EXISTS auth;
   CREATE TABLE IF NOT EXISTS auth.users (
     id    uuid PRIMARY KEY,
-    email text UNIQUE
+    email text UNIQUE,
+    -- POR QUE O SHIM CRESCEU (era so id + email ate 0008).
+    --
+    -- A RPC \`canastra.garantir_cliente\` (migracao 0008) recusa quem ainda nao
+    -- confirmou o e-mail, e le ESTA coluna em vez do JWT — um claim e escrito por
+    -- quem emite o token, e nesta instancia compartilhada quem emite nao e a loja.
+    -- Sem a coluna no shim, o teste daquela recusa nao teria como existir: a
+    -- funcao morreria com 42703 ("column does not exist") em TODA chamada, e o
+    -- caminho feliz iria junto.
+    --
+    -- SEM DEFAULT, de proposito, e isso e o fiel da balanca do teste negativo: no
+    -- GoTrue de verdade a coluna nasce NULL e so e preenchida quando a pessoa
+    -- clica no link de confirmacao. Um \`DEFAULT now()\` aqui deixaria toda conta
+    -- semeada nascer confirmada e o teste de "e-mail pendente" passaria a ser
+    -- impossivel de escrever sem um UPDATE que ninguem lembraria de fazer.
+    --
+    -- SO ESTA COLUNA. \`auth.users\` de verdade tem dezenas (phone_confirmed_at,
+    -- is_anonymous, raw_app_meta_data...); copiar a lista faria o shim envelhecer
+    -- junto com o GoTrue sem nenhum teste dependendo disso.
+    email_confirmed_at timestamptz
   );
+  -- Bancos criados por uma execucao anterior do harness nao existem (cada teste
+  -- sobe um cluster novo), mas o CREATE TABLE acima e IF NOT EXISTS: se um dia
+  -- ele passar a rodar sobre um banco reaproveitado, a coluna nova nao apareceria.
+  ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;
   CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
     LANGUAGE sql STABLE
   AS $$
