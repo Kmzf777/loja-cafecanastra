@@ -137,8 +137,16 @@ GRANT SELECT ON canastra.config_loja TO anon;
 -- a RLS ainda nao tem politica, e a primeira politica ampla demais na migracao
 -- seguinte o acorda. Aqui o dano seria banner e barra de aviso da loja
 -- reescritos, ou promocao criada, por um token de outro projeto da instancia
--- compartilhada. Preco e promocao sao coisa do painel, que fala pelo
--- `service_role` — nenhum cliente tem o que escrever nestas duas.
+-- compartilhada.
+--
+-- DUAS COISAS DESTE PARAGRAFO MUDARAM EM 0006, e o comentario fica registrando
+-- as duas em vez de virar mentira. A primeira: o REVOKE foi DESFEITO para estas
+-- duas tabelas, porque o painel do admin fala DIRETO com o Supabase e admin
+-- autentica como `authenticated` — a segunda tranca foi trocada pela politica
+-- `canastra.eh_admin()`, que so passou a existir la. A segunda: nao e verdade
+-- que "o painel fala pelo `service_role`"; pelo servico Node passa apenas o
+-- upload de imagem, e o resto do painel vai por PostgREST com RLS. Continua
+-- valendo que nenhum CLIENTE tem o que escrever nestas duas.
 REVOKE INSERT, UPDATE, DELETE ON canastra.promocoes, canastra.config_loja
   FROM authenticated;
 

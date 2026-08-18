@@ -74,9 +74,24 @@ CREATE TABLE canastra.produto_opcoes (
 /**
  * O recorte que a `anon key` enxerga.
  *
+ * LEIA ISTO ANTES DO RESTO DO BLOCO: A MIGRACAO 0006 INVERTEU O
+ * `security_invoker` DESTA VIEW PARA TRUE. O texto abaixo descreve o arranjo
+ * ORIGINAL e continua aqui porque explica de onde a loja veio e o que foi
+ * medido — mas ele NAO descreve o banco de hoje, e a decisao de hoje esta em
+ * 0006, que e onde um leitor futuro deve procurar. Em resumo do que mudou: a
+ * vitrine deixou de depender da isencao de RLS do dono da view e passou a ler
+ * `canastra.produtos` com os privilegios de quem chama, via GRANT de COLUNA
+ * mais a politica `produtos_leitura_publica`. O que se ganhou foi o fim do modo
+ * de falha silencioso do FORCE RLS descrito adiante.
+ *
+ * A DDL desta view NAO foi reescrita de proposito: migracao aplicada nao roda de
+ * novo, entao editar o `WITH (...)` daqui so valeria para instalacao nova e as
+ * duas populacoes divergiriam em silencio. A troca e feita por ALTER em 0006.
+ *
  * A vitrine le o catalogo com a chave anonima, que e publica por definicao —
  * ela viaja no bundle. Dar SELECT na tabela inteira publicaria `custo` junto
- * com o preco. A view define exatamente o que e publico.
+ * com o preco. A view define exatamente o que e publico — e, desde 0006, o
+ * GRANT de coluna na tabela base repete essa mesma lista.
  *
  * security_invoker = FALSE, de proposito e ao contrario do reflexo habitual.
  * A view roda com os poderes de quem a criou, ignorando a RLS da tabela base —
@@ -98,14 +113,18 @@ CREATE TABLE canastra.produto_opcoes (
  *   + FORCE ROW LEVEL SECURITY ...... anon le ZERO linhas, sem erro nenhum
  *   + security_invoker = true ....... 42501, permission denied for table produtos
  *
- * As tres coisas que quebram isto: ligar FORCE RLS em `produtos`, virar o
- * `security_invoker` para true, e a view passar a pertencer a outro papel
- * (ALTER VIEW ... OWNER TO, ou recriar a view por outro usuario). Repare no modo
- * de falha do FORCE: vitrine VAZIA, sem erro, sem log — o pior dos tres. Por
- * isso test/catalogo.test.js confere `relforcerowsecurity` e o `security_invoker`
- * no catalogo do Postgres, e nao so o comportamento: no harness o dono e
+ * As tres coisas que quebravam isto, no arranjo original: ligar FORCE RLS em
+ * `produtos`, virar o `security_invoker` para true, e a view passar a pertencer
+ * a outro papel (ALTER VIEW ... OWNER TO, ou recriar a view por outro usuario).
+ * Repare no modo de falha do FORCE: vitrine VAZIA, sem erro, sem log — o pior
+ * dos tres, e a razao pela qual 0006 desfez este arranjo. Depois de 0006 a lista
+ * e outra: quem quebra a vitrine e virar o `security_invoker` de volta para
+ * false, ou mexer no GRANT de coluna da tabela base. Por isso
+ * test/catalogo.test.js confere `relforcerowsecurity` e o `security_invoker` no
+ * catalogo do Postgres, e nao so o comportamento: no harness o dono e
  * superusuario, e superusuario ignora ate o FORCE, entao um teste apenas
- * comportamental passaria verde com a producao quebrada.
+ * comportamental passaria verde com a producao quebrada. (O valor esperado do
+ * `security_invoker` naquele teste e `true` desde 0006.)
  *
  * NAO ESTA APURADO se o dono em PRODUCAO e superusuario, e a frase acima nao
  * afirma que e. Na imagem oficial do Supabase self-hosted o papel `postgres` E
@@ -194,6 +213,16 @@ GRANT SELECT ON canastra.produto_opcoes TO anon;
  * para instalacoes novas e as duas populacoes divergiriam em silencio, que e o
  * pior desfecho possivel para uma correcao de seguranca. Fica registrado como a
  * direcao certa para quando houver uma migracao propria para isso.
+ *
+ * ESTE REVOKE FOI DESFEITO EM 0006, de propria vontade e com o troco pago: o
+ * painel do admin fala DIRETO com o Supabase por supabase-js, e administrador
+ * autentica como `authenticated` igual a todo mundo — sem estes privilegios ele
+ * nao cadastra produto nenhum. A segunda tranca so pode ser aberta porque a
+ * primeira finalmente existe: 0006 poe no lugar dela politicas estreitas
+ * (`canastra.eh_admin()`) e test/rls.test.js afirma, como invariante sobre
+ * `pg_policies`, que nenhuma politica de escrita deste schema e `USING (true)` —
+ * exatamente a distracao que este bloco previu. O REVOKE de `admins`, logo
+ * abaixo, NAO foi desfeito e nao deve ser.
  */
 REVOKE INSERT, UPDATE, DELETE ON canastra.produtos, canastra.produto_opcoes
   FROM authenticated;
@@ -218,11 +247,24 @@ REVOKE INSERT, UPDATE, DELETE ON canastra.produtos, canastra.produto_opcoes
  * cedo que roda depois de `admins` existir — o criterio certo para janela de
  * exposicao. A arrumacao por assunto perde para isso.
  *
- * `clientes` NAO leva REVOKE, e nem `enderecos`, `carrinhos`, `carrinho_itens`
- * (0004) ou `pedidos` (0005): nessas o cliente logado escreve de verdade — cria
- * a propria conta, salva endereco, mexe na sacola, fecha pedido. Ali quem tem de
- * fazer o recorte e a politica de RLS, que sabe distinguir a linha do dono da
- * linha do vizinho; o privilegio de tabela nao sabe.
+ * `clientes` NAO leva REVOKE aqui, e nem `enderecos`, `carrinhos`,
+ * `carrinho_itens` (0004) ou `pedidos` (0005): nessas o cliente logado escreve
+ * de verdade, e quem tem de fazer o recorte e a politica de RLS, que sabe
+ * distinguir a linha do dono da linha do vizinho; o privilegio de tabela nao
+ * sabe.
+ *
+ * DUAS DAS QUATRO JUSTIFICATIVAS ORIGINAIS DESTA FRASE ERAM FALSAS, e o registro
+ * fica porque a correcao importa mais que a redacao limpa. Diziam-se quatro
+ * escritas do cliente logado: "cria a propria conta", "salva endereco", "mexe na
+ * sacola", "fecha pedido". A primeira e a ultima nunca foram dele — cadastro e
+ * checkout rodam pelo `service_role`, no servico Node —, e 0006 tornou isso
+ * explicito ao NAO criar politica de INSERT em `clientes` nem em `pedidos`. As
+ * duas do meio continuam certas e sao as unicas que sustentam este paragrafo.
+ *
+ * Em consequencia, 0006 REVOGA `INSERT` e `DELETE` de `authenticated` nessas
+ * duas tabelas: onde o cliente nao escreve, o privilegio nao serve para nada e
+ * so espera uma politica distraida para virar furo. `enderecos`, `carrinhos` e
+ * `carrinho_itens` seguem sem REVOKE, agora pelo motivo certo e apenas ele.
  */
 REVOKE INSERT, UPDATE, DELETE ON canastra.admins FROM authenticated;
 
@@ -230,11 +272,18 @@ REVOKE INSERT, UPDATE, DELETE ON canastra.admins FROM authenticated;
 -- o COMMIT desta migracao e o da que escreve as politicas ha uma janela real, e
 -- um deploy que pare no meio tem de parar FECHADO.
 --
--- Ligar a RLS em `produtos` NAO cega a vitrine: ela le pela view, que roda como
--- dono e por isso nao passa pela RLS (ver o bloco da view acima). Ja
--- `produto_opcoes` e lida DIRETO por `anon` e, ate a migracao de politicas
--- chegar, responde vazio — os filtros da vitrine somem, e nada mais. Perder
--- filtro e visivel e inofensivo; o contrario, um `pedidos` aberto por
+-- Ligar a RLS em `produtos` NAO cegava a vitrine NESTE ARRANJO: ela lia pela
+-- view, que rodava como dono e por isso nao passava pela RLS (ver o bloco da
+-- view acima). Ja `produto_opcoes` e lida DIRETO por `anon` e, ate a migracao de
+-- politicas chegar, responde vazio — os filtros da vitrine somem, e nada mais.
+-- Perder filtro e visivel e inofensivo; o contrario, um `pedidos` aberto por
 -- esquecimento, nao seria nem uma coisa nem outra.
+--
+-- DEPOIS DE 0006 as duas ficam no mesmo caso: a view virou `security_invoker =
+-- true`, entao `produtos` tambem passa a ser lida sob a RLS, e quem deixa a
+-- vitrine passar e a politica `produtos_leitura_publica`. A janela entre esta
+-- migracao e a de politicas continua fechada do mesmo jeito — o que muda e que
+-- agora ela apaga o catalogo tambem, e nao so os filtros. Continua sendo o lado
+-- certo de falhar.
 ALTER TABLE canastra.produtos       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE canastra.produto_opcoes ENABLE ROW LEVEL SECURITY;

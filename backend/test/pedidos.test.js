@@ -194,30 +194,76 @@ test("o que 0005 abre para anon: promocoes e config, nunca pedidos", async () =>
   ]);
 });
 
-test("authenticated nao escreve em promocoes nem na config da loja", async () => {
-  // A guarda de catalogo dos REVOKEs de 0005, gemea da de 0003 e pelo mesmo
-  // motivo: o `arwd` que 0001 concede por padrao esta inerte apenas enquanto a
-  // RLS nao tiver politica, e a primeira politica ampla demais o acorda. O dano
-  // aqui seria o banner e a barra de aviso da loja reescritos, ou promocao
-  // inventada, por um token de outro projeto da instancia compartilhada.
+test("a escrita de promocoes e config voltou para authenticated; a de `pedidos` e por COLUNA", async () => {
+  // ESTE TESTE MUDOU DE LADO EM 0006, gemeo do de catalogo.test.js e pelo mesmo
+  // motivo. 0005 revogou a escrita de `authenticated` em `promocoes` e
+  // `config_loja` porque, sem politica nenhuma, uma politica ampla demais
+  // acordaria o `arwd` que 0001 concede por padrao. 0006 devolve os privilegios e
+  // poe no lugar deles a politica `canastra.eh_admin()` — o painel fala direto
+  // com o Supabase, e admin autentica como `authenticated` igual a todo mundo.
+  // Quem prova que a troca foi paga e test/rls.test.js.
   //
-  // `pedidos` NAO entra nesta lista de proposito: ali o cliente logado escreve de
-  // verdade (fecha o proprio pedido), e o recorte e trabalho da politica de RLS,
-  // que sabe distinguir a linha do dono da linha do vizinho. Privilegio de tabela
-  // nao sabe.
+  // `pedidos` ENTRA NA LISTA AGORA, e por uma razao que nao existia antes: e a
+  // unica tabela do schema com privilegio de COLUNA. A politica de RLS autoriza
+  // a admin a mexer NA LINHA do pedido, mas nao sabe dizer quais colunas — e
+  // reescrever `total` ou `itens` de uma venda paga e exatamente o achado de
+  // auditoria que esta fase fecha. Entao 0006 tira o UPDATE de tabela e devolve
+  // so `status`, `codigo_rastreio`, `metodo_envio` e `atualizado_em`. E por isso
+  // que `altera` e false e `altera_colunas` e true: as duas linhas juntas SAO a
+  // trava, e uma sozinha nao diz nada.
   const { rows } = await bd.pool.query(`
     SELECT
       t.tabela,
       has_table_privilege('authenticated', 'canastra.' || t.tabela, 'INSERT') AS insere,
       has_table_privilege('authenticated', 'canastra.' || t.tabela, 'UPDATE') AS altera,
-      has_table_privilege('authenticated', 'canastra.' || t.tabela, 'DELETE') AS apaga,
+      has_any_column_privilege('authenticated', 'canastra.' || t.tabela, 'UPDATE') AS altera_colunas,
       has_table_privilege('authenticated', 'canastra.' || t.tabela, 'SELECT') AS le
-    FROM (VALUES ('promocoes'), ('config_loja')) AS t(tabela)
+    FROM (VALUES ('promocoes'), ('config_loja'), ('pedidos')) AS t(tabela)
     ORDER BY t.tabela
   `);
 
   assert.deepEqual(rows, [
-    { tabela: "config_loja", insere: false, altera: false, apaga: false, le: true },
-    { tabela: "promocoes", insere: false, altera: false, apaga: false, le: true },
+    {
+      tabela: "config_loja",
+      insere: true,
+      altera: true,
+      altera_colunas: true,
+      le: true,
+    },
+    {
+      // `insere: false` por DUAS razoes independentes, e e de proposito que sejam
+      // duas: nao ha politica de INSERT em `pedidos` (RLS ligada sem politica
+      // recusa) E 0006 revoga o privilegio de INSERT que 0001 concedia por
+      // padrao. Criar pedido e baixar estoque acontecem no servico Node, numa
+      // transacao com chave de idempotencia, pelo `service_role`. Medido em
+      // test/rls.test.js para cliente, para admin e para intruso.
+      tabela: "pedidos",
+      insere: false,
+      altera: false,
+      altera_colunas: true,
+      le: true,
+    },
+    {
+      tabela: "promocoes",
+      insere: true,
+      altera: true,
+      altera_colunas: true,
+      le: true,
+    },
   ]);
+
+  // E a outra metade da trava de coluna, que a asercao acima nao alcanca: as
+  // colunas do VALOR da venda ficaram de fora do GRANT.
+  const { rows: proibidas } = await bd.pool.query(`
+    SELECT c.coluna,
+           has_column_privilege('authenticated', 'canastra.pedidos', c.coluna, 'UPDATE') AS altera
+    FROM (VALUES ('total'), ('itens'), ('endereco_json'), ('pagamento_id_mp'), ('frete'))
+      AS c(coluna)
+    ORDER BY c.coluna
+  `);
+  assert.deepEqual(
+    proibidas.filter((c) => c.altera),
+    [],
+    "estas colunas de pedidos nao podem ser alteraveis por authenticated",
+  );
 });

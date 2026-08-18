@@ -88,25 +88,23 @@ test("a view publica nao expoe custo", async () => {
   assert.ok(!colunas.includes("custo"), "custo NAO pode estar na view publica");
 });
 
-test("com a RLS ligada e ZERO politicas, anon ainda le o catalogo pela view", async () => {
-  // O ARRANJO QUE SUSTENTA A VITRINE INTEIRA, e o unico ponto desta fase em que
-  // duas regras aparentemente opostas se cruzam: `produtos` sai da migracao com
-  // RLS ligada e sem politica nenhuma (Regra 2, falhar fechado), e mesmo assim o
-  // catalogo tem de ser publico.
+test("anon le o catalogo pela view, agora com os proprios privilegios", async () => {
+  // O ARRANJO QUE SUSTENTA A VITRINE INTEIRA — e ele MUDOU em 0006, entao este
+  // comentario descreve o de hoje e nao o de 0003.
   //
-  // Quem resolve e o `security_invoker = false`: a view roda com os poderes de
-  // quem a criou — o dono da tabela —, e dono de tabela e isento de RLS enquanto
-  // ninguem ligar FORCE ROW LEVEL SECURITY. Ou seja, a RLS de `produtos` nao
-  // filtra a leitura feita pela view, e o recorte de colunas da view e que faz o
-  // controle de acesso.
+  // ATE 0005 a view era `security_invoker = false`: rodava com os poderes de
+  // quem a criou (o dono da tabela, isento de RLS), e o recorte de colunas da
+  // view era, sozinho, o controle de acesso. Funcionava e tinha dois defeitos
+  // caros: ligar FORCE ROW LEVEL SECURITY em `produtos` esvaziava a vitrine em
+  // SILENCIO, e a escrita atraves da view (que e auto-atualizavel) era barrada
+  // so por um REVOKE.
   //
-  // ATENCAO AO ALCANCE DESTE TESTE, que e menor do que parece: aqui o dono e o
-  // `postgres` do harness, superusuario, e superusuario ignora RLS por outro
-  // caminho que nao a isencao do dono. Ou seja, este caso cobre o
-  // `security_invoker` virar true (vira 42501) e a view mudar de dono, mas NAO
-  // cobre alguem ligar FORCE ROW LEVEL SECURITY — medido a parte, com dono
-  // nao-superusuario: com FORCE a leitura devolve ZERO linhas, calada. Esse
-  // buraco e fechado pelo teste seguinte, que le o catalogo do Postgres.
+  // A PARTIR DE 0006 a view e `security_invoker = true` e a leitura publica e
+  // feita da forma comum: `anon` tem GRANT nas colunas publicas de
+  // `canastra.produtos` e a politica `produtos_leitura_publica` deixa passar as
+  // linhas. A isencao do dono saiu do caminho critico da vitrine — o que ela
+  // ainda sustenta e `canastra.eh_cliente()`/`eh_admin()`, e essa dependencia
+  // esta afirmada como invariante em test/rls.test.js.
   const linhas = await comoPapel(bd.pool, { papel: "anon" }, async (cliente) => {
     const { rows } = await cliente.query(
       "SELECT nome, preco FROM canastra.produtos_publicos ORDER BY nome",
@@ -122,17 +120,25 @@ test("com a RLS ligada e ZERO politicas, anon ainda le o catalogo pela view", as
 });
 
 test("as duas chaves que fazem a vitrine funcionar continuam na posicao", async () => {
-  // Duas asercoes de CATALOGO, nao de comportamento, e e de proposito. Com dono
-  // nao-superusuario — a forma de producao — foi medido que:
+  // Asercoes de CATALOGO, nao de comportamento, e e de proposito — mas as chaves
+  // sao OUTRAS desde 0006, e a inversao do `security_invoker` e a maior delas.
   //
-  //   FORCE ROW LEVEL SECURITY em `produtos`  -> anon le ZERO linhas, sem erro
-  //   security_invoker = true na view         -> 42501 na vitrine inteira
+  // `view_invoker` TEM de ser true. Com ele false, a view volta a ler `produtos`
+  // com os poderes do dono, e ai a vitrine passa a depender de novo da isencao de
+  // RLS do dono — o arranjo que 0006 desmontou de proposito, porque seu modo de
+  // falha (FORCE RLS -> vitrine vazia, sem erro e sem log) e silencioso.
   //
-  // O segundo caso e barulhento e o teste comportamental acima o pega. O primeiro
-  // e SILENCIOSO — a loja fica sem produto nenhum e nada aparece em log — e, pior,
-  // no harness ele nem se manifesta, porque o dono aqui e superusuario e
-  // superusuario ignora ate o FORCE. Um teste so comportamental passaria verde
-  // com a producao vazia. Ler o catalogo do Postgres e o que fecha isso.
+  // `produtos_forca_rls` continua tendo de ser false, agora por um motivo
+  // diferente: nao e mais a vitrine que quebra (a politica
+  // `produtos_leitura_publica` cobre o `anon` com ou sem FORCE), e sim
+  // `canastra.eh_cliente()`/`eh_admin()`, que leem por baixo da RLS contando com
+  // a isencao do dono. A regra geral disso — nenhuma tabela de `canastra` liga
+  // FORCE — esta afirmada como invariante em test/rls.test.js; aqui fica so a
+  // ponta que este arquivo ja vigiava.
+  //
+  // No harness o dono e superusuario e ignora ate o FORCE, entao um teste apenas
+  // comportamental passaria verde com a producao quebrada. Ler o catalogo do
+  // Postgres e o que fecha isso.
   const { rows } = await bd.pool.query(`
     SELECT
       (SELECT c.relforcerowsecurity
@@ -140,27 +146,23 @@ test("as duas chaves que fazem a vitrine funcionar continuam na posicao", async 
         WHERE n.nspname = 'canastra' AND c.relname = 'produtos') AS produtos_forca_rls,
       (SELECT 'security_invoker=true' = ANY (c.reloptions)
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'canastra' AND c.relname = 'produtos_publicos') AS view_invoker,
-      (SELECT pg_get_userbyid(t.relowner) = pg_get_userbyid(v.relowner)
-         FROM pg_class t, pg_class v
-        WHERE t.oid = 'canastra.produtos'::regclass
-          AND v.oid = 'canastra.produtos_publicos'::regclass) AS mesmo_dono
+        WHERE n.nspname = 'canastra' AND c.relname = 'produtos_publicos') AS view_invoker
   `);
 
   assert.deepEqual(rows[0], {
     produtos_forca_rls: false,
-    // NULL tambem seria "nao esta ligado" (reloptions vazio), mas a migracao
-    // escreve a opcao explicitamente, entao esperar `false` e mais apertado: se o
-    // WITH (...) sumir da view, isto acusa.
-    view_invoker: false,
-    mesmo_dono: true,
+    view_invoker: true,
   });
 });
 
-test("anon NAO alcanca a tabela produtos por baixo da view", async () => {
-  // O outro lado do teste acima. A view so e um controle de acesso se o caminho
-  // direto estiver fechado: com GRANT na tabela base, `custo` sairia no PostgREST
-  // junto com o resto.
+test("anon NAO alcanca `custo` por baixo da view", async () => {
+  // O outro lado do teste acima, e desde 0006 e ele que guarda a margem da loja.
+  //
+  // Antes, o que protegia `custo` era a PROJECAO da view: `anon` nao tinha
+  // privilegio nenhum na tabela base e a view escolhia o que sair. Agora `anon`
+  // TEM privilegio na tabela — de COLUNA, na lista publica — e `custo` esta fora
+  // dela. O caminho direto continua fechado, so que por outro mecanismo, e por
+  // isso a asercao continua valendo a pena.
   await assert.rejects(
     () =>
       comoPapel(bd.pool, { papel: "anon" }, (cliente) =>
@@ -211,52 +213,76 @@ test("a view publica nao e porta de ESCRITA para authenticated", async () => {
   assert.equal(rows[0].n, 0);
 });
 
-test("o que anon LE: os filtros e a view, nunca a tabela de produtos", async () => {
+test("o que anon LE em produtos: colunas sim, tabela inteira nunca", async () => {
   // Regra 1 de 0001: nada nasce legivel por `anon`, quem for publico leva GRANT
   // proprio. `produto_opcoes` alimenta os filtros da vitrine e leva; `produtos`
-  // fica fechada porque o publico dela e a view.
+  // leva um GRANT DE COLUNA desde 0006, para que a view possa ler a tabela com os
+  // privilegios de quem chama.
   //
-  // So LEITURA e conferida aqui, e a versao anterior deste teste tinha duas
-  // asercoes a mais que nao provavam nada: `anon` NUNCA recebe INSERT de default
-  // privilege nenhum, entao "anon nao escreve" seria verdade mesmo com esta
-  // migracao inteira apagada. Quem tem escrita por padrao e `authenticated`, e e
-  // o teste seguinte que cobre esse — o que de fato pode dar errado.
+  // AS DUAS COLUNAS DESTA ASERCAO DIZEM COISAS DIFERENTES E AS DUAS IMPORTAM:
+  // `has_table_privilege(..., 'SELECT')` responde pelo privilegio de TABELA e
+  // continua `false`, que e o que impede um `select=*` de sair; um GRANT de
+  // coluna nao o torna verdadeiro. `has_any_column_privilege` e o que virou
+  // `true` em 0006. Se alguem um dia trocar o GRANT de coluna por um de tabela —
+  // o "conserto" obvio para um 42501 no PostgREST —, `anon_le_tabela` acusa, e
+  // `custo` teria acabado de vazar.
+  //
+  // So LEITURA e conferida aqui: `anon` NUNCA recebe INSERT de default privilege
+  // nenhum, entao "anon nao escreve" seria verdade mesmo com esta migracao
+  // inteira apagada. Quem tem escrita por padrao e `authenticated`, e e o teste
+  // seguinte que cobre esse — o que de fato pode dar errado.
   const { rows } = await bd.pool.query(`
     SELECT
-      has_table_privilege('anon', 'canastra.produtos', 'SELECT')           AS anon_le_produtos,
-      has_table_privilege('anon', 'canastra.produto_opcoes', 'SELECT')     AS anon_le_opcoes,
-      has_table_privilege('anon', 'canastra.produtos_publicos', 'SELECT')  AS anon_le_view
+      has_table_privilege('anon', 'canastra.produtos', 'SELECT')             AS anon_le_tabela,
+      has_any_column_privilege('anon', 'canastra.produtos', 'SELECT')        AS anon_le_colunas,
+      has_column_privilege('anon', 'canastra.produtos', 'custo', 'SELECT')   AS anon_le_custo,
+      has_column_privilege('anon', 'canastra.produtos', 'preco', 'SELECT')   AS anon_le_preco,
+      has_table_privilege('anon', 'canastra.produto_opcoes', 'SELECT')       AS anon_le_opcoes,
+      has_table_privilege('anon', 'canastra.produtos_publicos', 'SELECT')    AS anon_le_view
   `);
 
   assert.deepEqual(rows[0], {
-    anon_le_produtos: false,
+    anon_le_tabela: false,
+    anon_le_colunas: true,
+    anon_le_custo: false,
+    anon_le_preco: true,
     anon_le_opcoes: true,
     anon_le_view: true,
   });
 });
 
-test("authenticated nao tem privilegio de ESCRITA no catalogo nem em admins", async () => {
-  // A guarda de catalogo dos REVOKEs de 0003 — a camada de baixo, que sobrevive a
-  // qualquer politica de RLS escrita depois.
+test("em `admins` e na view a escrita continua REVOGADA; no catalogo ela voltou", async () => {
+  // ESTE TESTE MUDOU DE LADO EM 0006, e a mudanca e a decisao mais cara da
+  // migracao — entao ela fica escrita aqui, e nao so no SQL.
   //
-  // Por que ela precisa existir: os ALTER DEFAULT PRIVILEGES de 0001 dao `arwd` a
-  // `authenticated` em TODA tabela das migracoes, e isso hoje esta inerte apenas
-  // porque a RLS nao tem politica. A primeira politica ampla demais acorda o
-  // privilegio — `FOR ALL USING (true)` em `produto_opcoes`, que e como se
-  // escreve "os filtros do catalogo sao publicos" sem pensar duas vezes, entrega
-  // o DELETE dos filtros a um token de OUTRO projeto da instancia. Em `admins` a
-  // mesma distracao entrega auto-promocao a administrador da loja.
+  // 0003 revogou INSERT/UPDATE/DELETE de `authenticated` em `produtos` e
+  // `produto_opcoes` porque, sem politica nenhuma, uma primeira politica ampla
+  // demais (`FOR ALL USING (true)`) acordaria o `arwd` que 0001 concede por
+  // padrao e entregaria o catalogo a um token de OUTRO projeto da instancia. O
+  // REVOKE era a segunda tranca justamente porque a primeira nao existia.
   //
-  // Sem REVOKE, a diferenca entre correto e vazamento mora numa palavra
-  // (FOR ALL x FOR SELECT), num arquivo que ainda nao existe, escrito noutro dia.
-  // Com REVOKE, a politica larga demais deixa de bastar.
+  // 0006 devolve esses privilegios de proposito: o painel do admin fala DIRETO
+  // com o Supabase por supabase-js, e admin autentica como `authenticated` igual
+  // a todo mundo — sem eles, nao ha como cadastrar produto. A segunda tranca foi
+  // trocada por uma politica estreita (`canastra.eh_admin()`) e testada em
+  // test/rls.test.js, que tambem afirma como INVARIANTE que nenhuma politica de
+  // escrita deste schema e `USING (true)`.
+  //
+  // DUAS RELACOES NAO ENTRAM NA VOLTA, e sao as duas em que o estrago seria
+  // irreversivel:
+  //
+  //   `admins` ............. sem privilegio de INSERT, nenhuma politica escrita
+  //                          por engano promove um token estrangeiro a
+  //                          administrador desta loja. E o alcapao.
+  //   `produtos_publicos` .. a view e janela de LEITURA; escrita passa pela
+  //                          tabela, onde a politica alcanca.
   const { rows } = await bd.pool.query(`
     SELECT
       t.relacao,
       has_table_privilege('authenticated', 'canastra.' || t.relacao, 'INSERT') AS insere,
       has_table_privilege('authenticated', 'canastra.' || t.relacao, 'UPDATE') AS altera,
       has_table_privilege('authenticated', 'canastra.' || t.relacao, 'DELETE') AS apaga,
-      has_table_privilege('authenticated', 'canastra.' || t.relacao, 'SELECT') AS le
+      has_any_column_privilege('authenticated', 'canastra.' || t.relacao, 'SELECT') AS le
     FROM (VALUES ('produtos'), ('produto_opcoes'), ('produtos_publicos'), ('admins'))
       AS t(relacao)
     ORDER BY t.relacao
@@ -266,8 +292,8 @@ test("authenticated nao tem privilegio de ESCRITA no catalogo nem em admins", as
     rows.map(({ relacao, insere, altera, apaga }) => ({ relacao, insere, altera, apaga })),
     [
       { relacao: "admins", insere: false, altera: false, apaga: false },
-      { relacao: "produto_opcoes", insere: false, altera: false, apaga: false },
-      { relacao: "produtos", insere: false, altera: false, apaga: false },
+      { relacao: "produto_opcoes", insere: true, altera: true, apaga: true },
+      { relacao: "produtos", insere: true, altera: true, apaga: true },
       { relacao: "produtos_publicos", insere: false, altera: false, apaga: false },
     ],
   );
@@ -275,6 +301,10 @@ test("authenticated nao tem privilegio de ESCRITA no catalogo nem em admins", as
   // A LEITURA continua de pe, e conferir isso importa tanto quanto o resto: um
   // `REVOKE ALL` distraido no lugar do REVOKE de escrita passaria na asercao
   // acima e quebraria o painel inteiro, que le estas tabelas como usuario logado.
+  //
+  // `has_any_column_privilege`, e nao `has_table_privilege`: em `produtos` a
+  // leitura de `authenticated` e por COLUNA desde 0006 (a lista publica), para
+  // que `custo` nao saia no PostgREST. Ver o teste das colunas de `anon` acima.
   assert.deepEqual(rows.map((r) => r.le), [true, true, true, true]);
 });
 
@@ -282,22 +312,42 @@ test("na pratica: authenticated de fora da loja nao apaga o catalogo", async () 
   // O que o teste acima afirma pelo catalogo do Postgres, agora como comando de
   // verdade: `sub` que NAO esta em `canastra.clientes` — o token de outro projeto
   // da instancia compartilhada — indo direto na tabela, sem passar pela view.
+  //
+  // DESDE 0006 A RECUSA TEM DUAS FORMAS, porque quem barra deixou de ser o
+  // privilegio de tabela (que voltou) e passou a ser a politica:
+  //
+  //   INSERT ........... 42501, o WITH CHECK barra a linha nova
+  //   UPDATE / DELETE .. 0 linhas afetadas, SEM erro — o USING nao casa nada
+  //
+  // A segunda forma e silenciosa e e a semantica normal da RLS: o USING filtra,
+  // nao acusa. O intruso recebe "sucesso, 0 linhas" e o catalogo fica intacto —
+  // que e o desfecho certo, so que menos barulhento do que era. Registrado aqui
+  // para que ninguem o descubra depurando producao.
+  await assert.rejects(
+    () =>
+      comoPapel(bd.pool, { papel: "authenticated", sub: INTRUSO }, (cliente) =>
+        cliente.query("INSERT INTO canastra.produtos (nome) VALUES ('Invasor direto')"),
+      ),
+    (erro) => {
+      assert.equal(erro.code, PERMISSAO_NEGADA);
+      return true;
+    },
+  );
+
   for (const sql of [
-    "INSERT INTO canastra.produtos (nome) VALUES ('Invasor direto')",
     "UPDATE canastra.produtos SET preco = 0.01",
     "DELETE FROM canastra.produtos",
     "DELETE FROM canastra.produto_opcoes",
   ]) {
-    await assert.rejects(
-      () =>
-        comoPapel(bd.pool, { papel: "authenticated", sub: INTRUSO }, (cliente) =>
-          cliente.query(sql),
-        ),
-      (erro) => {
-        assert.equal(erro.code, PERMISSAO_NEGADA, `deveria recusar: ${sql}`);
-        return true;
+    const afetadas = await comoPapel(
+      bd.pool,
+      { papel: "authenticated", sub: INTRUSO },
+      async (cliente) => {
+        const { rowCount } = await cliente.query(sql);
+        return rowCount;
       },
     );
+    assert.equal(afetadas, 0, `nao deveria afetar linha nenhuma: ${sql}`);
   }
 
   const { rows } = await bd.pool.query(

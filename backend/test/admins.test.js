@@ -289,15 +289,31 @@ test("os GRANTs padrao de 0001 alcancaram as duas tabelas, e anon ficou de fora"
       servico_escreve: true,
     },
     {
-      // `clientes` NAO leva REVOKE e por isso continua sendo a testemunha de que
-      // o ALTER DEFAULT PRIVILEGES de 0001 alcanca as tabelas das migracoes: o
-      // cliente logado escreve mesmo na propria linha (cria a conta, corrige
-      // telefone), e o recorte de QUAL linha e trabalho da politica de RLS, que
-      // sabe distinguir dono de vizinho. Privilegio de tabela nao sabe.
+      // ERA `auth_apaga: true` ATE 0006, e a mudanca e deliberada — pelo mesmo
+      // argumento que ja valia para `admins` logo acima, aplicado a tabela onde
+      // ele pesa MAIS.
+      //
+      // A justificativa antiga desta linha dizia que o cliente logado "cria a
+      // conta" e por isso `clientes` nao levava REVOKE. Isso nunca foi verdade:
+      // o cadastro roda pelo `service_role`, no servico Node, e 0006 tornou o
+      // fato explicito ao NAO criar politica de INSERT aqui. Inserir uma linha em
+      // `clientes` e o que FABRICA `canastra.eh_cliente()`, que por sua vez e a
+      // metade que sustenta toda politica de dono do schema — e virar admin exige
+      // passar por `clientes` antes (a FK de 0002), enquanto virar cliente nao
+      // exigia passar por lugar nenhum alem da ausencia de uma politica.
+      //
+      // Ausencia de politica e propriedade de CI: um `CREATE POLICY` distraido a
+      // desfaz. REVOKE e propriedade de banco. 0006 revoga INSERT e DELETE aqui
+      // e em `pedidos`, e `admins` deixa de ser a unica tabela com as duas
+      // camadas negando.
+      //
+      // `auth_le` continua true, e `UPDATE` tambem fica (nao aparece nesta
+      // consulta): o cliente corrige mesmo o proprio telefone. E `service_role`
+      // segue com tudo — e ele quem cadastra.
       tabela: "clientes",
       anon_le: false,
       auth_le: true,
-      auth_apaga: true,
+      auth_apaga: false,
       servico_escreve: true,
     },
   ]);

@@ -19,12 +19,47 @@ const path = require("node:path");
 
 const PASTA_PADRAO = path.join(__dirname, "migrations");
 
+/**
+ * O REVOKE nao e enfeite, e o unico ponto onde esta tabela e protegida.
+ *
+ * Hoje `canastra.migracoes` esta fechada por ACIDENTE DE ORDEM: este bootstrap
+ * roda ANTES de 0001, e e 0001 que faz `ALTER DEFAULT PRIVILEGES ... GRANT ...
+ * TO authenticated`. Default privilege so alcanca objeto criado DEPOIS dele,
+ * entao a tabela nasceu sem GRANT nenhum — e por isso `authenticated` leva 42501
+ * aqui sem que ninguem tenha decidido isso.
+ *
+ * O acidente se desfaz sozinho no primeiro cenario em que a tabela for recriada
+ * com 0001 ja aplicado: recuperacao de desastre, um 0001 rodado a mao, um DROP
+ * TABLE seguido de `migrar`. Ai ela nasce com `arwd` para `authenticated` e SEM
+ * RLS, e um token de outro projeto da instancia compartilhada pode inserir a
+ * linha `('0007_...')` — que faz o runner PULAR uma migracao futura de seguranca
+ * achando que ja rodou. Sem erro, sem log, e o deploy seguinte diz "nada
+ * pendente".
+ *
+ * Ser explicito aqui custa duas linhas e vale nos dois mundos: no banco de hoje
+ * e um no-op, e no banco recriado amanha e a unica coisa que fecha a porta.
+ *
+ * O DO/IF existe porque `migrar.js` tambem roda contra Postgres cru (os testes
+ * do proprio runner sobem um schema vazio, sem os papeis do Supabase), e um
+ * REVOKE citando papel inexistente aborta o bootstrap inteiro com 42704.
+ * `service_role` fica de fora do REVOKE: e credencial de servidor e o runner
+ * pode ser executado por ela.
+ */
 const BOOTSTRAP = `
   CREATE SCHEMA IF NOT EXISTS canastra;
   CREATE TABLE IF NOT EXISTS canastra.migracoes (
     versao      text PRIMARY KEY,
     aplicada_em timestamptz NOT NULL DEFAULT now()
   );
+  DO $bootstrap$
+  BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+      REVOKE ALL ON canastra.migracoes FROM anon;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+      REVOKE ALL ON canastra.migracoes FROM authenticated;
+    END IF;
+  END $bootstrap$;
 `;
 
 /**
