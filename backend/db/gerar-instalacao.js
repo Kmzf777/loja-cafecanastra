@@ -370,7 +370,11 @@ function gerarReset() {
 --     vazio) e "canastra". Tabelas, dados, views, funções, políticas: tudo.
 --   · TODOS os usuários de auth.users e, em cascata, suas identidades, sessões
 --     e refresh tokens. Ninguém entra depois disto até você recriar.
---   · TODOS os buckets e objetos do Storage.
+--   · Os buckets e objetos do Storage, QUANDO o servidor deixar. O Supabase
+--     gerenciado protege essas tabelas com um trigger e recusa DELETE direto
+--     (42501, "Use the Storage API instead"). Nesse caso o reset avisa e segue —
+--     esvazie os buckets pelo painel. Hoje isso é inofensivo: a loja só passa a
+--     usar Storage na fase F3.
 --
 -- O QUE FICA DE PÉ
 --   Os schemas que o Supabase administra: auth, storage, realtime, extensions,
@@ -447,16 +451,40 @@ BEGIN
   -- Objetos antes de buckets: há FK entre os dois. Os arquivos em si seguem no
   -- disco (ou no S3) até o coletor do Storage passar; o que some aqui é o
   -- registro, que é o que a API enxerga.
+  --
+  -- CADA PASSO NUM BLOCO COM EXCEPTION, E ISSO NÃO É ZELO EXCESSIVO.
+  -- O Supabase gerenciado protege estas tabelas com um trigger
+  -- (\`storage.protect_delete\`) que recusa DELETE direto:
+  --
+  --   42501: Direct deletion from storage tables is not allowed.
+  --          Use the Storage API instead.
+  --
+  -- Como o reset inteiro é UM comando \`DO\`, ou seja, UMA transação, essa recusa
+  -- abortava tudo — inclusive os DROP SCHEMA que já tinham rodado. O operador
+  -- via um erro sobre Storage e ficava com o banco intacto, sem entender por
+  -- quê. Com o bloco \`EXCEPTION\`, a recusa vira um aviso e o reset segue.
+  --
+  -- Não desligamos o trigger de propósito. Ele existe porque apagar a linha sem
+  -- passar pela Storage API deixa o arquivo órfão no bucket, e um reset de banco
+  -- não tem por que sujar o storage de arquivos que ninguém mais referencia.
   IF to_regclass('storage.objects') IS NOT NULL THEN
-    EXECUTE 'DELETE FROM storage.objects';
-    GET DIAGNOSTICS n = ROW_COUNT;
-    RAISE NOTICE 'Objetos do Storage removidos: %', n;
+    BEGIN
+      EXECUTE 'DELETE FROM storage.objects';
+      GET DIAGNOSTICS n = ROW_COUNT;
+      RAISE NOTICE 'Objetos do Storage removidos: %', n;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Storage: objetos NÃO removidos (%). Esvazie os buckets pelo painel do Supabase ou pela Storage API.', SQLERRM;
+    END;
   END IF;
 
   IF to_regclass('storage.buckets') IS NOT NULL THEN
-    EXECUTE 'DELETE FROM storage.buckets';
-    GET DIAGNOSTICS n = ROW_COUNT;
-    RAISE NOTICE 'Buckets do Storage removidos: %', n;
+    BEGIN
+      EXECUTE 'DELETE FROM storage.buckets';
+      GET DIAGNOSTICS n = ROW_COUNT;
+      RAISE NOTICE 'Buckets do Storage removidos: %', n;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Storage: buckets NÃO removidos (%). Apague-os pelo painel do Supabase.', SQLERRM;
+    END;
   END IF;
 
   -- -- 4. Contas ------------------------------------------------------------
@@ -464,16 +492,28 @@ BEGIN
   -- refresh_tokens, mfa_factors) pendem de auth.users por FK ON DELETE CASCADE,
   -- e o DELETE dispara essas cascatas. O TRUNCATE exigiria listar cada uma — e
   -- a lista muda de versão para versão do GoTrue.
+  --
+  -- Também com EXCEPTION, pelo mesmo motivo do Storage: se uma versão do GoTrue
+  -- proteger a tabela, ou se uma FK de outro projeto travar a cascata, o reset
+  -- avisa em vez de desfazer os DROP SCHEMA que já rodaram.
   IF to_regclass('auth.users') IS NOT NULL THEN
-    EXECUTE 'DELETE FROM auth.users';
-    GET DIAGNOSTICS n = ROW_COUNT;
-    RAISE NOTICE 'Contas removidas de auth.users: %', n;
+    BEGIN
+      EXECUTE 'DELETE FROM auth.users';
+      GET DIAGNOSTICS n = ROW_COUNT;
+      RAISE NOTICE 'Contas removidas de auth.users: %', n;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Contas NÃO removidas (%). Apague-as em Authentication > Users no painel.', SQLERRM;
+    END;
   END IF;
 
   IF to_regclass('auth.audit_log_entries') IS NOT NULL THEN
-    EXECUTE 'DELETE FROM auth.audit_log_entries';
-    GET DIAGNOSTICS n = ROW_COUNT;
-    RAISE NOTICE 'Entradas de auditoria do GoTrue removidas: %', n;
+    BEGIN
+      EXECUTE 'DELETE FROM auth.audit_log_entries';
+      GET DIAGNOSTICS n = ROW_COUNT;
+      RAISE NOTICE 'Entradas de auditoria do GoTrue removidas: %', n;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Auditoria do GoTrue não pôde ser limpa (%) — inofensivo.', SQLERRM;
+    END;
   END IF;
 
   RAISE NOTICE '---';

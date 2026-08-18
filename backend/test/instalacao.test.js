@@ -368,6 +368,77 @@ test("o reset limpa o banco inteiro, e nao so o schema da loja", async () => {
   assert.equal(depois[0].n, 29);
 });
 
+test("um Storage protegido nao aborta o reset inteiro", async () => {
+  /**
+   * O bug que este teste existe para nao voltar.
+   *
+   * O Supabase gerenciado protege as tabelas de Storage com um trigger que
+   * recusa DELETE direto:
+   *
+   *   42501: Direct deletion from storage tables is not allowed.
+   *          Use the Storage API instead.
+   *
+   * Como o reset e UM comando `DO`, ou seja UMA transacao, essa recusa abortava
+   * tudo — inclusive os DROP SCHEMA que ja tinham rodado com sucesso. O operador
+   * via um erro falando de Storage e ficava com o banco INTACTO. Pior que um
+   * reset que falha e um reset que falha por um motivo que parece periferico.
+   *
+   * Aqui o `storage` do Supabase e reproduzido com o mesmo formato de recusa.
+   */
+  await viaSql.pool.query(`
+    DROP SCHEMA IF EXISTS storage CASCADE;
+    CREATE SCHEMA storage;
+    CREATE TABLE storage.buckets (id text PRIMARY KEY);
+    CREATE TABLE storage.objects (
+      id     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      bucket text REFERENCES storage.buckets (id)
+    );
+    INSERT INTO storage.buckets (id) VALUES ('canastra-produtos');
+    INSERT INTO storage.objects (bucket) VALUES ('canastra-produtos');
+
+    CREATE FUNCTION storage.protect_delete() RETURNS trigger LANGUAGE plpgsql AS $pd$
+    BEGIN
+      RAISE EXCEPTION 'Direct deletion from storage tables is not allowed. Use the Storage API instead.'
+        USING ERRCODE = 'insufficient_privilege';
+    END $pd$;
+
+    CREATE TRIGGER protege_objects BEFORE DELETE ON storage.objects
+      FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
+    CREATE TRIGGER protege_buckets BEFORE DELETE ON storage.buckets
+      FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
+  `);
+
+  // Uma sobra de projeto, para provar que o resto do reset rodou.
+  await viaSql.pool.query("CREATE SCHEMA sobra_de_projeto");
+
+  // Nao pode lancar. Antes da correcao, lancava 42501 e desfazia tudo.
+  await viaSql.pool.query(gerarReset());
+
+  const { rows } = await viaSql.pool.query(`
+    SELECT
+      (SELECT count(*)::int FROM information_schema.schemata
+        WHERE schema_name IN ('canastra', 'sobra_de_projeto'))  AS schemas_de_projeto,
+      (SELECT count(*)::int FROM information_schema.schemata
+        WHERE schema_name = 'storage')                          AS storage_de_pe,
+      (SELECT count(*)::int FROM storage.objects)               AS objetos_intactos
+  `);
+  assert.equal(rows[0].schemas_de_projeto, 0, "o reset parou antes de limpar os schemas");
+  assert.equal(rows[0].storage_de_pe, 1, "o reset derrubou o schema storage");
+  assert.equal(
+    rows[0].objetos_intactos,
+    1,
+    "o objeto protegido deveria continuar la — o reset avisa, nao forca",
+  );
+
+  // Limpa a simulacao para nao atrapalhar os testes seguintes.
+  await viaSql.pool.query(`
+    DROP TRIGGER protege_objects ON storage.objects;
+    DROP TRIGGER protege_buckets ON storage.buckets;
+    DROP SCHEMA storage CASCADE;
+  `);
+  await viaSql.pool.query(semAsContas(sqlGerado));
+});
+
 test("o reset nao derruba os schemas que o Supabase administra", async () => {
   // O outro lado do risco. Derrubar `auth` nao "limparia" o GoTrue: quebraria o
   // servico, e nenhum SQL de instalacao reconstroi aquilo. O laco do reset apaga
