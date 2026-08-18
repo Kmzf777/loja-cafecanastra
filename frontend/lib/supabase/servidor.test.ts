@@ -90,7 +90,7 @@ describe("cliente de servidor", () => {
   it("consulta o esquema canastra", async () => {
     const chamadas = espionarRede();
     const supabase = await criarClienteServidor();
-    await supabase.from("cafes").select("id");
+    await supabase.from("produtos_publicos").select("produto_id");
 
     expect(chamadas[0].cabecalhos["accept-profile"]).toBe("canastra");
   });

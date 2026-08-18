@@ -12,6 +12,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { ESQUEMA, chaveAnonima, urlSupabase } from "./ambiente";
+import type { Database } from "./tipos";
 
 /**
  * `cookies()` é assíncrono a partir do Next 15 — daí o `await` e o retorno
@@ -23,7 +24,7 @@ export async function criarClienteServidor() {
   const chave = chaveAnonima();
   const armazem = await cookies();
 
-  return createServerClient(url, chave, {
+  return createServerClient<Database, typeof ESQUEMA>(url, chave, {
     // Mesmo esquema do navegador. Ver ./ambiente.ts.
     db: { schema: ESQUEMA },
     cookies: {

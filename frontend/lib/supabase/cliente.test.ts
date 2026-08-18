@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { clienteNavegador, _limparSingleton } from "./cliente";
+import { readdirSync, readFileSync } from "node:fs";
+import { clienteNavegador, _limparSingletonParaTestes } from "./cliente";
 
 /**
  * O que estes testes protegem não é a biblioteca — é cada decisão tomada em
@@ -14,10 +14,15 @@ import { clienteNavegador, _limparSingleton } from "./cliente";
  * Nenhuma dessas quatro aparece em `next build`.
  *
  * SOBRE O AVISO "Multiple GoTrueClient instances detected" NO STDERR
- * Ele é do próprio supabase-js e conta instâncias criadas no PROCESSO inteiro,
- * não simultâneas. Cada caso abaixo começa com o cache limpo, então o processo
- * de teste realmente cria várias — de propósito. Não é o singleton falhando; o
- * teste "sobrevive à reavaliação do módulo" é quem responde por isso.
+ * Ele é do próprio supabase-js (GoTrueClient.js:164-176): um contador estático
+ * POR `storageKey`, que nunca é decrementado, e o aviso só sai quando
+ * `isBrowser()` é verdadeiro. Cada caso abaixo começa com o cache limpo e cria
+ * outra instância sob a mesma chave, então o contador sobe — de propósito, e
+ * não é o singleton falhando. Quem responde por ele é o teste "sobrevive à
+ * reavaliação do módulo".
+ *
+ * A parte boa dessa leitura: como o aviso depende de `isBrowser()`, o cliente
+ * descartável que o SSR cria a cada render NÃO vai poluir o log de produção.
  */
 
 const URL_FALSA = "https://exemplo.supabase.co";
@@ -68,14 +73,14 @@ const fetchOriginal = globalThis.fetch;
 beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = URL_FALSA;
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = CHAVE_FALSA;
-  _limparSingleton();
+  _limparSingletonParaTestes();
 });
 
 afterEach(() => {
   delete (globalThis as any).window;
   delete (globalThis as any).document;
   globalThis.fetch = fetchOriginal;
-  _limparSingleton();
+  _limparSingletonParaTestes();
   vi.resetModules();
 });
 
@@ -104,10 +109,10 @@ describe("variáveis de ambiente", () => {
 describe("esquema canastra", () => {
   it("manda Accept-Profile: canastra em uma consulta", async () => {
     const chamadas = espionarRede();
-    await clienteNavegador().from("cafes").select("id");
+    await clienteNavegador().from("produtos_publicos").select("produto_id");
 
     expect(chamadas).toHaveLength(1);
-    expect(chamadas[0].url).toBe(`${URL_FALSA}/rest/v1/cafes?select=id`);
+    expect(chamadas[0].url).toBe(`${URL_FALSA}/rest/v1/produtos_publicos?select=produto_id`);
     expect(chamadas[0].cabecalhos["accept-profile"]).toBe("canastra");
   });
 
@@ -173,6 +178,34 @@ describe("instância única no navegador", () => {
     expect((globalThis as any).window).toBeUndefined();
     expect(clienteNavegador()).not.toBe(clienteNavegador());
   });
+
+  /**
+   * O teste que amarra `isSingleton: false` em `cliente.ts`.
+   *
+   * Sem essa linha, o @supabase/ssr liga o cache DELE sozinho quando detecta um
+   * navegador — e aí existem dois caches. Os dois testes acima continuariam
+   * verdes, porque o cache da biblioteca devolveria o mesmo objeto e satisfaria
+   * a asserção pelo motivo errado; `_limparSingletonParaTestes()` não alcança o
+   * cache de dentro do pacote e não haveria como notar.
+   *
+   * A forma de enxergar a diferença é limpar o nosso cache e MUDAR a
+   * configuração: com um cache só, o cliente seguinte fala com o host novo; com
+   * o da biblioteca ligado por baixo, ele devolve o cliente velho e continua
+   * falando com o host antigo. É também o cenário real de `next dev`, onde
+   * editar o `.env.local` reinicia o servidor mas não a aba aberta.
+   */
+  it("respeita a configuração nova depois de limpar o cache", async () => {
+    fingirNavegador();
+    clienteNavegador();
+
+    _limparSingletonParaTestes();
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://outro.supabase.co";
+
+    const chamadas = espionarRede();
+    await clienteNavegador().from("produtos_publicos").select("produto_id");
+
+    expect(chamadas[0].url).toContain("https://outro.supabase.co");
+  });
 });
 
 describe("sessão legível pelo servidor", () => {
@@ -220,21 +253,47 @@ describe("chaves secretas", () => {
    * coisa, a tentação é trocar a chave anon pela `service_role` — que ignora
    * RLS e, sob um nome `NEXT_PUBLIC_`, seria baixada por qualquer visitante da
    * loja. Este teste transforma esse "conserto" numa falha de teste.
+   *
+   * A lista de arquivos é LIDA DO DISCO, e não escrita à mão: um `admin.ts`
+   * criado amanhã entra na varredura sozinho. Uma lista fixa cobriria só os
+   * arquivos que existiam no dia em que o teste foi escrito, que é exatamente
+   * quando ninguém ainda estava tentado a usar a chave.
    */
-  it("nenhum módulo do diretório lê uma chave secreta", () => {
-    for (const arquivo of ["ambiente.ts", "cliente.ts", "servidor.ts"]) {
-      const fonte = readFileSync(new URL(arquivo, import.meta.url), "utf8");
-      const usos = fonte
-        .split("\n")
-        .filter((linha) => /service_role|SERVICE_ROLE|sb_secret_/.test(linha))
-        // A proibição escrita em comentário é bem-vinda; o que não pode é a
-        // chave ser lida do ambiente ou entregue a um construtor de cliente.
-        .filter((linha) =>
-          /process\.env|createClient|createServerClient|createBrowserClient/.test(
-            linha,
-          ),
-        );
-      expect(usos, `${arquivo} usa uma chave secreta`).toEqual([]);
-    }
+  const modulos = readdirSync(new URL(".", import.meta.url))
+    .filter((nome) => nome.endsWith(".ts") && !nome.endsWith(".test.ts"));
+
+  it("varre todo módulo do diretório", () => {
+    // Se o filtro acima quebrar, o teste seguinte passaria vasculhando nada.
+    expect(modulos).toContain("cliente.ts");
+    expect(modulos).toContain("servidor.ts");
+    expect(modulos).toContain("ambiente.ts");
+    expect(modulos).not.toContain("cliente.test.ts");
+  });
+
+  it.each(modulos)("%s não lê uma chave secreta", (arquivo) => {
+    const linhas = readFileSync(new URL(arquivo, import.meta.url), "utf8")
+      .split(/\r?\n/)
+      .map((linha) => linha.trim());
+
+    /**
+     * A proibição escrita em comentário é bem-vinda — é o que os arquivos
+     * fazem. O que não pode é o nome do segredo aparecer em código.
+     *
+     * O filtro exclui a LINHA DE COMENTÁRIO em vez de exigir que o segredo e o
+     * `process.env` estejam na mesma linha física. Com a exigência de mesma
+     * linha, `const CHAVE = "SUPABASE_SERVICE_ROLE_KEY"` seguido de
+     * `process.env[CHAVE]` duas linhas abaixo passava batido.
+     */
+    const emComentario = (linha: string) =>
+      linha.startsWith("//") || linha.startsWith("*") || linha.startsWith("/*");
+
+    const usos = linhas.filter(
+      (linha) =>
+        /service_role|SERVICE_ROLE|sb_secret_/.test(linha) &&
+        !emComentario(linha),
+    );
+
+    expect(usos, `${arquivo} menciona uma chave secreta fora de comentário`)
+      .toEqual([]);
   });
 });

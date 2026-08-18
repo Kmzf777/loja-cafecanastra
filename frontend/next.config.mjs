@@ -78,6 +78,18 @@ const csp = [
   "font-src 'self' data: https://fonts.gstatic.com",
   // O backend serve /uploads (imagem enviada pelo painel quando o Cloudinary
   // nao esta configurado), entao a origem da API tambem precisa entrar aqui.
+  //
+  // O SUPABASE NAO ESTA AQUI, E ISSO E UMA PENDENCIA COM DATA MARCADA, nao um
+  // esquecimento. A F2 nao usa Supabase Storage, entao liberar a origem hoje
+  // seria permissao sem uso. Mas o spec (§151, §196) manda a imagem de produto
+  // para o bucket, e no dia em que isso acontecer ESTA LINHA bloqueia todas
+  // elas — com a mesma falha invisivel que motivou o bloco do connect-src la em
+  // cima: nenhum erro de servidor, nenhum teste vermelho, so imagem quebrada no
+  // navegador de quem visita.
+  //
+  // Sao DOIS lugares a mudar naquele dia, e esquecer o segundo da o mesmo
+  // sintoma: esta linha (`${SUPABASE}`) e o `images.remotePatterns` mais abaixo,
+  // que precisa do host do projeto para o <Image> do Next aceitar otimizar.
   `img-src 'self' data: blob: ${API} https://res.cloudinary.com https://cdn-icons-png.flaticon.com https://*.mlstatic.com`,
   `connect-src ${origens("'self'", API, SUPABASE, "https://api.mercadopago.com", "https://api.mercadolibre.com")}`,
   // O checkout transparente do Mercado Pago roda os campos de cartao num iframe.
@@ -113,6 +125,10 @@ const nextConfig = {
     remotePatterns: [
       // Onde o painel hospeda a imagem de produto enviada pelo admin.
       { protocol: "https", hostname: "res.cloudinary.com" },
+      // O host do Supabase entra aqui quando a imagem de produto migrar para o
+      // Storage (spec §151, §196) — junto com o `img-src` do CSP, que e o outro
+      // lugar. Fora da F2 porque a loja ainda nao serve imagem de la; deixado
+      // escrito porque o sintoma de esquecer e imagem quebrada sem erro nenhum.
     ],
   },
   async headers() {
