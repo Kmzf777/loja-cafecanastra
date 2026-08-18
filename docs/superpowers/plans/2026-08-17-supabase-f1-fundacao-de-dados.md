@@ -1257,6 +1257,40 @@ Esta é a tarefa central da fase. Os testes negativos importam mais que os posit
 >    PostgREST desde o commit da 0002 até esta migração — e um deploy que
 >    aplicasse a 0002 e falhasse aqui deixaria dado pessoal exposto. O `ENABLE`
 >    desta tarefa é idempotente em cima disso; mantenha-o.
+> 6. **Trocar o desenho da view do catálogo — medido e recomendado.** A 0003 usa
+>    `security_invoker = false`, que faz a leitura pública depender da isenção de
+>    RLS do dono da view. Isso funciona, mas duas coisas ruins vêm junto: ligar
+>    `FORCE ROW LEVEL SECURITY` em `canastra.produtos` esvazia a vitrine **em
+>    silêncio**, e a escrita só é barrada por um `REVOKE` que nenhuma regra
+>    estrutural regenera — view nova em `canastra` nasce gravável de novo. O
+>    desenho alternativo foi medido e é melhor em todos os eixos:
+>
+>    ```sql
+>    ALTER VIEW canastra.produtos_publicos SET (security_invoker = true);
+>    GRANT SELECT (produto_id, nome, tamanho, categoria, preco, imagem,
+>                  quantidade, descricao, peso, largura, altura, comprimento,
+>                  destacado_em, sku)
+>      ON canastra.produtos TO anon, authenticated;
+>    CREATE POLICY catalogo_publico ON canastra.produtos FOR SELECT USING (true);
+>    ```
+>
+>    `custo` continua inalcançável (42501), a escalação morre na raiz em vez de
+>    depender de um `REVOKE`, e o modo de esvaziamento silencioso deixa de
+>    existir. Custo aceito conscientemente: `canastra.produtos` passa a ser um
+>    endpoint visível no PostgREST que responde 42501 a um `select=*` cru —
+>    barulhento, nunca vazante. **Mantenha o `REVOKE` mesmo assim.**
+> 7. **Três tabelas públicas ainda devolvem zero linha para `anon`** —
+>    `produto_opcoes`, `promocoes` e `config_loja` têm o `GRANT` mas nenhuma
+>    política. É de propósito (falha fechada), mas é uma lacuna viva: sem
+>    `FOR SELECT TO anon USING (true)` a vitrine perde filtros, promoções e
+>    banner. `produtos` **não** está nessa lista — é lido pela view.
+> 8. **Pedido órfão (`user_id IS NULL`) é invisível a qualquer política de
+>    dono.** `ON DELETE SET NULL` preserva a venda quando o cliente é apagado, e
+>    `USING (user_id = auth.uid())` avalia NULL, não TRUE. Correto para o
+>    cliente; o painel precisa de um caminho próprio para listar histórico.
+> 9. **Toda política de escrita precisa ser escrita como `FOR SELECT` ou com
+>    escopo em `canastra.admins`, nunca `FOR ALL USING (true)`.** Foi medido: a
+>    forma natural apaga linha do catálogo com token de outro projeto.
 
 **Files:**
 - Create: `backend/db/migrations/0006_rls.sql`
