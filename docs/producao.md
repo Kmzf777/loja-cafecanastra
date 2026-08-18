@@ -147,6 +147,49 @@ PostgREST (ou mande `NOTIFY pgrst, 'reload config'`).
 
 ---
 
+
+### 3.4 O caminho do editor SQL (instância nova ou de teste)
+
+Há dois jeitos de levantar este banco, e eles servem a momentos diferentes.
+
+| | `npm run db:migrar` | `backend/db/instalacao-completa.sql` |
+|---|---|---|
+| Para quê | aplicar o que ainda falta | levantar tudo de uma vez, do zero |
+| Como | linha de comando, com `DATABASE_URL` | colar no editor SQL do Supabase |
+| Precisa de Node | sim | não |
+| Cria conta | pelo GoTrue, senha gerada | duas contas de **teste**, senha publicada neste repositório |
+| Numa instalação existente | roda só as migrações novas | **aborta**, e diz o que fazer |
+
+```
+1.  backend/db/reset.sql               (só se já houver instalação anterior)
+2.  backend/db/instalacao-completa.sql
+```
+
+O arquivo de instalação já registra as sete versões em `canastra.migracoes`, então
+um `npm run db:migrar` depois dele responde "Nada pendente." — é isso que permite
+começar pelo editor SQL e seguir com o runner daí para frente.
+
+**As duas contas de teste têm senha escrita no repositório.** Elas existem para
+conferir a fronteira de RLS na mão: entre como `cliente@canastra.teste` e confirme
+que ele não enxerga pedido de outro; entre como `admin@canastra.teste` e confirme
+que enxerga todos. Em produção a conta inicial nasce por `db:seed`, pelo GoTrue,
+com `SEED_ADMIN_PASSWORD` gerado — nunca por este arquivo.
+
+**Sobre o `reset.sql` numa instância compartilhada.** Ele derruba o schema
+`canastra` inteiro e remove de `auth.users` **apenas** os dois endereços de teste,
+por igualdade exata. Isso é deliberado e é a parte mais importante do arquivo:
+`auth.users` é único por instância self-hosted, então um `DELETE` mais largo — ou
+um `LIKE '%teste%'` — apagaria as contas dos seus outros projetos. Nada fora de
+`canastra` e desses dois endereços é tocado.
+
+**Os dois arquivos são gerados**, por `npm run db:gerar-sql`, a partir das
+próprias migrações e do `seed.js`. Não os edite à mão: a edição se perde na
+próxima geração e, pior, cria um banco diferente do que o runner produz.
+`backend/test/instalacao.test.js` sobe dois Postgres, aplica um caminho em cada e
+compara colunas, índices, políticas, funções, privilégios de coluna e o catálogo
+semeado — se alguém editar o SQL ou acrescentar uma migração sem regerar, é ali
+que aparece.
+
 ## 4. Duas invariantes que só o TESTE protege
 
 O banco não impede nenhuma das duas. `npm --prefix backend test` reprova as

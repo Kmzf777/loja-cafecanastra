@@ -296,7 +296,19 @@ async function aplicarMigracoes(pool, pasta = PASTA_PADRAO) {
   return aplicadas;
 }
 
-module.exports = { aplicarMigracoes, ErroDeMigracao, PASTA_PADRAO };
+module.exports = {
+  aplicarMigracoes,
+  ErroDeMigracao,
+  PASTA_PADRAO,
+  // Os dois abaixo sao para o `db/gerar-instalacao.js`, que monta o arquivo
+  // colavel no editor SQL do Supabase. Ele PRECISA usar exatamente este
+  // bootstrap e exatamente esta ordenacao: uma `canastra.migracoes` criada de
+  // outro jeito (sem os REVOKE, por exemplo) ou uma ordem alfabetica no lugar da
+  // numerica produziriam um banco parecido com o do runner e diferente dele —
+  // e a diferenca so apareceria na proxima migracao.
+  BOOTSTRAP,
+  listarMigracoes,
+};
 
 if (require.main === module) {
   const { Pool } = require("pg");

@@ -101,6 +101,128 @@ const CATEGORIAS = {
 };
 
 /**
+ * As colunas de `canastra.produtos` que o seed preenche, na ordem em que
+ * `linhasDeProdutos()` devolve os valores.
+ *
+ * `destacado_em` NAO esta aqui de proposito: ela e `now()` no INSERT, e nao um
+ * parametro. Ter a lista numa constante e o que impede a alternativa obvia e
+ * ruim — repetir a ordem das colunas em dois lugares (aqui e no gerador do SQL
+ * de instalacao). Duas listas em ordens diferentes nao dao erro: dao `nome` no
+ * lugar de `tamanho` no banco inteiro.
+ */
+const COLUNAS_DE_PRODUTO = Object.freeze([
+  "produto_id",
+  "sku",
+  "nome",
+  "tamanho",
+  "categoria",
+  "preco",
+  "imagem",
+  "quantidade",
+  "descricao",
+  "peso",
+  "largura",
+  "altura",
+  "comprimento",
+]);
+
+const SQL_INSERIR_PRODUTO = `
+  INSERT INTO canastra.produtos
+    (${COLUNAS_DE_PRODUTO.join(", ")}, destacado_em)
+  VALUES (${COLUNAS_DE_PRODUTO.map((_, i) => `$${i + 1}`).join(", ")}, now())
+  ON CONFLICT (sku) WHERE sku IS NOT NULL DO NOTHING`;
+
+/**
+ * O catalogo inteiro como linhas prontas para o INSERT, sem tocar no banco.
+ *
+ * POR QUE ISTO E UMA FUNCAO EXPORTADA, E NAO CODIGO SOLTO DENTRO DO LACO
+ * `db/gerar-instalacao.js` monta o `instalacao-completa.sql` (o arquivo que se
+ * cola no editor SQL do Supabase) a partir DESTA funcao. A alternativa era
+ * escrever os 29 INSERTs a mao naquele arquivo — e ai existiriam duas listas do
+ * mesmo catalogo, mantidas por pessoas diferentes em dias diferentes. A
+ * divergencia entre elas nao levanta erro nenhum: leva a uma loja instalada pelo
+ * SQL com preco, descricao ou peso diferentes da instalada pelo seed, e isso so
+ * aparece quando alguem compara os dois bancos.
+ *
+ * PURA DE PROPOSITO (nenhum `await`, nenhum pool): e o que permite ao gerador
+ * chamar a mesma logica sem um Postgres de pe, e ao teste comparar os dois
+ * caminhos linha a linha.
+ *
+ * A validacao da linha (`linhaDe`) subiu para ca junto. O efeito observavel e o
+ * mesmo de antes — o erro continua abortando a semeadura inteira —, so que agora
+ * ele acontece ANTES do BEGIN em vez de dentro da transacao, o que e estritamente
+ * melhor: nao ha transacao aberta para desfazer.
+ */
+function linhasDeProdutos() {
+  return CATALOGO.produtos.map((produto) => {
+    const linha = linhaDe(produto.linha);
+    if (!linha) {
+      throw new Error(
+        `SKU ${produto.sku} aponta para linha inexistente: ${produto.linha}`,
+      );
+    }
+
+    const categoria = produto.kit ? "Kits" : CATEGORIAS[produto.formato];
+
+    return [
+      idDe(produto.sku),
+      produto.sku,
+      produto.nome,
+      produto.rotuloEmbalagem,
+      categoria,
+      (produto.precoCentavos / 100).toFixed(2),
+      urlDaImagem(linha.imagem),
+      produto.estoque,
+      descricaoDe(produto),
+      pesoKg(produto).toFixed(3),
+      produto.gramas >= 1000 ? 24 : 18,
+      produto.gramas >= 1000 ? 10 : 7,
+      produto.gramas >= 1000 ? 32 : 24,
+    ];
+  });
+}
+
+/**
+ * Os valores de filtro do painel, sem tocar no banco. Mesmo motivo de
+ * `linhasDeProdutos()`: o gerador do SQL de instalacao le daqui.
+ */
+function linhasDeOpcoes() {
+  const opcoes = [];
+  for (const c of new Set(Object.values(CATEGORIAS).concat("Kits"))) {
+    opcoes.push({ tipo: "categoria", valor: c });
+  }
+  for (const p of CATALOGO.produtos) {
+    opcoes.push({ tipo: "tamanho", valor: p.rotuloEmbalagem });
+  }
+
+  const vistos = new Set();
+  const linhas = [];
+  for (const o of opcoes) {
+    const chave = `${o.tipo}:${o.valor}`;
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    linhas.push({ id: idDe(chave), tipo: o.tipo, valor: o.valor });
+  }
+  return linhas;
+}
+
+/**
+ * A linha unica de `config_loja`, sem tocar no banco. Mesmo motivo de
+ * `linhasDeProdutos()`.
+ */
+function valoresDeConfig() {
+  return [
+    // Absolutas pelo mesmo motivo da imagem de produto: o painel resolve
+    // caminho relativo contra o backend, que nao serve estes arquivos.
+    urlDaImagem("/bannerdesktop.jpg"),
+    urlDaImagem("/imagem-banner.jpg"),
+    "Café Canastra",
+    process.env.LOJA_WHATSAPP || "",
+    "Torramos na terça, enviamos na quarta.",
+  ];
+}
+
+/**
  * O catalogo, em `canastra.produtos`.
  *
  * `DO NOTHING`, E NAO `DO UPDATE` — ESTA E A DECISAO DO ARQUIVO.
@@ -134,44 +256,15 @@ const CATEGORIAS = {
  * corrupcao, e o conserto e devolver o SKU ou apagar a linha.
  */
 async function semearProdutos(pool) {
+  const linhas = linhasDeProdutos();
   const cliente = await pool.connect();
   let inseridos = 0;
 
   try {
     await cliente.query("BEGIN");
 
-    for (const produto of CATALOGO.produtos) {
-      const linha = linhaDe(produto.linha);
-      if (!linha) {
-        throw new Error(
-          `SKU ${produto.sku} aponta para linha inexistente: ${produto.linha}`,
-        );
-      }
-
-      const categoria = produto.kit ? "Kits" : CATEGORIAS[produto.formato];
-
-      const { rowCount } = await cliente.query(
-        `INSERT INTO canastra.produtos
-           (produto_id, sku, nome, tamanho, categoria, preco, imagem, destacado_em,
-            quantidade, descricao, peso, largura, altura, comprimento)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,$9,$10,$11,$12,$13)
-         ON CONFLICT (sku) WHERE sku IS NOT NULL DO NOTHING`,
-        [
-          idDe(produto.sku),
-          produto.sku,
-          produto.nome,
-          produto.rotuloEmbalagem,
-          categoria,
-          (produto.precoCentavos / 100).toFixed(2),
-          urlDaImagem(linha.imagem),
-          produto.estoque,
-          descricaoDe(produto),
-          pesoKg(produto).toFixed(3),
-          produto.gramas >= 1000 ? 24 : 18,
-          produto.gramas >= 1000 ? 10 : 7,
-          produto.gramas >= 1000 ? 32 : 24,
-        ],
-      );
+    for (const valores of linhas) {
+      const { rowCount } = await cliente.query(SQL_INSERIR_PRODUTO, valores);
       // Com DO NOTHING o Postgres nao devolve linha nenhuma no conflito, entao
       // `rowCount` sozinho ja distingue "entrou agora" de "ja estava la" — o
       // truque do `xmax = 0`, que a versao com DO UPDATE precisava, some junto.
@@ -186,32 +279,21 @@ async function semearProdutos(pool) {
     cliente.release();
   }
 
-  const total = CATALOGO.produtos.length;
+  const total = linhas.length;
   return { inseridos, ignorados: total - inseridos, total };
 }
 
 /** Alimenta os selects de filtro do painel com os valores que existem de fato. */
 async function semearOpcoes(pool) {
-  const opcoes = [];
-  for (const c of new Set(Object.values(CATEGORIAS).concat("Kits"))) {
-    opcoes.push({ tipo: "categoria", valor: c });
-  }
-  for (const p of CATALOGO.produtos) {
-    opcoes.push({ tipo: "tamanho", valor: p.rotuloEmbalagem });
-  }
-
-  const vistos = new Set();
-  for (const o of opcoes) {
-    const chave = `${o.tipo}:${o.valor}`;
-    if (vistos.has(chave)) continue;
-    vistos.add(chave);
+  const linhas = linhasDeOpcoes();
+  for (const o of linhas) {
     await pool.query(
       `INSERT INTO canastra.produto_opcoes (id, tipo, valor) VALUES ($1,$2,$3)
        ON CONFLICT (tipo, valor) DO NOTHING`,
-      [idDe(chave), o.tipo, o.valor],
+      [o.id, o.tipo, o.valor],
     );
   }
-  return vistos.size;
+  return linhas.length;
 }
 
 /**
@@ -230,15 +312,7 @@ async function semearConfig(pool) {
        (id, banner_desktop, banner_mobile, titulo_site, whatsapp, barra_de_aviso)
      VALUES (1,$1,$2,$3,$4,$5)
      ON CONFLICT (id) DO NOTHING`,
-    [
-      // Absolutas pelo mesmo motivo da imagem de produto: o painel resolve
-      // caminho relativo contra o backend, que nao serve estes arquivos.
-      urlDaImagem("/bannerdesktop.jpg"),
-      urlDaImagem("/imagem-banner.jpg"),
-      "Café Canastra",
-      process.env.LOJA_WHATSAPP || "",
-      "Torramos na terça, enviamos na quarta.",
-    ],
+    valoresDeConfig(),
   );
   return rowCount > 0;
 }
@@ -422,6 +496,17 @@ async function main() {
   }
 }
 
-module.exports = { semearProdutos, semearOpcoes, semearConfig, semearAdmin };
+module.exports = {
+  semearProdutos,
+  semearOpcoes,
+  semearConfig,
+  semearAdmin,
+  // Os tres abaixo sao a materia-prima do `db/gerar-instalacao.js`. Exportados
+  // para que exista UMA lista de produtos no projeto, e nao duas.
+  COLUNAS_DE_PRODUTO,
+  linhasDeProdutos,
+  linhasDeOpcoes,
+  valoresDeConfig,
+};
 
 if (require.main === module) main();

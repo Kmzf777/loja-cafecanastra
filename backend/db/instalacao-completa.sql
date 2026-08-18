@@ -1,0 +1,1914 @@
+-- ============================================================================
+-- Loja do Café Canastra — instalação completa do banco
+--
+-- ARQUIVO GERADO. Não edite à mão.
+--   Fonte:  backend/db/migrations/*.sql  +  backend/db/seed.js
+--   Gerador: node backend/db/gerar-instalacao.js
+--
+-- Uma edição feita aqui é perdida na próxima geração, e — pior — cria um banco
+-- diferente do que `npm run db:migrar` produz. O teste
+-- backend/test/instalacao.test.js compara os dois e reprova a divergência.
+--
+-- PARA QUE SERVE
+-- Levantar a loja inteira num Supabase novo ou de teste, colando um arquivo só
+-- no editor SQL. Inclui: schema, tabelas, RLS, RPC, catálogo com 29 SKUs e duas
+-- contas de teste já confirmadas.
+--
+-- QUANDO NÃO USAR
+-- Numa instalação que já rodou. Este arquivo pressupõe que `canastra` não
+-- existe e aborta se existir. Para aplicar só o que falta, use
+-- `npm run db:migrar`, que roda cada migração uma vez e registra a versão.
+--
+-- COMO RODAR DE NOVO DO ZERO
+-- `backend/db/reset.sql` primeiro, depois este arquivo.
+--
+-- !! CONTAS DE TESTE COM SENHA PUBLICADA NESTE REPOSITORIO:
+--   administrador  admin@canastra.teste  /  canastra-teste-admin
+--   cliente comum   cliente@canastra.teste  /  canastra-teste-cliente
+--
+-- Não aplique este arquivo em produção. Lá a conta inicial nasce pelo GoTrue,
+-- via `npm run db:seed`, com senha gerada.
+-- ============================================================================
+
+
+-- ----------------------------------------------------------------------------
+-- 0. Guarda: este arquivo é para instalação limpa
+-- ----------------------------------------------------------------------------
+
+DO $guarda$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'canastra') THEN
+    RAISE EXCEPTION
+      'O schema "canastra" já existe neste banco.'
+      USING HINT =
+        'Para reinstalar do zero: rode backend/db/reset.sql e cole este arquivo de novo. '
+        'Para aplicar apenas migrações novas: use npm run db:migrar.';
+  END IF;
+END $guarda$;
+
+-- pgcrypto: `crypt()` e `gen_salt()` criam o hash das senhas de teste mais
+-- abaixo. Em Supabase gerenciado ja vem instalada; num self-hosted enxuto, nao.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+
+-- ----------------------------------------------------------------------------
+-- 1. Estrutura: as sete migrações, na ordem do runner
+-- ----------------------------------------------------------------------------
+
+-- Identico ao BOOTSTRAP de db/migrar.js — inclusive os REVOKE em
+-- canastra.migracoes, que mantem o livro-caixa das migracoes fora do PostgREST.
+CREATE SCHEMA IF NOT EXISTS canastra;
+  CREATE TABLE IF NOT EXISTS canastra.migracoes (
+    versao      text PRIMARY KEY,
+    aplicada_em timestamptz NOT NULL DEFAULT now()
+  );
+  DO $bootstrap$
+  BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+      REVOKE ALL ON canastra.migracoes FROM anon;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+      REVOKE ALL ON canastra.migracoes FROM authenticated;
+    END IF;
+  END $bootstrap$;
+
+-- ----------------------------------------------------------------------------
+-- 1.0001_schema_e_papeis
+-- ----------------------------------------------------------------------------
+
+-- Schema proprio da loja.
+--
+-- POR QUE NAO `public`
+-- Esta instancia Supabase e compartilhada com outros projetos. Em `public` a
+-- loja disputaria nome de tabela com eles e qualquer GRANT amplo vazaria de um
+-- lado para o outro. Com schema proprio, a permissao e concedida uma vez, aqui,
+-- e nada fora dele e alcancavel por engano.
+
+CREATE SCHEMA IF NOT EXISTS canastra;
+
+-- Sem estes GRANTs o PostgREST responde 404 em toda rota da loja, mesmo com a
+-- politica de RLS correta: o papel nao enxerga o schema para comecar.
+GRANT USAGE ON SCHEMA canastra TO anon, authenticated, service_role;
+
+-- Padrao para tabelas criadas nas migracoes seguintes. Note que isto concede
+-- acesso de TABELA; quem decide o acesso de LINHA e a RLS de 0006. As duas
+-- camadas sao necessarias: sem GRANT nao ha leitura nenhuma, sem RLS ha leitura
+-- demais.
+--
+-- `anon` NAO ESTA AQUI, E E DE PROPOSITO
+-- Um `GRANT SELECT ON TABLES TO anon` por padrao faz toda tabela das migracoes
+-- seguintes nascer legivel por visitante anonimo — inclusive `clientes`,
+-- `pedidos` e `enderecos`. Cada uma dessas precisaria de um REVOKE depois, e uma
+-- escada de grant-e-revoga falha ABERTA: basta esquecer um REVOKE e o vazamento
+-- e silencioso, sem erro em lugar nenhum. Invertido, o esquecimento vira 404 no
+-- PostgREST — barulhento, achado no primeiro teste da vitrine, e nao em
+-- producao. Entao quem for genuinamente publico (catalogo, por exemplo) leva
+-- `GRANT SELECT ... TO anon` explicito na sua propria migracao.
+--
+-- ARMADILHA CONHECIDA, LEIA ANTES DE CRIAR TABELA FORA DAQUI
+-- ALTER DEFAULT PRIVILEGES so alcanca objetos criados pelo MESMO papel que
+-- rodou este comando (o default e `FOR ROLE current_user`). Aqui isso da certo
+-- porque quem roda as migracoes e quem cria as tabelas e sempre o dono do
+-- DATABASE_URL, o mesmo papel nas duas pontas. Uma tabela criada por outro
+-- caminho — psql com outro usuario, Supabase Studio, script de manutencao —
+-- nasce SEM nenhum destes GRANTs, e o sintoma e 404 no PostgREST com a RLS toda
+-- certa. Nesse caso o conserto e um GRANT explicito na propria tabela, nao
+-- mexer aqui.
+ALTER DEFAULT PRIVILEGES IN SCHEMA canastra
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA canastra
+  GRANT ALL ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA canastra
+  GRANT USAGE, SELECT ON SEQUENCES TO authenticated, service_role;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0001_schema_e_papeis')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0002_clientes_e_admins
+-- ----------------------------------------------------------------------------
+
+-- Vinculo entre a loja e o GoTrue.
+--
+-- POR QUE ESTA TABELA EXISTE, E POR QUE ELA E A PECA DE SEGURANCA
+-- A instancia Supabase e compartilhada com outros projetos. `auth.users` e
+-- unico por instancia, e o JWT_SECRET tambem: um token emitido para OUTRO
+-- projeto chega no PostgREST da loja com assinatura valida e `auth.uid()`
+-- preenchido.
+--
+-- Por isso nenhuma politica de RLS pode usar `auth.uid() IS NOT NULL`. Ser
+-- cliente da loja e ter LINHA AQUI — e esta linha so e criada no cadastro feito
+-- pela loja. Um usuario de outro projeto autentica, mas nao e cliente, e nao
+-- enxerga nada.
+
+CREATE TABLE canastra.clientes (
+  user_id    uuid PRIMARY KEY REFERENCES auth.users (id) ON DELETE CASCADE,
+  nome       text NOT NULL,
+  -- UNIQUE aqui NAO obriga ninguem a ter CPF: no Postgres cada NULL e distinto
+  -- dos outros (o indice nasce com NULLS DISTINCT, que e o padrao), entao
+  -- quantos clientes se quiser podem ficar sem CPF e mesmo assim dois clientes
+  -- nunca compartilham o mesmo numero. E o que a loja precisa — CPF so entra no
+  -- checkout com nota, e exigi-lo no cadastro barraria a criacao da conta.
+  cpf        text UNIQUE,
+  telefone   text,
+  criado_em  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Papel de administrador NUNCA vem de claim no JWT: outro projeto da instancia
+-- poderia emitir um token com o claim que quisesse. Vem de linha nesta tabela,
+-- que so `service_role` escreve.
+--
+-- A referencia e para `canastra.clientes`, e nao direto para `auth.users`, de
+-- proposito: admin da loja e, antes disso, cliente da loja. Sem esse salto um
+-- usuario de outro projeto da instancia poderia ser promovido a admin daqui sem
+-- nunca ter passado pelo cadastro.
+CREATE TABLE canastra.admins (
+  user_id   uuid PRIMARY KEY REFERENCES canastra.clientes (user_id) ON DELETE CASCADE,
+  criado_em timestamptz NOT NULL DEFAULT now()
+);
+
+/**
+ * A loja nao pode ficar sem quem a administre.
+ *
+ * Isto era regra de aplicacao e dependia de o painel lembrar de checar. Como
+ * trigger, vale para qualquer DELETE, por qualquer caminho — painel, psql,
+ * PostgREST ou script. TRUNCATE e a excecao, ver LIMITE CONHECIDO abaixo.
+ *
+ * AFTER DELETE ... FOR EACH STATEMENT, e nao FOR EACH ROW: um `DELETE FROM
+ * canastra.admins` sem WHERE apaga tudo, e a checagem por linha veria sempre
+ * "ainda ha outras" ate a ultima, tarde demais numa trigger BEFORE. Depois do
+ * comando inteiro, a conta e exata.
+ *
+ * O `REFERENCING OLD TABLE` NAO E ENFEITE. Trigger de statement dispara mesmo
+ * quando o DELETE nao casa linha nenhuma — medido: com a tabela vazia, um
+ * `DELETE FROM canastra.admins` recusava com "sem administrador", e o mesmo
+ * acontecia na cascata vinda de `clientes` quando o cliente apagado nao era
+ * admin (a cascata roda um DELETE de zero linhas aqui). Ou seja, sem a tabela de
+ * transicao a trava quebrava dois cenarios corriqueiros que nao tiram admin
+ * nenhum da loja, inclusive a criacao do primeiro admin numa instalacao nova.
+ * Com ela a regra fica exatamente a pretendida: um DELETE que REALMENTE apagou
+ * alguma coisa nao pode deixar a tabela em zero.
+ *
+ * ERRCODE explicito, e nao o P0001 padrao do RAISE: P0001 e o mesmo codigo de
+ * qualquer outro RAISE do banco, entao quem chama teria de casar TEXTO de
+ * mensagem para reconhecer esta recusa — a fragilidade que test/ajuda/sessao.js
+ * ja documentou. `restrict_violation` (23001) e o codigo que o proprio Postgres
+ * usa quando uma restricao barra uma remocao, e nenhuma chave estrangeira deste
+ * schema usa ON DELETE RESTRICT, entao o codigo nao colide com nada.
+ *
+ * LIMITE CONHECIDO: TRUNCATE nao dispara trigger de DELETE, entao
+ * `TRUNCATE canastra.admins` zera a tabela sem passar por aqui — conferido. Quem
+ * pode fazer isso e o dono do banco e o `service_role` (que recebe ALL em 0001,
+ * e ALL inclui TRUNCATE). Os dois ja sao credenciais totalmente confiaveis do
+ * lado servidor; a trava existe contra engano operacional, nao contra elas.
+ *
+ * SECURITY DEFINER PORQUE A CONTAGEM NAO PODE PASSAR PELA RLS. Como SECURITY
+ * INVOKER, o `SELECT ... FROM canastra.admins` daqui rodaria sob as politicas do
+ * papel que disparou o DELETE, e a trava passava a recusar remocao legitima.
+ * Medido, com RLS ligada em `admins`, uma politica de DELETE
+ * `USING (user_id = auth.uid())` e nenhuma politica ampla de SELECT: Ana, admin,
+ * roda `DELETE FROM canastra.admins` SEM WHERE; o Postgres apaga so a linha dela
+ * e Bruno continua admin, mas a funcao nao enxerga Bruno e recusa com 23001. A
+ * forma sem WHERE e o que torna o caso alcancavel — com WHERE, as politicas de
+ * SELECT tambem se aplicam, a linha nem e casada e `apagados` fica vazia.
+ *
+ * Nao adianta contar com a politica futura ser generosa: quem escreve a RLS nao
+ * tem como saber que uma trigger depende dela, e um comentario nao impede nada.
+ * Contar admin e decisao do banco, nao do papel que apaga.
+ *
+ * `SET search_path` NAO E OPCIONAL numa funcao SECURITY DEFINER: sem ele, quem
+ * chama escolhe em que schema `admins` sera procurada e executa o que quiser com
+ * os privilegios do dono da funcao — que aqui e o dono do banco. Com o caminho
+ * fixo, so `canastra` e o `pg_temp` obrigatorio (que vai por ultimo de proposito:
+ * na frente, uma tabela temporaria do proprio chamador sequestraria o nome).
+ *
+ * O REVOKE e higiene. `proacl` nasce nulo, o que significa EXECUTE para PUBLIC.
+ * Chamar a funcao fora de uma trigger ja falha sozinho, entao nao ha exploracao
+ * hoje; nao ha tambem razao para deixar EXECUTE aberto numa funcao SECURITY
+ * DEFINER do dono do banco.
+ */
+CREATE FUNCTION canastra.exigir_um_admin() RETURNS trigger
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
+AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM apagados)
+     AND NOT EXISTS (SELECT 1 FROM canastra.admins) THEN
+    RAISE EXCEPTION 'A loja não pode ficar sem administrador.'
+      USING ERRCODE = 'restrict_violation',
+            HINT = 'Cadastre outro administrador antes de remover este.';
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION canastra.exigir_um_admin() FROM PUBLIC;
+
+CREATE TRIGGER admins_nunca_zero
+  AFTER DELETE ON canastra.admins
+  REFERENCING OLD TABLE AS apagados
+  FOR EACH STATEMENT
+  EXECUTE FUNCTION canastra.exigir_um_admin();
+
+-- Chave geral fechada, ainda sem politica nenhuma.
+--
+-- Sem esta linha as duas tabelas ficam legiveis por qualquer papel entre o
+-- COMMIT desta migracao e o da migracao que liga a RLS de verdade — e como cada
+-- migracao commita na propria transacao, a janela existe mesmo dentro de uma
+-- unica execucao do runner. Pior: se a migracao da RLS falhar, o deploy PARA
+-- exatamente ai, com `nome`, `cpf` e `telefone` servidos pelo PostgREST a quem
+-- pedir. Medido: como `anon`, `SELECT count(*) FROM canastra.clientes` devolvia
+-- linhas.
+--
+-- ENABLE sem policy nao e politica de acesso, e o contrario disso: sem policy
+-- nenhuma linha passa, para ninguem alem do dono da tabela e de quem tem
+-- BYPASSRLS (o `service_role`). Ou seja, a sequencia de migracoes passa a falhar
+-- FECHADA. A migracao que escreve as politicas repete o ENABLE, que e
+-- idempotente.
+ALTER TABLE canastra.clientes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.admins   ENABLE ROW LEVEL SECURITY;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0002_clientes_e_admins')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0003_catalogo
+-- ----------------------------------------------------------------------------
+
+-- Catalogo.
+--
+-- Colunas renomeadas do ingles para o portugues junto com a migracao: o codigo
+-- que lia os nomes antigos esta sendo substituido nesta mesma obra, entao o
+-- custo de renomear e zero e o ganho e um schema legivel por quem administra a
+-- loja.
+--
+-- `uuid-ossp` NAO e criada: o schema antigo declarava a extensao, mas nenhuma
+-- coluna usava `uuid_generate_v4()` — os UUIDs vem do pacote `uuid` em JS. Onde
+-- um default e util aqui, `gen_random_uuid()` do proprio Postgres resolve sem
+-- extensao nenhuma.
+
+CREATE TABLE canastra.produtos (
+  produto_id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome         text NOT NULL,
+  -- Na loja de camisetas de origem isto era P/M/G. Aqui carrega o formato do
+  -- cafe ("250 g", "Caixa 3x250 g"), que e o eixo de variacao real.
+  tamanho      text,
+  categoria    text,
+  preco        numeric(10,2) NOT NULL DEFAULT 0,
+  -- Interno: nunca sai na view publica.
+  custo        numeric(10,2) NOT NULL DEFAULT 0,
+  imagem       text,
+  quantidade   integer NOT NULL DEFAULT 0,
+  descricao    text,
+  peso         numeric(10,3) NOT NULL DEFAULT 0.3,
+  largura      numeric(10,2) NOT NULL DEFAULT 20,
+  altura       numeric(10,2) NOT NULL DEFAULT 5,
+  comprimento  numeric(10,2) NOT NULL DEFAULT 20,
+  -- Ordenacao "novidades"/"antigos" do painel. Coluna propria porque o admin
+  -- pode querer destacar um produto sem mexer na data de criacao.
+  destacado_em timestamptz NOT NULL DEFAULT now(),
+  criado_em    timestamptz NOT NULL DEFAULT now(),
+  sku          text
+);
+
+-- Chave de negocio que costura a vitrine ao banco: a metade EDITORIAL do
+-- catalogo vive em data/catalogo-canastra.json (versionada, revisada em PR) e a
+-- metade COMERCIAL vive aqui. Sem uma chave comum, casar os dois so daria por
+-- nome — que muda com qualquer correcao de texto e quebra a ligacao em silencio.
+-- Nulavel: produto cadastrado a mao no painel nao tem SKU do catalogo.
+CREATE UNIQUE INDEX produtos_sku_idx ON canastra.produtos (sku)
+  WHERE sku IS NOT NULL;
+
+-- Busca do painel. Coluna gerada: nao ha trigger para manter em dia.
+--
+-- A configuracao vai EXPLICITA ('portuguese') e nao pode virar a forma de um
+-- argumento so: `to_tsvector(text)` usa o GUC `default_text_search_config`, e
+-- por depender dele e apenas STABLE — o Postgres recusa a coluna gerada com
+-- 42P17. A forma de dois argumentos e IMMUTABLE e por isso serve. O efeito
+-- colateral bom e que a indexacao para de depender da configuracao do servidor.
+ALTER TABLE canastra.produtos
+  ADD COLUMN tsv tsvector
+  GENERATED ALWAYS AS (
+    to_tsvector(
+      'portuguese',
+      coalesce(nome, '') || ' ' || coalesce(categoria, '') || ' ' ||
+      coalesce(tamanho, '') || ' ' || coalesce(descricao, '')
+    )
+  ) STORED;
+
+CREATE INDEX produtos_tsv_idx ON canastra.produtos USING gin (tsv);
+CREATE INDEX produtos_categoria_idx ON canastra.produtos (categoria);
+CREATE INDEX produtos_destaque_idx ON canastra.produtos (destacado_em DESC);
+
+-- Valores de filtro do painel: linhas ('tamanho') e categorias ('categoria').
+CREATE TABLE canastra.produto_opcoes (
+  id    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tipo  text NOT NULL,
+  valor text NOT NULL,
+  UNIQUE (tipo, valor)
+);
+
+/**
+ * O recorte que a `anon key` enxerga.
+ *
+ * LEIA ISTO ANTES DO RESTO DO BLOCO: A MIGRACAO 0006 INVERTEU O
+ * `security_invoker` DESTA VIEW PARA TRUE. O texto abaixo descreve o arranjo
+ * ORIGINAL e continua aqui porque explica de onde a loja veio e o que foi
+ * medido — mas ele NAO descreve o banco de hoje, e a decisao de hoje esta em
+ * 0006, que e onde um leitor futuro deve procurar. Em resumo do que mudou: a
+ * vitrine deixou de depender da isencao de RLS do dono da view e passou a ler
+ * `canastra.produtos` com os privilegios de quem chama, via GRANT de COLUNA
+ * mais a politica `produtos_leitura_publica`. O que se ganhou foi o fim do modo
+ * de falha silencioso do FORCE RLS descrito adiante.
+ *
+ * A DDL desta view NAO foi reescrita de proposito: migracao aplicada nao roda de
+ * novo, entao editar o `WITH (...)` daqui so valeria para instalacao nova e as
+ * duas populacoes divergiriam em silencio. A troca e feita por ALTER em 0006.
+ *
+ * A vitrine le o catalogo com a chave anonima, que e publica por definicao —
+ * ela viaja no bundle. Dar SELECT na tabela inteira publicaria `custo` junto
+ * com o preco. A view define exatamente o que e publico — e, desde 0006, o
+ * GRANT de coluna na tabela base repete essa mesma lista.
+ *
+ * security_invoker = FALSE, de proposito e ao contrario do reflexo habitual.
+ * A view roda com os poderes de quem a criou, ignorando a RLS da tabela base —
+ * e aqui isso e a intencao, nao um descuido: o catalogo E publico, e a view e o
+ * proprio controle de acesso, definindo por projecao o que sai. Com
+ * security_invoker = true, `anon` precisaria de privilegio na tabela base, que
+ * ele nao tem, e toda a vitrine responderia "permission denied".
+ *
+ * DE QUE ISENCAO SE TRATA, exatamente, ja que este e o arranjo que sustenta a
+ * loja inteira: a view roda como seu DONO, que aqui e tambem o dono de
+ * `canastra.produtos` (as duas coisas sao criadas por esta migracao, pelo mesmo
+ * papel), e dono de tabela e isento de RLS enquanto ninguem ligar FORCE ROW
+ * LEVEL SECURITY nela. E por isso que o ENABLE ROW LEVEL SECURITY do fim deste
+ * arquivo NAO cega a vitrine.
+ *
+ * Medido com um dono NAO-superusuario — assim a isencao medida e mesmo a do
+ * DONO, e nao um efeito colateral do superusuario que o harness usa:
+ *   RLS ligada, sem policy .......... anon le o catalogo normalmente
+ *   + FORCE ROW LEVEL SECURITY ...... anon le ZERO linhas, sem erro nenhum
+ *   + security_invoker = true ....... 42501, permission denied for table produtos
+ *
+ * As tres coisas que quebravam isto, no arranjo original: ligar FORCE RLS em
+ * `produtos`, virar o `security_invoker` para true, e a view passar a pertencer
+ * a outro papel (ALTER VIEW ... OWNER TO, ou recriar a view por outro usuario).
+ * Repare no modo de falha do FORCE: vitrine VAZIA, sem erro, sem log — o pior
+ * dos tres, e a razao pela qual 0006 desfez este arranjo. Depois de 0006 a lista
+ * e outra: quem quebra a vitrine e virar o `security_invoker` de volta para
+ * false, ou mexer no GRANT de coluna da tabela base. Por isso
+ * test/catalogo.test.js confere `relforcerowsecurity` e o `security_invoker` no
+ * catalogo do Postgres, e nao so o comportamento: no harness o dono e
+ * superusuario, e superusuario ignora ate o FORCE, entao um teste apenas
+ * comportamental passaria verde com a producao quebrada. (O valor esperado do
+ * `security_invoker` naquele teste e `true` desde 0006.)
+ *
+ * NAO ESTA APURADO se o dono em PRODUCAO e superusuario, e a frase acima nao
+ * afirma que e. Na imagem oficial do Supabase self-hosted o papel `postgres` E
+ * superusuario; se for esse o papel do DATABASE_URL neste VPS, o harness ja
+ * espelha a producao e o risco do FORCE e teorico la. Mas isso depende do papel
+ * configurado na instancia, que nao foi inspecionado daqui. As asercoes de
+ * catalogo cobrem os dois mundos sem custo nenhum, entao a duvida nao precisa
+ * ser resolvida para o schema estar correto — precisa e nao ser esquecida.
+ *
+ * O preco disso: quem alterar esta view esta alterando uma fronteira de
+ * seguranca. Nenhuma coluna nova entra aqui sem ser publica de verdade.
+ */
+CREATE VIEW canastra.produtos_publicos
+  WITH (security_invoker = false)
+AS
+  SELECT produto_id, nome, tamanho, categoria, preco, imagem, quantidade,
+         descricao, peso, largura, altura, comprimento, destacado_em, sku
+  FROM canastra.produtos;
+
+GRANT SELECT ON canastra.produtos_publicos TO anon, authenticated;
+
+/**
+ * A view e uma janela de LEITURA. Fechar a escrita nao e higiene, e conserto.
+ *
+ * Os ALTER DEFAULT PRIVILEGES de 0001 valem tambem para VIEWS — "TABLES" ali
+ * abrange tabela, view e foreign table —, entao `produtos_publicos` nasce com
+ * INSERT/UPDATE/DELETE concedidos a `authenticated`. E ela e AUTO-ATUALIZAVEL:
+ * projecao simples de uma unica tabela, sem DISTINCT, GROUP BY, agregado ou
+ * juncao, e o Postgres aceita escrita atraves dela.
+ *
+ * Junte isso ao `security_invoker = false` acima e o resultado, medido antes
+ * deste REVOKE existir: qualquer sessao `authenticated` — inclusive um token de
+ * OUTRO projeto da instancia compartilhada, que nem cliente da loja e — inseria,
+ * mudava preco e apagava produtos, com os poderes do dono e passando por cima da
+ * RLS de `produtos`. A mesma propriedade que faz a leitura publica funcionar
+ * entregava a escrita de brinde.
+ *
+ * O REVOKE e o unico ponto onde isso se fecha: a RLS da tabela base nao alcanca
+ * (e justamente ela que a view ignora) e nao ha politica possivel sobre uma
+ * view. `service_role` fica de fora do REVOKE de proposito — e credencial de
+ * servidor, ja tem BYPASSRLS, e o painel escreve por ela.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.produtos_publicos FROM authenticated;
+
+-- `produto_opcoes` alimenta os filtros da vitrine, entao e genuinamente publica
+-- e leva o GRANT explicito que a Regra de 0001 exige (nada nasce legivel por
+-- `anon`). So SELECT: escrever nos filtros e coisa do painel.
+GRANT SELECT ON canastra.produto_opcoes TO anon;
+
+/**
+ * O MESMO FURO, pela porta da frente: `authenticated` escreve nas TABELAS.
+ *
+ * O REVOKE acima fecha a view. Mas os ALTER DEFAULT PRIVILEGES de 0001 dao
+ * INSERT/UPDATE/DELETE a `authenticated` em toda tabela criada nas migracoes, e
+ * `produtos` e `produto_opcoes` estao nesse pacote. Hoje isso e inerte so porque
+ * a RLS esta ligada e nao ha politica nenhuma — ou seja, a protecao inteira do
+ * catalogo depende de NINGUEM escrever uma politica ampla demais.
+ *
+ * Nao e um risco imaginario, e o erro NATURAL de quem escrever a migracao de
+ * politicas. "Os filtros do catalogo sao publicos" escrito do jeito obvio:
+ *
+ *   CREATE POLICY tudo ON canastra.produto_opcoes FOR ALL USING (true) WITH CHECK (true);
+ *
+ * e a partir dai um token de OUTRO projeto da instancia compartilhada APAGA os
+ * filtros do catalogo. Escrito FOR SELECT, o mesmo intruso leva 42501. Uma
+ * palavra separa o certo do vazamento, e a palavra esta noutro arquivo, escrito
+ * por outra pessoa, noutro dia.
+ *
+ * Com o REVOKE, a politica ampla deixa de ser suficiente para causar dano: falta
+ * o privilegio de tabela, que e a camada de baixo. Volta a valer o principio de
+ * 0001 — as duas camadas negam.
+ *
+ * ISTO NAO CONTRADIZ A RECUSA DA ESCADA GRANT-E-REVOGA DE 0001, e a diferenca
+ * importa. La o problema era uma regra ILIMITADA: `anon` recebendo SELECT em toda
+ * tabela FUTURA, com um REVOKE devido por tabela para sempre — esquecer um vira
+ * vazamento silencioso, e a lista nunca fecha. Aqui o conjunto e FECHADO e
+ * ENUMERAVEL (relacoes em que cliente nenhum tem o que escrever) e esta afirmado
+ * em test/catalogo.test.js e test/pedidos.test.js, entao um esquecimento futuro
+ * fica vermelho no CI em vez de silencioso.
+ *
+ * O CONSERTO ESTRUTURALMENTE MELHOR seria outro: estreitar 0001 para
+ * `GRANT SELECT ON TABLES TO authenticated` e conceder escrita tabela a tabela,
+ * na migracao de cada uma. Isso mata a classe inteira em vez destes casos.
+ * Deliberadamente NAO feito aqui porque mexeria numa migracao ja revisada e ja
+ * aplicada — e migracao aplicada nao roda de novo, entao a alteracao valeria so
+ * para instalacoes novas e as duas populacoes divergiriam em silencio, que e o
+ * pior desfecho possivel para uma correcao de seguranca. Fica registrado como a
+ * direcao certa para quando houver uma migracao propria para isso.
+ *
+ * ESTE REVOKE FOI DESFEITO EM 0006, de propria vontade e com o troco pago: o
+ * painel do admin fala DIRETO com o Supabase por supabase-js, e administrador
+ * autentica como `authenticated` igual a todo mundo — sem estes privilegios ele
+ * nao cadastra produto nenhum. A segunda tranca so pode ser aberta porque a
+ * primeira finalmente existe: 0006 poe no lugar dela politicas estreitas
+ * (`canastra.eh_admin()`) e test/rls.test.js afirma, como invariante sobre
+ * `pg_policies`, que nenhuma politica de escrita deste schema e `USING (true)` —
+ * exatamente a distracao que este bloco previu. O REVOKE de `admins`, logo
+ * abaixo, NAO foi desfeito e nao deve ser.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.produtos, canastra.produto_opcoes
+  FROM authenticated;
+
+/**
+ * `admins` entra aqui, e nao numa migracao de catalogo por afinidade de assunto.
+ *
+ * Ela nasce em 0002 com o mesmo `arwd` para `authenticated` herdado de 0001, e e
+ * a tabela onde o estrago e maior de longe: uma unica politica permissiva de
+ * INSERT em `admins` e um token de outro projeto da instancia se PROMOVE a
+ * administrador desta loja — exatamente o ataque que 0002 inteira existe para
+ * impedir quando fez `admins` referenciar `clientes` em vez de `auth.users`.
+ *
+ * Por que neste arquivo, e nao dentro de 0002, ao lado da tabela: porque quem
+ * escreve uma migracao nao pode saber onde ela ja rodou. Hoje nada desta fase
+ * foi aplicado em lugar nenhum, entao emendar 0002 daria no mesmo — mas essa
+ * informacao vale so hoje, e migracao e permanente. Assim que 0002 tocar
+ * qualquer banco, o runner nunca mais a reexecuta, e um conserto feito la
+ * fecharia o furo apenas em instalacao nova, deixando a que ja rodou aberta,
+ * com as duas populacoes divergindo sem aviso. Corrigir privilegio numa
+ * migracao NOVA e a forma que continua certa nos dois mundos, e 0003 e a mais
+ * cedo que roda depois de `admins` existir — o criterio certo para janela de
+ * exposicao. A arrumacao por assunto perde para isso.
+ *
+ * `clientes` NAO leva REVOKE aqui, e nem `enderecos`, `carrinhos`,
+ * `carrinho_itens` (0004) ou `pedidos` (0005): nessas o cliente logado escreve
+ * de verdade, e quem tem de fazer o recorte e a politica de RLS, que sabe
+ * distinguir a linha do dono da linha do vizinho; o privilegio de tabela nao
+ * sabe.
+ *
+ * DUAS DAS QUATRO JUSTIFICATIVAS ORIGINAIS DESTA FRASE ERAM FALSAS, e o registro
+ * fica porque a correcao importa mais que a redacao limpa. Diziam-se quatro
+ * escritas do cliente logado: "cria a propria conta", "salva endereco", "mexe na
+ * sacola", "fecha pedido". A primeira e a ultima nunca foram dele — cadastro e
+ * checkout rodam pelo `service_role`, no servico Node —, e 0006 tornou isso
+ * explicito ao NAO criar politica de INSERT em `clientes` nem em `pedidos`. As
+ * duas do meio continuam certas e sao as unicas que sustentam este paragrafo.
+ *
+ * Em consequencia, 0006 REVOGA `INSERT` e `DELETE` de `authenticated` nessas
+ * duas tabelas: onde o cliente nao escreve, o privilegio nao serve para nada e
+ * so espera uma politica distraida para virar furo. `enderecos`, `carrinhos` e
+ * `carrinho_itens` seguem sem REVOKE, agora pelo motivo certo e apenas ele.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.admins FROM authenticated;
+
+-- Chave geral fechada, ainda sem politica nenhuma — mesmo motivo de 0002: entre
+-- o COMMIT desta migracao e o da que escreve as politicas ha uma janela real, e
+-- um deploy que pare no meio tem de parar FECHADO.
+--
+-- Ligar a RLS em `produtos` NAO cegava a vitrine NESTE ARRANJO: ela lia pela
+-- view, que rodava como dono e por isso nao passava pela RLS (ver o bloco da
+-- view acima). Ja `produto_opcoes` e lida DIRETO por `anon` e, ate a migracao de
+-- politicas chegar, responde vazio — os filtros da vitrine somem, e nada mais.
+-- Perder filtro e visivel e inofensivo; o contrario, um `pedidos` aberto por
+-- esquecimento, nao seria nem uma coisa nem outra.
+--
+-- DEPOIS DE 0006 as duas ficam no mesmo caso: a view virou `security_invoker =
+-- true`, entao `produtos` tambem passa a ser lida sob a RLS, e quem deixa a
+-- vitrine passar e a politica `produtos_leitura_publica`. A janela entre esta
+-- migracao e a de politicas continua fechada do mesmo jeito — o que muda e que
+-- agora ela apaga o catalogo tambem, e nao so os filtros. Continua sendo o lado
+-- certo de falhar.
+ALTER TABLE canastra.produtos       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.produto_opcoes ENABLE ROW LEVEL SECURITY;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0003_catalogo')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0004_enderecos_e_carrinho
+-- ----------------------------------------------------------------------------
+
+-- Enderecos e carrinho.
+--
+-- `atualizado_em` NAS DUAS PRIMEIRAS TABELAS E MANTIDA POR QUEM ESCREVE, e nao
+-- por trigger: nao ha `moddatetime` neste schema (o unico gatilho nao-interno e
+-- o `admins_nunca_zero` de 0002), entao a coluna fica igual a `criado_em` para
+-- sempre a menos que cada UPDATE inclua `atualizado_em = now()`. Uma data de
+-- alteracao que nao alterou engana mais do que ajuda. Nao foi criada trigger
+-- aqui para nao introduzir funcao nova sem a tarefa dona da escrita pedir; em
+-- troca a regra fica explicita, e quem mais precisa dela e a RPC de fusao da
+-- sacola (0007), que toca `carrinhos` a cada login.
+
+CREATE TABLE canastra.enderecos (
+  endereco_id  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid NOT NULL REFERENCES canastra.clientes (user_id) ON DELETE CASCADE,
+  cep          text,
+  rua          text,
+  numero       text,
+  complemento  text,
+  bairro       text,
+  cidade       text,
+  estado       text,
+  criado_em    timestamptz NOT NULL DEFAULT now(),
+  atualizado_em timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX enderecos_cliente_idx ON canastra.enderecos (user_id);
+
+-- Um carrinho por cliente. O UNIQUE e o que permite `ON CONFLICT (user_id)` na
+-- RPC de fusao (migracao 0007) sem precisar ler antes de escrever.
+CREATE TABLE canastra.carrinhos (
+  carrinho_id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id       uuid NOT NULL UNIQUE REFERENCES canastra.clientes (user_id) ON DELETE CASCADE,
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  atualizado_em timestamptz NOT NULL DEFAULT now()
+);
+
+-- Sem FK para produtos, de proposito: `nome`, `preco` e `imagem` sao copias do
+-- momento em que o item entrou na sacola. Um produto retirado do catalogo nao
+-- pode fazer o carrinho de ninguem desaparecer nem quebrar a listagem.
+--
+-- O preco guardado aqui e para EXIBIR. Quem cobra e o checkout, que rele preco e
+-- estoque do banco antes de gerar o pagamento.
+--
+-- LIMITE CONHECIDO DO UNIQUE ABAIXO, aceito nesta fase e nao esquecido: no
+-- Postgres cada NULL e distinto dos outros num indice unico (NULLS DISTINCT, o
+-- padrao), entao a chave (carrinho_id, produto_id, NULL) nunca colide com ela
+-- mesma. Dois "adicionar" no mesmo produto SEM moagem viram duas linhas na
+-- sacola em vez de somar quantidade, e o ON CONFLICT da RPC de 0007 nao dispara
+-- nesse caso. Passa porque a vitrine sempre manda moagem para cafe, o unico
+-- produto com essa variacao. Se um dia entrar item sem moagem nenhuma (caneca,
+-- assinatura), isto vira duplicata visivel na sacola; a correcao seria
+-- `UNIQUE NULLS NOT DISTINCT` (PG 15+) ou um default 'padrao' na coluna — e as
+-- DUAS mexem no alvo do ON CONFLICT de 0007, que depende exatamente desta lista
+-- de colunas. Nao mude uma sem a outra. Medido em test/carrinho.test.js.
+CREATE TABLE canastra.carrinho_itens (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  carrinho_id uuid NOT NULL REFERENCES canastra.carrinhos (carrinho_id) ON DELETE CASCADE,
+  produto_id  uuid NOT NULL,
+  quantidade  integer NOT NULL DEFAULT 1 CHECK (quantidade > 0),
+  preco       numeric(10,2) NOT NULL DEFAULT 0,
+  nome        text,
+  imagem      text,
+  tamanho     text,
+  moagem      text,
+  UNIQUE (carrinho_id, produto_id, moagem)
+);
+CREATE INDEX carrinho_itens_carrinho_idx ON canastra.carrinho_itens (carrinho_id);
+
+-- Chave geral fechada, ainda sem politica nenhuma — mesmo motivo de 0002.
+--
+-- Nada aqui e publico, entao nao ha GRANT para `anon` nesta migracao: endereco e
+-- sacola sao dados pessoais e a Regra de 0001 ja os deixa de fora por padrao. As
+-- duas camadas negam, que e como tem de ser.
+ALTER TABLE canastra.enderecos      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.carrinhos      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.carrinho_itens ENABLE ROW LEVEL SECURITY;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0004_enderecos_e_carrinho')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0005_pedidos_promocoes_config
+-- ----------------------------------------------------------------------------
+
+-- Pedidos, promocoes e configuracao da loja.
+
+-- ON DELETE SET NULL, e nao CASCADE — a UNICA excecao entre as chaves
+-- estrangeiras que apontam para `clientes`. O que isto preserva e a VENDA:
+-- apagada a linha do cliente, o pedido continua existindo com seu total, sua
+-- data e seus itens, porque faturamento e contabilidade dependem dele. CASCADE
+-- destruiria a venda; RESTRICT tornaria impossivel apagar o cliente.
+--
+-- ISTO NAO E, POR SI, UM CAMINHO DE APAGAMENTO DE DADOS PESSOAIS — e foi medido
+-- que nao e. Depois de apagar o cliente, o pedido guarda:
+--
+--   endereco_json -> {"nome": "Ana Silva", "cpf": "...", "rua": "R. X 99", ...}
+--   itens         -> o que a pessoa comprou
+--
+-- ou seja, nome, CPF e endereco sobrevivem intactos. Atender de verdade a um
+-- pedido de exclusao (LGPD art. 18; ver docs/seguranca-dados-pessoais.md) exige
+-- um passo A MAIS que este schema ainda nao tem: redigir `endereco_json` e
+-- `itens`, preservando so o que a obrigacao fiscal manda guardar. Esse passo e
+-- de uma tarefa posterior e esta anotado aqui para nao se perder — quem ler este
+-- arquivo procurando "como a loja apaga os dados de alguem" precisa sair sabendo
+-- que a resposta NAO e "apagando o cliente".
+--
+-- E por isso que `user_id` aqui e NULAVEL enquanto `enderecos.user_id` e NOT
+-- NULL: o Postgres ACEITA declarar ON DELETE SET NULL numa coluna NOT NULL — o
+-- DDL nao reclama —, e a incompatibilidade so aparece no DELETE do cliente, que
+-- estoura com 23502 e deixa a exclusao impossivel. Ou seja, seria uma armadilha
+-- que so dispara em producao, no dia do primeiro pedido de exclusao. As duas
+-- colunas sao coerentes justamente por serem diferentes.
+--
+-- O TROCO, que a migracao de politicas precisa saber: com `user_id` NULL, uma
+-- politica de dono do tipo `USING (user_id = auth.uid())` avalia NULL, que nao e
+-- TRUE. O pedido orfao fica invisivel para todo cliente — desfecho certo,
+-- ninguem herda a compra de outro —, mas o painel do admin NAO pode depender
+-- dessa mesma politica para listar o historico.
+CREATE TABLE canastra.pedidos (
+  pedido_id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id            uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
+  total              numeric(10,2) NOT NULL DEFAULT 0,
+  -- TEXTO LIVRE, sem CHECK e sem enum, e isto e uma decisao ADIADA e nao tomada:
+  -- 'pendnete' entra calado e some de todo filtro que procure 'pendente'. A
+  -- tarefa que escrever as transicoes de status (0010) e quem tem a lista dos
+  -- valores validos e deve decidir explicitamente entre um CHECK, um enum ou
+  -- deixar livre de proposito. Nao herde este `text` por inercia.
+  status             text NOT NULL DEFAULT 'pendente',
+  metodo_pagamento   text,
+  pagamento_id_mp    text,
+  -- Enviada pelo navegador no checkout. Duas tentativas do mesmo clique tem a
+  -- mesma chave, entao a segunda esbarra no indice em vez de criar outro pedido.
+  chave_idempotencia text,
+  itens              jsonb,
+  endereco_json      jsonb,
+  frete              numeric(10,2) NOT NULL DEFAULT 0,
+  metodo_envio       text,
+  codigo_rastreio    text,
+  criado_em          timestamptz NOT NULL DEFAULT now(),
+  -- MANTIDA POR QUEM ESCREVE, nao por trigger. Nao existe trigger de
+  -- `moddatetime` neste schema (o unico gatilho nao-interno e o
+  -- `admins_nunca_zero` de 0002), entao esta coluna fica IGUAL a `criado_em` para
+  -- sempre a menos que cada UPDATE inclua `atualizado_em = now()` — e um valor
+  -- que parece uma data de alteracao e nao e engana mais do que ajuda.
+  --
+  -- Ficou assim de proposito, para nao introduzir uma funcao de trigger nova sem
+  -- que a tarefa dona da escrita a tenha pedido. A regra, entao, e explicita:
+  -- TODO UPDATE nesta tabela, no checkout, no webhook do MP e no painel, escreve
+  -- `atualizado_em = now()` junto. Vale igual para `enderecos` e `carrinhos` em
+  -- 0004 — a RPC de fusao da sacola (0007) e o caso mais obvio.
+  atualizado_em      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX pedidos_cliente_idx ON canastra.pedidos (user_id);
+CREATE INDEX pedidos_criado_idx  ON canastra.pedidos (criado_em DESC);
+
+/**
+ * As duas defesas de idempotencia, no banco e nao no codigo.
+ *
+ * A auditoria registrou dois furos: o webhook do MP nao era idempotente, e o MP
+ * reenvia notificacao por desenho — reentrega podia inflar estoque; e a cobranca
+ * acontecia antes de o pedido existir, sem chave, entao uma queda no meio
+ * deixava pagamento sem pedido.
+ *
+ * Indices PARCIAIS (WHERE ... IS NOT NULL) porque o pedido nasce sem id do MP e
+ * pedido antigo pode nao ter chave. Um indice total recusaria o segundo pedido
+ * pendente da loja inteira.
+ */
+CREATE UNIQUE INDEX pedidos_pagamento_mp_idx
+  ON canastra.pedidos (pagamento_id_mp)
+  WHERE pagamento_id_mp IS NOT NULL;
+
+CREATE UNIQUE INDEX pedidos_idempotencia_idx
+  ON canastra.pedidos (chave_idempotencia)
+  WHERE chave_idempotencia IS NOT NULL;
+
+CREATE TABLE canastra.promocoes (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  titulo      text NOT NULL,
+  descricao   text,
+  tipo        text,
+  valor       numeric(10,2),
+  aplica_a    text,
+  categoria   text,
+  produto_id  uuid,
+  inicio_em   timestamptz,
+  fim_em      timestamptz,
+  ativa       boolean NOT NULL DEFAULT true,
+  criada_em   timestamptz NOT NULL DEFAULT now()
+);
+
+-- Tabela de uma linha so. O codigo antigo garantia isso por convencao
+-- (`WHERE id = (SELECT id FROM store_config LIMIT 1)`); aqui o CHECK garante.
+--
+-- Sao DOIS guardas, por portas diferentes, e quem tratar o erro no painel
+-- precisa esperar os dois SQLSTATEs: um INSERT com id explicito diferente de 1
+-- bate no CHECK (23514, citando `config_loja_linha_unica`), e o caminho comum —
+-- INSERT sem citar `id` — pega o DEFAULT 1, passa pelo CHECK e bate na chave
+-- primaria (23505, citando `config_loja_pkey`). Medido em test/pedidos.test.js.
+CREATE TABLE canastra.config_loja (
+  id                integer PRIMARY KEY DEFAULT 1
+                      CONSTRAINT config_loja_linha_unica CHECK (id = 1),
+  banner_desktop    text,
+  banner_mobile     text,
+  titulo_site       text,
+  whatsapp          text,
+  barra_de_aviso    text,
+  atualizado_em     timestamptz NOT NULL DEFAULT now()
+);
+
+-- Regra de 0001: nada nasce legivel por `anon`, quem for publico leva GRANT
+-- proprio. A vitrine mostra o banner e a barra de aviso (`config_loja`) e as
+-- promocoes ativas antes de qualquer login, entao essas duas levam. `pedidos`
+-- NAO entra aqui e nao pode entrar: guarda endereco de entrega e itens
+-- comprados de cada cliente.
+GRANT SELECT ON canastra.promocoes  TO anon;
+GRANT SELECT ON canastra.config_loja TO anon;
+
+-- E a escrita fecha, pelo mesmo motivo detalhado em 0003 (bloco do REVOKE): o
+-- `arwd` que 0001 concede por padrao a `authenticated` esta inerte hoje so porque
+-- a RLS ainda nao tem politica, e a primeira politica ampla demais na migracao
+-- seguinte o acorda. Aqui o dano seria banner e barra de aviso da loja
+-- reescritos, ou promocao criada, por um token de outro projeto da instancia
+-- compartilhada.
+--
+-- DUAS COISAS DESTE PARAGRAFO MUDARAM EM 0006, e o comentario fica registrando
+-- as duas em vez de virar mentira. A primeira: o REVOKE foi DESFEITO para estas
+-- duas tabelas, porque o painel do admin fala DIRETO com o Supabase e admin
+-- autentica como `authenticated` — a segunda tranca foi trocada pela politica
+-- `canastra.eh_admin()`, que so passou a existir la. A segunda: nao e verdade
+-- que "o painel fala pelo `service_role`"; pelo servico Node passa apenas o
+-- upload de imagem, e o resto do painel vai por PostgREST com RLS. Continua
+-- valendo que nenhum CLIENTE tem o que escrever nestas duas.
+REVOKE INSERT, UPDATE, DELETE ON canastra.promocoes, canastra.config_loja
+  FROM authenticated;
+
+-- Chave geral fechada, ainda sem politica nenhuma — mesmo motivo de 0002, e vale
+-- inclusive para as duas publicas: GRANT e permissao de TABELA, a RLS decide a
+-- LINHA, e ate a migracao de politicas chegar ela nega tudo. Um deploy que pare
+-- no meio deixa a vitrine sem banner e sem promocao — visivel e inofensivo — em
+-- vez de deixar `pedidos` servido pelo PostgREST a quem pedir.
+ALTER TABLE canastra.pedidos     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.promocoes   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.config_loja ENABLE ROW LEVEL SECURITY;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0005_pedidos_promocoes_config')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0006_politicas_rls
+-- ----------------------------------------------------------------------------
+
+-- As politicas de RLS. Esta e a migracao que decide quem enxerga o que.
+--
+-- O PROBLEMA QUE ELA RESOLVE, e que nao e o problema normal de uma loja
+-- Esta instancia Supabase e SELF-HOSTED e COMPARTILHADA com outros projetos do
+-- mesmo dono. Self-hosted nao e multi-projeto: `auth.users` e o `JWT_SECRET` sao
+-- unicos por instancia. Entao um JWT emitido para OUTRO projeto chega no
+-- PostgREST desta loja com assinatura valida, papel `authenticated` e
+-- `auth.uid()` PREENCHIDO. Ele nao e um invasor no sentido classico — e um
+-- usuario legitimo, de outro lugar.
+--
+-- POR ISSO, DUAS REGRAS QUE VALEM PARA TODO ESTE ARQUIVO E PARA O QUE VIER
+-- DEPOIS:
+--
+--   1. Nenhuma politica usa `auth.uid() IS NOT NULL`. Estar autenticado nesta
+--      instancia nao diz nada sobre esta loja.
+--   2. Nenhuma politica de dono usa `user_id = auth.uid()` SOZINHO. Ela tambem
+--      exige `canastra.eh_cliente()`, isto e, LINHA em `canastra.clientes`.
+--
+-- A regra 2 parece redundante e nao e. `user_id = auth.uid()` prova que a pessoa
+-- e dona DAQUELA linha; o que ela nao cobre e o caminho para VIRAR dona de uma
+-- linha. Sem o teste de cliente, bastaria um INSERT com o proprio uid — em
+-- `enderecos`, em `carrinhos` — para o usuario de outro projeto passar a ter
+-- linhas suas aqui dentro, e a partir dai toda politica de dono passa a
+-- concordar com ele. Ser cliente desta loja e ter passado pelo cadastro desta
+-- loja, e essa e a unica pergunta que fecha a porta.
+--
+-- A UNICA EXCECAO A REGRA 2 esta em `canastra.clientes`, e esta provada no
+-- comentario daquela secao: la as duas condicoes sao literalmente a mesma.
+
+/* ------------------------------------------------------------------------- *
+ * As duas perguntas que as politicas fazem
+ * ------------------------------------------------------------------------- */
+
+/**
+ * "Quem esta pedindo e cliente DESTA loja?"
+ *
+ * SECURITY DEFINER NAO E OPCIONAL, e o motivo nao e privilegio, e RECURSAO.
+ * Estas funcoes leem `clientes` e `admins`, que sao justamente tabelas com
+ * politica. Como SECURITY INVOKER, avaliar a politica de `admins` exigiria
+ * chamar `eh_admin()`, que leria `admins`, que avaliaria a politica de novo.
+ * Como SECURITY DEFINER, a funcao roda como o DONO das tabelas, e dono de tabela
+ * e isento de RLS: a leitura acontece por baixo das politicas e o ciclo nao
+ * existe.
+ *
+ * MEDIDO, e o resultado da versao quebrada NAO e o erro que se espera:
+ *
+ *   eh_admin() SECURITY INVOKER, politica de `admins` chamando-a
+ *     -> 54001, "stack depth limit exceeded"
+ *   politica de `admins` lendo `canastra.admins` direto, sem funcao no meio
+ *     -> 42P17, "infinite recursion detected in policy for relation admins"
+ *
+ * O detector de recursao do Postgres so enxerga a referencia DIRETA a propria
+ * tabela; com uma funcao no meio ele nao fecha o ciclo e a consulta vai ate
+ * estourar a pilha. Quem for depurar isto um dia procuraria por 42P17 e nao
+ * acharia — e por isso o codigo medido esta escrito aqui.
+ *
+ * DO QUE ESSA ISENCAO DEPENDE, porque e ela que sustenta o arquivo inteiro:
+ * do dono NAO ter `FORCE ROW LEVEL SECURITY` ligado nas tabelas. Medido, com
+ * dono nao-superusuario, para nao confundir a isencao do dono com a do
+ * superusuario que o harness usa:
+ *
+ *   sem FORCE ....... eh_admin() enxerga `admins`, as politicas funcionam
+ *   com FORCE ....... eh_admin() roda sob as politicas de `admins`, que sao
+ *                     `TO authenticated` e portanto NAO se aplicam ao dono;
+ *                     nenhuma politica casa, a leitura devolve ZERO linhas e
+ *                     eh_admin() passa a responder FALSE PARA TODO MUNDO
+ *
+ * Repare no modo de falha: nao seria erro, e sim o painel do admin morrendo em
+ * silencio e o cliente deixando de ver o proprio endereco. Por isso
+ * test/rls.test.js afirma, como invariante e nao como lista, que nenhuma tabela
+ * de `canastra` tem FORCE ligado.
+ *
+ * E POR ISSO TAMBEM O `SET row_security = off` ABAIXO, que e o unico jeito de
+ * tirar o SILENCIO dessa falha. Com ele, uma consulta que SERIA afetada por RLS
+ * nao devolve menos linhas: ela ERRA. Medido, com dono nao-superusuario:
+ *
+ *                                  sem FORCE   com FORCE em `admins`
+ *   eh_admin() ..................  true        false, calado
+ *   eh_admin() + row_security=off  true        42501, "query would be affected
+ *                                              by row-level security policy for
+ *                                              table admins"
+ *
+ * Ou seja: no caminho saudavel e um no-op (o dono ja esta isento, entao nenhuma
+ * consulta e "afetada"), e no caminho quebrado troca "a loja inteira responde
+ * nao" por uma mensagem que se explica sozinha e cita a tabela. Ele NAO remove a
+ * dependencia da isencao do dono — nada remove —, remove a mudez.
+ *
+ * `SET search_path` e obrigatorio em funcao SECURITY DEFINER: sem ele quem chama
+ * escolhe em que schema `clientes` sera procurada e executa o que quiser com os
+ * poderes do dono. `pg_temp` vai por ultimo de proposito — na frente, uma tabela
+ * temporaria do proprio chamador sequestraria o nome. `auth.uid()` vai
+ * qualificado justamente porque `auth` nao esta no caminho.
+ *
+ * SEM ARGUMENTO, de proposito. Uma `eh_admin(uid uuid)` executavel por
+ * `authenticated` viraria um oraculo: qualquer token da instancia
+ * compartilhada poderia varrer uuids e descobrir quem administra a loja. Lendo
+ * so `auth.uid()`, a funcao nao responde nada sobre terceiros.
+ */
+CREATE FUNCTION canastra.eh_cliente() RETURNS boolean
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
+  SET row_security = off
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM canastra.clientes WHERE user_id = auth.uid()
+  )
+$$;
+
+/**
+ * "Quem esta pedindo administra ESTA loja?"
+ *
+ * O papel de administrador NUNCA vem de claim no JWT — outro projeto da
+ * instancia emitiria o claim que quisesse. Vem de linha em `canastra.admins`,
+ * que so o `service_role` escreve (o REVOKE de 0003 continua valendo e NAO e
+ * desfeito aqui; ver o bloco de privilegios abaixo). Essa e a porta que impede
+ * um token estrangeiro de se promover a administrador.
+ */
+CREATE FUNCTION canastra.eh_admin() RETURNS boolean
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
+  SET row_security = off
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM canastra.admins WHERE user_id = auth.uid()
+  )
+$$;
+
+-- `proacl` nasce nulo, o que significa EXECUTE para PUBLIC. Numa funcao
+-- SECURITY DEFINER isso e higiene mal feita mesmo quando inofensivo: o REVOKE
+-- primeiro, e a lista explicita depois, deixa escrito quem precisa chamar.
+--
+-- `anon` PRECISA estar na lista. Hoje nenhuma politica que `anon` alcance chama
+-- estas funcoes (as publicas sao `USING (true)`), mas o dia em que uma chamar, a
+-- falta de EXECUTE apareceria como 42501 na vitrine — recusa que parece de
+-- politica e nao e.
+REVOKE EXECUTE ON FUNCTION canastra.eh_cliente() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION canastra.eh_admin()   FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.eh_cliente() TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION canastra.eh_admin()   TO anon, authenticated, service_role;
+
+/* ------------------------------------------------------------------------- *
+ * Privilegios: o que muda de 0003/0005 para ca, e por que
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A VITRINE DEIXA DE DEPENDER DA ISENCAO DE RLS DO DONO DA VIEW.
+ *
+ * 0003 criou `produtos_publicos` com `security_invoker = false`. Funcionava: a
+ * view roda como seu dono, que e isento de RLS, e o recorte de colunas fazia o
+ * controle de acesso. O problema nao era o resultado, eram as duas propriedades
+ * que vinham junto:
+ *
+ *   - ligar FORCE ROW LEVEL SECURITY em `canastra.produtos` esvaziava a vitrine
+ *     EM SILENCIO, sem erro e sem log (medido em 0003);
+ *   - a escrita atraves da view — que e auto-atualizavel — so era barrada por um
+ *     REVOKE, isto e, por uma linha que nenhuma regra estrutural regenera.
+ *
+ * Com `security_invoker = true` a view passa a rodar com os privilegios de quem
+ * chama, e a leitura publica passa a ser feita da forma normal: GRANT de coluna
+ * na tabela base + politica de SELECT. Medido, depois da virada:
+ *
+ *   anon le o catalogo inteiro pela view ......... sim, 14 colunas
+ *   authenticated (cliente, admin ou intruso) .... o mesmo, 14 colunas
+ *   anon le `custo` pela view .................... a coluna nem existe la
+ *   anon le `custo` direto na tabela ............. 42501
+ *   authenticated le `custo` direto na tabela .... 42501
+ *   anon com `SELECT *` direto na tabela ......... 42501
+ *   escrita pela view, por QUALQUER authenticated  42501 (o REVOKE de 0003
+ *                                                  continua valendo, inclusive
+ *                                                  para o admin — o painel
+ *                                                  escreve na TABELA)
+ *
+ * O PRECO, e ele e real: `canastra.produtos` vira uma relacao visivel para
+ * `anon` no PostgREST, e um `select=*` cru responde 42501 em vez de 404. Isso e
+ * barulhento, nunca vazado — o oposto exato do modo de falha que se estava
+ * trocando.
+ *
+ * O SEGUNDO PRECO, que nao estava no plano e precisa estar escrito: com
+ * `REVOKE SELECT ... FROM authenticated` abaixo, o painel do admin tambem perde
+ * a LEITURA de `custo`, `criado_em` e `tsv` pelo PostgREST, porque privilegio de
+ * coluna e por PAPEL e admin autentica como `authenticated` igual a todo mundo.
+ * Ele continua ESCREVENDO `custo` (o GRANT de escrita e de tabela; medido:
+ * INSERT e UPDATE com `custo` passam). Ler custo no painel vai exigir ou o
+ * `service_role` pelo servico Node, ou uma funcao SECURITY DEFINER com
+ * `eh_admin()` na frente — decisao da tarefa que construir o painel, nao desta.
+ * A alternativa era deixar `custo` legivel por qualquer token da instancia
+ * compartilhada, o que e pior.
+ *
+ * O TROCO DISSO NO PAINEL, e ele morde cedo: em `canastra.produtos`, e SO nela,
+ * `RETURNING *` passa a falhar com 42501 — inclusive para o admin. Medido, e o
+ * alcance exato importa porque a correcao e barata quando se sabe onde aplicar:
+ *
+ *   INSERT/UPDATE/DELETE em `produtos` ... RETURNING *  ....... 42501
+ *   INSERT em `produtos` ............... RETURNING produto_id . passa
+ *   INSERT em `promocoes`, `produto_opcoes`, UPDATE em
+ *     `config_loja` e em `pedidos` ..... RETURNING *  ......... passa
+ *   cliente: INSERT em `enderecos` e `carrinho_itens`
+ *                                        RETURNING *  ......... passa
+ *   vitrine: SELECT * em `produtos_publicos` ................. passa
+ *
+ * `produtos` e a UNICA relacao do schema com privilegio de SELECT por COLUNA, e
+ * por isso a unica em que `*` alcanca uma coluna sem permissao. Ou seja, o que
+ * precisa listar colunas e o CRUD de produto do painel, uma tela — nao o app.
+ *
+ * E isso alcanca o supabase-js sem ninguem escrever `RETURNING`: um
+ * `.insert(x).select()` vira `select=*` no PostgREST, que vira `RETURNING *`.
+ * Naquela tela, `.select('produto_id, nome, preco, ...')`. O modo de falha e
+ * barulhento (erro na hora, nao dado errado), mas nao e autoexplicativo, entao
+ * fica registrado aqui.
+ *
+ * O REVOKE de escrita na view (0003) FICA. Com `security_invoker = true` ele
+ * deixou de ser a unica tranca — a escrita pela view agora tambem passa pela
+ * politica da tabela base — mas duas trancas continuam melhores que uma.
+ */
+ALTER VIEW canastra.produtos_publicos SET (security_invoker = true);
+
+-- O REVOKE aqui e o que faz o GRANT de coluna seguinte significar alguma coisa.
+-- Sem ele, `authenticated` continuaria com SELECT de TABELA vindo do default de
+-- 0001 — e a politica de catalogo publico logo abaixo, que e `USING (true)`,
+-- entregaria `custo` a qualquer token da instancia compartilhada. Isto e, a
+-- politica que abre a vitrine abriria a margem de lucro junto.
+REVOKE SELECT ON canastra.produtos FROM authenticated;
+
+-- A lista publica, identica a projecao da view — e as duas tem de andar juntas:
+-- coluna que entrar na view sem entrar aqui quebra a vitrine com 42501, e coluna
+-- que entrar aqui sem ser publica de verdade vaza. `custo`, `criado_em` e `tsv`
+-- ficam de fora de proposito.
+GRANT SELECT (produto_id, nome, tamanho, categoria, preco, imagem, quantidade,
+              descricao, peso, largura, altura, comprimento, destacado_em, sku)
+  ON canastra.produtos TO anon, authenticated;
+
+/**
+ * A ESCRITA DO CATALOGO VOLTA PARA `authenticated`, E ISSO E DELIBERADO.
+ *
+ * 0003 e 0005 REVOGARAM INSERT/UPDATE/DELETE de `authenticated` em `produtos`,
+ * `produto_opcoes`, `promocoes` e `config_loja`. Aquilo estava CERTO no momento
+ * em que foi escrito, e o comentario de 0003 explica bem: enquanto nao existisse
+ * politica nenhuma, a unica coisa entre um token estrangeiro e o catalogo era a
+ * RLS sem policy, e a primeira policy ampla demais acordaria o privilegio. O
+ * REVOKE era a segunda tranca justamente porque a primeira ainda nao existia.
+ *
+ * Esta migracao e o momento em que essa segunda tranca e trocada, de propria
+ * vontade, por uma politica explicita e testada. O que forca a troca: o painel
+ * do admin fala DIRETO com o Supabase por `supabase-js`, com RLS e
+ * `canastra.admins` decidindo (so o upload de imagem passa pelo servico Node).
+ * Administrador autentica como `authenticated`, como todo mundo — sem estes
+ * GRANTs ele nao consegue cadastrar um produto de jeito nenhum.
+ *
+ * A troca so e aceitavel porque a politica que entra no lugar e ESTREITA:
+ * escrita apenas com `canastra.eh_admin()`. O erro que 0003 previu — e que um
+ * revisor demonstrou funcionando —
+ *
+ *     CREATE POLICY tudo ON canastra.produto_opcoes FOR ALL USING (true) WITH CHECK (true);
+ *
+ * apagava os filtros do catalogo com um token de outro projeto. Nao ha, neste
+ * arquivo, nenhuma politica `USING (true)` que nao seja `FOR SELECT`, e
+ * test/rls.test.js afirma isso como invariante sobre `pg_policies`, e nao como
+ * lista de nomes.
+ *
+ * `canastra.admins` NAO ENTRA NESTA VOLTA e nao pode entrar. Nela quem escreve e
+ * so o `service_role`, pelo servico. Esse e o alcapao: sem privilegio de INSERT
+ * para `authenticated`, nenhuma politica escrita por engano — hoje ou em 0012 —
+ * transforma um token estrangeiro em administrador desta loja.
+ */
+GRANT INSERT, UPDATE, DELETE ON canastra.produtos, canastra.produto_opcoes
+  TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON canastra.promocoes, canastra.config_loja
+  TO authenticated;
+
+/**
+ * `pedidos`: o unico recorte que a RLS NAO sabe fazer.
+ *
+ * O admin muda `status`, `codigo_rastreio` e `metodo_envio` de um pedido — e so
+ * isso. Ele nao reescreve `total`, `itens`, `endereco_json` nem
+ * `pagamento_id_mp`: sao o registro da venda, e a auditoria que originou esta
+ * fase reclamava justamente de valores de pedido alteraveis fora do checkout.
+ *
+ * POLITICA DE RLS NAO RESTRINGE COLUNA. Ela decide LINHA; um
+ * `FOR UPDATE USING (eh_admin())` autoriza o admin a mexer na linha inteira. O
+ * unico mecanismo do Postgres que corta por coluna e o privilegio de coluna,
+ * entao a trava desce um andar: tira-se o UPDATE de tabela e devolve-se apenas a
+ * lista permitida. As duas camadas se somam — a RLS diz QUAL linha, o GRANT diz
+ * QUAIS colunas.
+ *
+ * `atualizado_em` entra na lista porque nao ha trigger de `moddatetime` neste
+ * schema (ver 0005): quem atualiza escreve a data junto, ou a coluna mente.
+ *
+ * Medido: com o admin, `SET status = 'enviado', atualizado_em = now()` passa; o
+ * mesmo comando incluindo `total` recusa com 42501 e a mensagem "permission
+ * denied for table pedidos" — barulhento, e nao um UPDATE que silenciosamente
+ * ignora a coluna.
+ */
+REVOKE UPDATE ON canastra.pedidos FROM authenticated;
+GRANT UPDATE (status, codigo_rastreio, metodo_envio, atualizado_em)
+  ON canastra.pedidos TO authenticated;
+
+/**
+ * A SEGUNDA TRANCA NAS DUAS PORTAS QUE NAO PODEM ABRIR.
+ *
+ * Nenhuma politica deste arquivo autoriza INSERT em `clientes` ou em `pedidos`,
+ * e RLS ligada sem politica ja recusa com 42501 — entao estes REVOKEs nao
+ * consertam furo nenhum HOJE. Eles existem porque a ausencia de politica e uma
+ * propriedade que se perde com um `CREATE POLICY` distraido, escrito noutro dia,
+ * noutro arquivo, por quem nao leu isto aqui. O privilegio de tabela nao se
+ * perde assim.
+ *
+ * O argumento e o mesmo que 0003 usou para `admins` — e vale AINDA MAIS para
+ * `clientes`, que e o alvo mais valioso do schema: uma linha inserida ali
+ * fabrica `eh_cliente()`, e `eh_cliente()` e a metade que sustenta TODA politica
+ * de dono deste arquivo. Promover-se a admin exige passar por `clientes` antes
+ * (a FK de 0002); virar cliente nao exige passar por lugar nenhum. Deixar a
+ * porta maior guardada so por CI enquanto a menor tem tranca de banco seria
+ * defender o principio no comentario e abrir mao dele no DDL.
+ *
+ * `pedidos` entra pela mesma razao e com o mesmo custo (zero): criar pedido e
+ * baixar estoque acontecem no servico Node, pelo `service_role`. DELETE vai
+ * junto nas duas — apagar cliente e caminho de LGPD (0005 lembra que exige
+ * redigir `endereco_json` e `itens` antes) e pedido e registro fiscal. Nenhum
+ * dos dois e um clique de navegador.
+ *
+ * O QUE FICA DE PROPOSITO: `UPDATE` em `clientes`, porque o cliente corrige
+ * mesmo o proprio telefone, e `SELECT` nas duas. E `service_role` nao e tocado —
+ * o REVOKE nomeia so `authenticated`.
+ */
+REVOKE INSERT, DELETE ON canastra.clientes FROM authenticated;
+REVOKE INSERT, DELETE ON canastra.pedidos  FROM authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * Politicas
+ * ------------------------------------------------------------------------- */
+
+/**
+ * `clientes` — a tabela que define o que "ser cliente" quer dizer.
+ *
+ * NAO HA POLITICA DE INSERT, PARA NINGUEM, e essa ausencia e a peca central de
+ * seguranca desta fase inteira. Virar cliente acontece no cadastro, pelo
+ * `service_role`, que tem BYPASSRLS. Se `authenticated` pudesse inserir aqui,
+ * qualquer usuario de qualquer outro projeto da instancia se auto-cadastraria
+ * como cliente desta loja — e a partir dai `eh_cliente()` passaria a concordar
+ * com ele e TODA a defesa deste arquivo cairia de uma vez. RLS ligada sem
+ * politica de INSERT nega: o INSERT volta 42501.
+ *
+ * NAO HA POLITICA DE DELETE tampouco: apagar cliente e caminho de LGPD, que
+ * (ver 0005) exige redigir `endereco_json` e `itens` dos pedidos junto e por
+ * isso nao pode ser um DELETE solto vindo do navegador.
+ *
+ * A EXCECAO A REGRA 2 DO CABECALHO, com a prova: aqui a politica de dono e
+ * `user_id = auth.uid()` SEM `eh_cliente()`, e as duas sao a mesma condicao.
+ * `eh_cliente()` e `EXISTS (SELECT 1 FROM clientes WHERE user_id = auth.uid())`;
+ * se a linha sob teste satisfaz `user_id = auth.uid()`, entao ela mesma e uma
+ * testemunha desse EXISTS, e o EXISTS e verdadeiro. A reciproca nao interessa,
+ * porque a politica ja exigiu a igualdade. Somar `eh_cliente()` aqui seria uma
+ * chamada de funcao por linha que nunca muda resposta nenhuma.
+ */
+CREATE POLICY clientes_dono_le ON canastra.clientes
+  FOR SELECT TO authenticated
+  USING (user_id = auth.uid());
+
+CREATE POLICY clientes_admin_le ON canastra.clientes
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+CREATE POLICY clientes_dono_atualiza ON canastra.clientes
+  FOR UPDATE TO authenticated
+  USING (user_id = auth.uid())
+  WITH CHECK (user_id = auth.uid());
+
+/**
+ * `admins` — leitura para admin, e mais nada.
+ *
+ * Sem politica de escrita, e sem privilegio de escrita (REVOKE de 0003). As duas
+ * camadas negam, que e como tem de ser na tabela onde o estrago e maior.
+ *
+ * Por que `admins` precisa ser LEGIVEL, ja que `eh_admin()` le por baixo da RLS:
+ * o painel mostra a lista de administradores. Quem nao e admin nao ve nem que a
+ * tabela tem linhas.
+ */
+CREATE POLICY admins_admin_le ON canastra.admins
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+/**
+ * Catalogo, filtros, promocoes e configuracao: leitura publica, escrita de
+ * admin. Quatro tabelas, o mesmo par de politicas.
+ *
+ * O `FOR SELECT ... USING (true)` e a unica forma de `true` que aparece neste
+ * arquivo. Escrita nunca — foi exatamente `FOR ALL USING (true)` em
+ * `produto_opcoes` que um revisor usou para apagar os filtros do catalogo com um
+ * token de outro projeto.
+ *
+ * O `FOR ALL` das politicas de escrita NAO e o mesmo perigo: o predicado e
+ * `eh_admin()`, e ele vale igual para INSERT, UPDATE e DELETE. Ele tambem cobre
+ * SELECT, o que aqui e inofensivo — as politicas permissivas se somam com OR, e
+ * a de leitura publica ja diz `true`.
+ *
+ * O QUE UM NAO-ADMIN VE AO TENTAR ESCREVER, e vale saber antes de depurar: o
+ * INSERT recusa com 42501 (o WITH CHECK barra a linha nova), mas o UPDATE e o
+ * DELETE simplesmente NAO CASAM LINHA NENHUMA e voltam "0 linhas afetadas", sem
+ * erro. E a semantica normal da RLS: o USING filtra, nao acusa. O catalogo
+ * continua intacto — o que muda e o barulho, e test/rls.test.js afirma os dois
+ * comportamentos para que ninguem os descubra em producao.
+ */
+CREATE POLICY produtos_leitura_publica ON canastra.produtos
+  FOR SELECT TO anon, authenticated
+  USING (true);
+
+CREATE POLICY produtos_admin_escreve ON canastra.produtos
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY produto_opcoes_leitura_publica ON canastra.produto_opcoes
+  FOR SELECT TO anon, authenticated
+  USING (true);
+
+CREATE POLICY produto_opcoes_admin_escreve ON canastra.produto_opcoes
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY promocoes_leitura_publica ON canastra.promocoes
+  FOR SELECT TO anon, authenticated
+  USING (true);
+
+CREATE POLICY promocoes_admin_escreve ON canastra.promocoes
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY config_loja_leitura_publica ON canastra.config_loja
+  FOR SELECT TO anon, authenticated
+  USING (true);
+
+CREATE POLICY config_loja_admin_escreve ON canastra.config_loja
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+/**
+ * `enderecos` e `carrinhos` — dados do dono, e so do dono.
+ *
+ * `FOR ALL` com o MESMO predicado nas quatro operacoes, porque "dono" quer dizer
+ * a mesma coisa em ler, criar, alterar e apagar o proprio endereco. O que foi
+ * proibido no cabecalho e `USING (true)`, nao `FOR ALL`.
+ *
+ * O `WITH CHECK` e tao importante quanto o `USING` e nao pode ser esquecido: sem
+ * ele, o cliente inseriria uma linha com o `user_id` do vizinho e a esconderia
+ * de si mesmo — e um endereco plantado na conta alheia muda para onde a
+ * encomenda vai.
+ *
+ * `canastra.eh_cliente() AND` na frente e a Regra 2 do cabecalho: sem ela, um
+ * token de outro projeto da instancia insere `user_id = auth.uid()` (o proprio
+ * uid, que a igualdade aceita), passa a ter linhas aqui e vira, na pratica,
+ * usuario da loja sem nunca ter se cadastrado. A chave estrangeira para
+ * `clientes` ja barraria ESTAS duas tabelas com 23503 — mas o teste de cliente e
+ * o que faz a regra valer por si, sem depender de cada tabela futura lembrar de
+ * apontar a FK para `clientes` em vez de `auth.users`.
+ */
+CREATE POLICY enderecos_dono ON canastra.enderecos
+  FOR ALL TO authenticated
+  USING (canastra.eh_cliente() AND user_id = auth.uid())
+  WITH CHECK (canastra.eh_cliente() AND user_id = auth.uid());
+
+CREATE POLICY carrinhos_dono ON canastra.carrinhos
+  FOR ALL TO authenticated
+  USING (canastra.eh_cliente() AND user_id = auth.uid())
+  WITH CHECK (canastra.eh_cliente() AND user_id = auth.uid());
+
+/**
+ * `carrinho_itens` — o dono vem do carrinho PAI, porque a linha nao tem dono
+ * proprio.
+ *
+ * ATENCAO AO QUE ESTE EXISTS DEPENDE, que nao e obvio: `canastra.carrinhos` esta
+ * sob RLS, e a subconsulta de uma politica roda como o INVOCADOR, nao como dono.
+ * Ou seja, este EXISTS enxerga apenas os carrinhos que a politica
+ * `carrinhos_dono` deixa a pessoa enxergar. Aqui isso da certo por construcao —
+ * o unico carrinho de que ela precisa e o dela, e e exatamente o que
+ * `carrinhos_dono` mostra — e foi MEDIDO, nao suposto: Ana le e escreve os
+ * proprios itens, Bruno nao ve nenhum deles.
+ *
+ * O acoplamento, porem, e real e silencioso: se um dia `carrinhos_dono` for
+ * estreitada (um filtro por carrinho "ativo", por exemplo), a sacola daqui
+ * esvazia SEM ERRO. Quem mexer naquela politica tem de reler esta. A alternativa
+ * — uma funcao SECURITY DEFINER que devolvesse o carrinho do chamador — foi
+ * recusada por acrescentar superficie de bypass de RLS para resolver um
+ * acoplamento que os testes ja pegam.
+ *
+ * `eh_cliente()` continua na frente pela Regra 2 do cabecalho, e aqui ela e
+ * menos redundante do que parece: esta tabela NAO tem chave estrangeira para
+ * `clientes` — a ligacao passa por `carrinhos` —, entao ela e o unico ponto onde
+ * a exigencia de cadastro e feita por politica e nao por FK.
+ */
+CREATE POLICY carrinho_itens_dono ON canastra.carrinho_itens
+  FOR ALL TO authenticated
+  USING (
+    canastra.eh_cliente()
+    AND EXISTS (
+      SELECT 1 FROM canastra.carrinhos c
+      WHERE c.carrinho_id = carrinho_itens.carrinho_id
+        AND c.user_id = auth.uid()
+    )
+  )
+  WITH CHECK (
+    canastra.eh_cliente()
+    AND EXISTS (
+      SELECT 1 FROM canastra.carrinhos c
+      WHERE c.carrinho_id = carrinho_itens.carrinho_id
+        AND c.user_id = auth.uid()
+    )
+  );
+
+/**
+ * `pedidos` — le o dono, le o admin, e NINGUEM insere.
+ *
+ * A AUSENCIA DE POLITICA DE INSERT E O PONTO DA TABELA. Criar pedido e baixar
+ * estoque acontecem no servico Node, numa transacao unica, com chave de
+ * idempotencia (os indices parciais de 0005 existem para isso). Deixar o
+ * navegador — ou o painel — inserir por PostgREST significaria total, itens e
+ * estoque escritos por quem nao passou pelo checkout: exatamente o achado de
+ * auditoria que esta fase inteira fecha. Nem cliente nem admin inserem; so o
+ * `service_role`, que tem BYPASSRLS. RLS ligada sem politica de INSERT recusa
+ * com 42501.
+ *
+ * NEM POLITICA DE DELETE: pedido e registro fiscal, nao se apaga pelo painel.
+ *
+ * A POLITICA DO ADMIN PRECISA EXISTIR SEPARADA, e 0005 ja avisava por que: a
+ * chave e `ON DELETE SET NULL`, entao o pedido de um cliente apagado fica com
+ * `user_id IS NULL`. Contra ele, `user_id = auth.uid()` avalia NULL — que nao e
+ * TRUE — e o pedido some para todo cliente, que e o desfecho certo (ninguem
+ * herda a compra de outro). Mas o historico do painel nao pode sumir junto, e e
+ * por isso que o admin le por `eh_admin()` e nao por uma frouxidao na politica
+ * de dono.
+ *
+ * O UPDATE do admin e por LINHA aqui e por COLUNA no GRANT acima. As duas coisas
+ * juntas sao a regra completa: `eh_admin()` diz que ele pode mexer no pedido,
+ * o privilegio de coluna diz que "mexer" e status, rastreio, envio e a data.
+ *
+ * LEIA ISTO ANTES DE MEXER NO GRANT DE COLUNA DE `pedidos`: o `WITH CHECK` de
+ * `pedidos_admin_atualiza` NAO restringe `user_id`. Ele exige `eh_admin()` da
+ * linha nova, e uma linha com o `user_id` de OUTRO cliente satisfaz isso — a
+ * politica autorizaria, calada, transferir uma venda de um cliente para outro.
+ * O QUE IMPEDE HOJE E EXCLUSIVAMENTE `user_id` estar de fora do
+ * `GRANT UPDATE (...)` acima: medido, a tentativa recusa com 42501. Isso quer
+ * dizer que a defesa inteira de `user_id` mora numa lista de quatro colunas, e o
+ * dia em que alguem acrescentar `user_id` ali por um motivo alheio — importar
+ * pedido antigo, corrigir um cadastro duplicado — a transferencia passa a ser
+ * permitida sem que nenhuma politica tenha mudado.
+ *
+ * E NAO DA PARA FECHAR ISSO NA POLITICA, e vale registrar por que, para ninguem
+ * tentar de novo: `WITH CHECK` so enxerga a linha NOVA, nao existe OLD numa
+ * politica, e a saida obvia — subconsultar `canastra.pedidos` para comparar com
+ * o valor antigo — e uma politica de `pedidos` lendo `pedidos`, o unico formato
+ * que o Postgres corta na hora com 42P17 ("infinite recursion detected in policy
+ * for relation"). Entao a trava e o GRANT, e este paragrafo e o aviso preso a
+ * ela.
+ */
+CREATE POLICY pedidos_dono_le ON canastra.pedidos
+  FOR SELECT TO authenticated
+  USING (canastra.eh_cliente() AND user_id = auth.uid());
+
+CREATE POLICY pedidos_admin_le ON canastra.pedidos
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+CREATE POLICY pedidos_admin_atualiza ON canastra.pedidos
+  FOR UPDATE TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+-- O ENABLE repetido, como 0002 anunciou que seria. E idempotente e vale como
+-- rede: se alguem desligar a RLS de uma destas tabelas a mao, reaplicar as
+-- migracoes num banco novo nao herda o desligamento. Politica sem RLS ligada nao
+-- filtra nada — e nao avisa.
+ALTER TABLE canastra.clientes       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.admins         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.produtos       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.produto_opcoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.enderecos      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.carrinhos      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.carrinho_itens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.pedidos        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.promocoes      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.config_loja    ENABLE ROW LEVEL SECURITY;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0006_politicas_rls')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0007_fundir_sacola
+-- ----------------------------------------------------------------------------
+
+-- A sacola montada deslogado, fundida na sacola da conta no login.
+--
+-- POR QUE ESTA MIGRACAO EXISTE
+-- `frontend/lib/sacola/sacola.tsx` guarda a sacola de quem nao esta logado em
+-- `localStorage["cart"]`, e hoje quem funde essa lista na sacola da conta e o
+-- `signIn` do backend proprio. Com o GoTrue assumindo o login, essa costura
+-- deixa de existir. Sem substituto, TODO cliente que monta a sacola deslogado e
+-- depois entra PERDE os itens, em silencio — e a sacola e o caminho da receita.
+-- A fusao passa a ser esta funcao, chamada pelo navegador logo depois do login.
+--
+-- O CONTRATO, QUE NAO E O DA VITRINE — LEIA ANTES DE LIGAR OS DOIS LADOS
+-- As chaves do JSON aqui sao as COLUNAS de `canastra.carrinho_itens`, em
+-- portugues: produto_id, quantidade, preco, nome, imagem, tamanho, moagem. O
+-- `ItemDaSacola` do `localStorage` esta em ingles (product_id, quantity, price,
+-- name, image, size) e so `moagem` coincide. Quem chamar TEM de traduzir; mandar
+-- a lista crua faz `produto_id` vir nulo em todo item, e o efeito e a sacola
+-- inteira ser descartada em silencio (ver o filtro adiante). O portugues foi
+-- mantido porque o resto do schema e portugues e uma RPC que fala ingles so
+-- deste lado seria a excecao que ninguem lembra.
+--
+-- A FUSAO NAO E IDEMPOTENTE, E NAO TEM COMO SER. A lista que chega nao carrega
+-- identidade nenhuma, entao chamar duas vezes com a mesma sacola soma duas
+-- vezes. `onAuthStateChange` do supabase-js dispara mais de uma vez por sessao
+-- (INITIAL_SESSION, SIGNED_IN, TOKEN_REFRESHED): quem chamar em todas elas dobra
+-- a sacola do cliente a cada evento. A unica defesa esta no navegador — apagar
+-- `localStorage["cart"]` assim que a fusao responder, e so entao. Medido em
+-- test/fundir_sacola.test.js.
+
+/**
+ * NAO E SECURITY DEFINER, e isso e a decisao mais importante do arquivo.
+ *
+ * O reflexo, numa funcao que escreve em tabela sob RLS, e marca-la DEFINER. Aqui
+ * seria errado, e foi MEDIDO: como Ana (cliente da loja), o upsert em
+ * `carrinhos` e o upsert em `carrinho_itens` passam sob as PROPRIAS politicas de
+ * 0006 (`carrinhos_dono` e `carrinho_itens_dono`); como ESTRANHA — token de
+ * outro projeto da instancia compartilhada, ausente de `canastra.clientes` — os
+ * mesmos comandos levam 42501. Ou seja, a RLS ja faz exatamente o recorte certo
+ * e nao falta privilegio nenhum a ser emprestado.
+ *
+ * O que DEFINER acrescentaria seria so o risco: dentro dela `auth.uid()`
+ * continua sendo o do chamador, mas a RLS para de valer, e qualquer descuido
+ * futuro no corpo (aceitar um `user_id` vindo do JSON, por exemplo) viraria
+ * escrita na sacola alheia sem que politica nenhuma reclamasse — a superficie de
+ * bypass que 0006 gasta o arquivo inteiro fechando. test/fundir_sacola.test.js
+ * afirma `prosecdef = false` no catalogo para que ligar DEFINER aqui fique
+ * vermelho no CI.
+ *
+ * `SET search_path` NAO e obrigatorio numa funcao INVOKER — ela roda com os
+ * poderes de quem chama, entao nao ha privilegio a sequestrar. Vai mesmo assim,
+ * e por um motivo pratico: PostgREST chama com o `search_path` que estiver
+ * configurado na instancia COMPARTILHADA, que nao e desta loja e pode mudar sem
+ * aviso. Todo nome no corpo ja esta qualificado; o SET so garante que continue
+ * resolvendo igual se alguem esquecer de qualificar um nome novo.
+ *
+ * NAO E `STRICT`, de proposito. Com STRICT, `fundir_sacola(NULL)` devolveria
+ * NULL sem entrar no corpo — sem a checagem de cliente e sem garantir a sacola
+ * da conta. O caso nulo e tratado la dentro, onde da para decidir o que ele
+ * significa.
+ */
+CREATE FUNCTION canastra.fundir_sacola(itens jsonb) RETURNS void
+  LANGUAGE plpgsql
+  SET search_path = canastra, pg_temp
+AS $fundir_sacola$
+DECLARE
+  /**
+   * Teto de quantidade por item, e a unica razao dele e aritmetica.
+   *
+   * `quantidade` e `integer`. Uma sacola com quantidades absurdas — lixo em
+   * `localStorage`, ou um item somado muitas vezes por chamadas repetidas —
+   * chegaria em 2^31 e a fusao morreria com 22003 ("integer out of range") no
+   * login. O teto e generoso o bastante para nunca alcancar cliente nenhum de
+   * uma torrefacao e baixo o bastante para a soma jamais transbordar.
+   */
+  TETO_DE_QUANTIDADE constant integer := 999999;
+
+  lista jsonb;
+  id_do_carrinho uuid;
+BEGIN
+  /**
+   * A checagem explicita de cliente NAO e redundante com a RLS, e nao esta aqui
+   * por seguranca — a seguranca ja e das politicas de 0006, que recusam sozinhas.
+   * Esta aqui pela MENSAGEM: sem ela, quem nao e cliente desta loja recebe um
+   * 42501 falando de politica de linha numa tabela chamada `carrinhos`, e o
+   * problema real e nao ter cadastro na loja.
+   *
+   * ERRCODE explicito, e nao o P0001 que o RAISE daria de graca, pela mesma
+   * licao de 0002: P0001 e o codigo de QUALQUER RAISE do banco, entao quem chama
+   * teria de casar TEXTO de mensagem para reconhecer esta recusa.
+   * `insufficient_privilege` (42501) e o codigo que a propria RLS usaria neste
+   * caso — os dois caminhos passam a responder a mesma coisa, que e o que quem
+   * chama precisa tratar.
+   */
+  IF NOT canastra.eh_cliente() THEN
+    RAISE EXCEPTION 'Quem chamou não é cliente desta loja.'
+      USING ERRCODE = 'insufficient_privilege',
+            HINT = 'A sacola só existe para quem tem cadastro nesta loja.';
+  END IF;
+
+  /**
+   * O ENVELOPE E EXIGIDO; O CONTEUDO E MELHOR ESFORCO. A linha entre tolerar e
+   * recusar esta aqui, e ela foi escolhida, nao herdada.
+   *
+   * TOLERADO — ausencia de sacola, nas tres formas que o navegador produz: SQL
+   * NULL, o JSON `null` e a lista vazia. Nenhuma pode virar excecao: a fusao roda
+   * no INSTANTE do login, e derrubar o login de quem tem a sacola vazia troca um
+   * problema nenhum por um problema grande.
+   *
+   * RECUSADO — qualquer outra coisa no lugar da lista (objeto, numero, string,
+   * booleano). Isso nao e dado velho de cliente: o `lerLocal()` da vitrine ja
+   * devolve `[]` para o que nao for array, entao esta forma so chega aqui por bug
+   * de quem chama. Tolerar em silencio significaria a sacola sumir no login sem
+   * uma linha de log — exatamente a falha que esta migracao existe para impedir.
+   *
+   * Sem este guarda o proprio `jsonb_array_elements` recusaria, com o mesmo
+   * SQLSTATE e uma mensagem que fala de "cannot extract elements from a scalar";
+   * o que se ganha aqui e um texto que diz o que mandar.
+   */
+  IF itens IS NULL OR jsonb_typeof(itens) = 'null' THEN
+    lista := '[]'::jsonb;
+  ELSIF jsonb_typeof(itens) <> 'array' THEN
+    RAISE EXCEPTION 'A sacola precisa ser uma lista JSON, e veio %.', jsonb_typeof(itens)
+      USING ERRCODE = 'invalid_parameter_value',
+            HINT = 'Mande [] quando não houver nada a fundir.';
+  ELSE
+    lista := itens;
+  END IF;
+
+  /**
+   * A sacola da conta, criada se ainda nao houver — e o `ON CONFLICT` so e
+   * possivel por causa do UNIQUE em `carrinhos.user_id` que 0004 criou para isto.
+   *
+   * `DO UPDATE`, e nao `DO NOTHING`, por DUAS razoes independentes:
+   *
+   *   1. `RETURNING` num upsert devolve a linha nos ramos INSERT e DO UPDATE, mas
+   *      NAO no DO NOTHING — com DO NOTHING, `id_do_carrinho` ficaria NULL toda
+   *      vez que a sacola ja existisse, e o INSERT de itens logo abaixo morreria
+   *      com NOT NULL em `carrinho_id`. Ou seja, funcionaria no primeiro login de
+   *      cada pessoa e quebraria em todos os seguintes.
+   *   2. `atualizado_em` nao tem gatilho nenhum neste schema (0004 registra isso:
+   *      manter a coluna e trabalho de quem escreve, e esta RPC e uma das
+   *      escritoras). Sem o `now()` aqui, a data de alteracao da sacola fica igual
+   *      a de criacao para sempre.
+   *
+   * `carrinho_itens` NAO tem `atualizado_em` — a coluna nao existe naquela tabela
+   * —, entao nao ha carimbo a manter do lado dos itens.
+   */
+  INSERT INTO canastra.carrinhos (user_id)
+  VALUES (auth.uid())
+  ON CONFLICT (user_id) DO UPDATE SET atualizado_em = now()
+  RETURNING carrinho_id INTO id_do_carrinho;
+
+  /**
+   * A fusao propriamente dita, em duas etapas com nomes.
+   *
+   * `validos` — o filtro. Cada predicado descarta um item, nunca a sacola inteira:
+   *   · `jsonb_typeof(item) = 'object'` tira null, numero, string e lista soltos
+   *     na lista; sem ele, `item ->> 'produto_id'` num escalar levanta 22023.
+   *   · o regex de uuid substitui um `::uuid` que levantaria 22P02 em qualquer
+   *     `produto_id` torto — e um item sem produto nao e um item.
+   *   · o regex de quantidade e o mais estreito de todos porque quantidade e a
+   *     unica coisa aqui que vira dinheiro: so inteiro de 1 a 999999 passa. Zero e
+   *     negativo cairiam no CHECK (quantidade > 0) de 0004 e derrubariam a fusao
+   *     inteira por causa de um item; fracionado e texto levantariam 22P02.
+   *
+   * MATERIALIZED nao e enfeite: ele obriga o filtro a rodar como um passo
+   * proprio, antes de qualquer conversao da etapa seguinte. Sem a barreira, a
+   * garantia de que o `::uuid` so ve linha ja filtrada passa a depender do plano
+   * que o Postgres escolher — e um plano nao e um contrato.
+   *
+   * `somados` — a soma DENTRO da propria lista, e ela conserta uma armadilha real
+   * do ON CONFLICT: um unico INSERT nao pode tocar a MESMA linha duas vezes. Com
+   * duas entradas de mesmo produto e mesma moagem na lista, o comando morre com
+   * 21000 ("ON CONFLICT DO UPDATE command cannot affect row a second time") — no
+   * login, na cara do cliente, com a sacola inteira perdida. E `localStorage`
+   * chega assim com facilidade: basta um resto de uma versao do site que juntasse
+   * itens por outra chave.
+   *
+   * `min()` nas colunas de exibicao e escolha arbitraria assumida: sao copias do
+   * mesmo produto, e o que se precisa e de UM valor determinista, nao do "certo".
+   * O preco vale a mesma coisa e um pouco mais: ele e COPIA DE EXIBICAO, quem
+   * cobra e o checkout, que rele preco e estoque do banco antes de gerar o
+   * pagamento. Por isso um preco impresentavel vira 0 em vez de descartar o
+   * item — mostrar "R$ 0,00" ate a vitrine reler o catalogo e reversivel; perder
+   * o item nao e.
+   */
+  WITH validos AS MATERIALIZED (
+    SELECT item
+    FROM jsonb_array_elements(lista) AS item
+    WHERE jsonb_typeof(item) = 'object'
+      AND item ->> 'produto_id' ~*
+            '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      AND item ->> 'quantidade' ~ '^[1-9][0-9]{0,5}$'
+  ),
+  somados AS (
+    SELECT
+      (item ->> 'produto_id')::uuid AS produto_id,
+      item ->> 'moagem'             AS moagem,
+      least(sum((item ->> 'quantidade')::integer), TETO_DE_QUANTIDADE)::integer
+                                    AS quantidade,
+      min(
+        CASE
+          WHEN item ->> 'preco' ~ '^[0-9]{1,8}(\.[0-9]+)?$'
+          THEN (item ->> 'preco')::numeric
+          ELSE 0
+        END
+      )                             AS preco,
+      min(item ->> 'nome')          AS nome,
+      min(item ->> 'imagem')        AS imagem,
+      min(item ->> 'tamanho')       AS tamanho
+    FROM validos
+    GROUP BY 1, 2
+  )
+  INSERT INTO canastra.carrinho_itens AS destino
+    (carrinho_id, produto_id, quantidade, preco, nome, imagem, tamanho, moagem)
+  SELECT id_do_carrinho, produto_id, quantidade, preco, nome, imagem, tamanho, moagem
+  FROM somados
+  /**
+   * LIMITE CONHECIDO, herdado de 0004 e NAO esquecido: no Postgres cada NULL e
+   * distinto dos outros num indice unico (NULLS DISTINCT, o padrao), entao a
+   * chave (carrinho_id, produto_id, NULL) nunca colide com ela mesma e este
+   * ON CONFLICT NAO DISPARA para item sem moagem — ele duplica na sacola em vez
+   * de somar.
+   *
+   * A RPC NAO conserta isso por conta propria, e a decisao e deliberada: um
+   * `coalesce(moagem, 'padrao')` aqui gravaria uma moagem que a vitrine nunca
+   * escreve quando insere direto pelo PostgREST, e as duas metades da sacola
+   * passariam a nao casar NUNCA MAIS — trocaria uma duplicata visivel por uma
+   * divergencia permanente entre dois caminhos de escrita. Passa porque a vitrine
+   * sempre manda moagem para cafe, o unico produto com essa variacao. O conserto
+   * de verdade e `UNIQUE NULLS NOT DISTINCT` (PG 15+) ou um default na coluna, e
+   * as DUAS mexem no alvo deste ON CONFLICT. Nao mude uma sem a outra.
+   *
+   * O `::bigint` no meio da soma existe para o mesmo transbordo que o teto: a
+   * linha que ja esta na conta pode ter sido escrita direto pelo PostgREST, sem
+   * passar por este teto, e `int + int` estoura antes de o `least` opinar.
+   */
+  ON CONFLICT (carrinho_id, produto_id, moagem) DO UPDATE
+    SET quantidade =
+      least(destino.quantidade::bigint + EXCLUDED.quantidade, TETO_DE_QUANTIDADE)::integer;
+END;
+$fundir_sacola$;
+
+/**
+ * `proacl` nasce nulo, o que significa EXECUTE para PUBLIC — e PUBLIC inclui
+ * `anon`. O REVOKE primeiro e a lista explicita depois deixam escrito quem chama.
+ *
+ * SO `authenticated`, e a ausencia dos outros dois e deliberada:
+ *   · `anon` nao tem `auth.uid()`, entao so entraria na funcao para ser barrado
+ *     la dentro pelo `eh_cliente()`. Negar no privilegio e a camada de baixo
+ *     negando primeiro — o principio das duas camadas de 0001.
+ *   · `service_role` nao chama: a fusao e um gesto do NAVEGADOR de quem acabou de
+ *     entrar, e o servico Node, quando precisar mexer em sacola, tem BYPASSRLS e
+ *     escreve direto nas tabelas.
+ *
+ * NOTA PARA A CONFIGURACAO DO POSTGREST: uma RPC so aparece em /rest/v1/rpc/ se o
+ * schema estiver em `PGRST_DB_SCHEMAS`. Se `canastra` nao estiver la, esta funcao
+ * responde 404 com a migracao perfeitamente aplicada.
+ */
+REVOKE EXECUTE ON FUNCTION canastra.fundir_sacola(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.fundir_sacola(jsonb) TO authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0007_fundir_sacola')
+  ON CONFLICT (versao) DO NOTHING;
+
+
+-- ----------------------------------------------------------------------------
+-- 2. Catálogo, filtros e configuração da loja
+-- ----------------------------------------------------------------------------
+
+-- Os mesmos valores que db/seed.js escreve, gerados a partir da MESMA funcao
+-- (`linhasDeProdutos()`). O `produto_id` e UUID v5 do `sku`, entao ele nao muda
+-- entre instalacoes nem entre maquinas — e o que costura a vitrine ao banco.
+--
+-- DO NOTHING, e nao DO UPDATE: preco e estoque pertencem ao painel a partir da
+-- primeira semeadura. Um upsert aqui reverteria, a cada execucao, o preco que o
+-- administrador acabou de corrigir.
+INSERT INTO canastra.produtos (produto_id, sku, nome, tamanho, categoria, preco, imagem, quantidade, descricao, peso, largura, altura, comprimento, destacado_em) VALUES
+  ('52098635-04a0-5f3f-917b-c42f12ce0796', 'classico-graos-250', 'Café Especial Canastra Clássico em Grãos - Pacote com 250 gramas', 'Pacote com 250 g', 'Café em grãos', '39.70', 'http://localhost:3000/cafe-classico.png', 20, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Em grãos, para moer na hora. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.250', 18, 7, 24, now()),
+  ('f97a28a5-791a-5b57-b6b5-b52335bf3136', 'classico-graos-500', 'Café Especial Canastra Clássico em Grãos - Pacote com 500 gramas', 'Pacote com 500 g', 'Café em grãos', '65.70', 'http://localhost:3000/cafe-classico.png', 20, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Em grãos, para moer na hora. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.500', 18, 7, 24, now()),
+  ('09773312-bf99-50fc-9a0c-67b98575e5dd', 'classico-graos-1000', 'Café Especial Canastra Clássico em Grãos - Pacote com 1 quilograma', 'Pacote com 1 kg', 'Café em grãos', '109.90', 'http://localhost:3000/cafe-classico.png', 20, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Em grãos, para moer na hora. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '1.000', 24, 10, 32, now()),
+  ('d55e0030-c87b-5496-89d3-408b31c267d5', 'classico-graos-caixa-4x500', 'Café Especial Canastra Clássico em Grãos - Caixa com 4 pacotes de 500 gramas', 'Caixa com 4 pacotes de 500 g', 'Café em grãos', '236.70', 'http://localhost:3000/cafe-classico.png', 10, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Em grãos, para moer na hora. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '2.000', 18, 7, 24, now()),
+  ('2876f272-419a-5ec2-8915-ec560a5b01ab', 'classico-moido-250', 'Café Especial Canastra Clássico Moído - Pacote com 250 gramas', 'Pacote com 250 g', 'Café moído', '39.70', 'http://localhost:3000/cafe-classico.png', 20, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Moído no pedido, na moagem que você escolher. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.250', 18, 7, 24, now()),
+  ('53e684a8-7392-5227-90cf-50d2ef6e3106', 'classico-moido-500', 'Café Especial Canastra Clássico Moído - Pacote com 500 gramas', 'Pacote com 500 g', 'Café moído', '65.70', 'http://localhost:3000/cafe-classico.png', 20, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Moído no pedido, na moagem que você escolher. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.500', 18, 7, 24, now()),
+  ('2ba077d1-dfeb-5cbe-8dbf-6a0e641401c3', 'classico-moido-caixa-3x250', 'Café Especial Canastra Clássico Moído - Caixa com 3 pacotes de 250 gramas', 'Caixa com 3 pacotes de 250 g', 'Café moído', '99.90', 'http://localhost:3000/cafe-classico.png', 10, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Moído no pedido, na moagem que você escolher. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.750', 18, 7, 24, now()),
+  ('8a0e8d2a-13e7-5e13-a477-3feb4b7d9ce3', 'suave-graos-250', 'Café Especial Canastra Suave em Grãos - Pacote com 250 gramas', 'Pacote com 250 g', 'Café em grãos', '39.70', 'http://localhost:3000/cafe-suave.png', 20, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Em grãos, para moer na hora. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.250', 18, 7, 24, now()),
+  ('bda48bae-8ba3-5434-b577-b3c527e5dcf0', 'suave-graos-500', 'Café Especial Canastra Suave em Grãos - Pacote com 500 gramas', 'Pacote com 500 g', 'Café em grãos', '65.70', 'http://localhost:3000/cafe-suave.png', 20, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Em grãos, para moer na hora. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.500', 18, 7, 24, now()),
+  ('c2370586-098f-5e92-aa1d-7f653afd5e00', 'suave-graos-1000', 'Café Especial Canastra Suave em Grãos - Pacote com 1 quilograma', 'Pacote com 1 kg', 'Café em grãos', '109.90', 'http://localhost:3000/cafe-suave.png', 20, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Em grãos, para moer na hora. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '1.000', 24, 10, 32, now()),
+  ('cdc49b64-365c-5984-9bc5-4327dd4817d2', 'suave-moido-250', 'Café Especial Canastra Suave Moído - Pacote com 250 gramas', 'Pacote com 250 g', 'Café moído', '39.70', 'http://localhost:3000/cafe-suave.png', 20, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Moído no pedido, na moagem que você escolher. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.250', 18, 7, 24, now()),
+  ('7a5cff3e-6626-52c8-9653-ffa4d46d9938', 'suave-moido-500', 'Café Especial Canastra Suave Moído - Pacote com 500 gramas', 'Pacote com 500 g', 'Café moído', '65.70', 'http://localhost:3000/cafe-suave.png', 20, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Moído no pedido, na moagem que você escolher. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.500', 18, 7, 24, now()),
+  ('d5103126-5b34-5a56-83ff-1951207e9d08', 'suave-moido-caixa-3x250', 'Café Especial Canastra Suave Moído - Caixa com 3 pacotes de 250 gramas', 'Caixa com 3 pacotes de 250 g', 'Café moído', '99.90', 'http://localhost:3000/cafe-suave.png', 10, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Moído no pedido, na moagem que você escolher. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.750', 18, 7, 24, now()),
+  ('6453243e-27c6-5011-9d83-341611267cf3', 'microlote-graos-250', 'Microlote Canastra em Grãos 250g', 'Pacote com 250 g', 'Café em grãos', '43.70', 'http://localhost:3000/microlote-png.png', 8, 'Lote separado da safra, em quantidade limitada. É o café mais caro por grama da casa — vendido só em 250 g, só em grão. Em grãos, para moer na hora. Torra clara-média. Corpo sedoso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.250', 18, 7, 24, now()),
+  ('0cc8900a-a81e-5661-bff1-b35e16ad5045', 'nectar-de-minas-graos-1000', 'Café Tipo Exportação Néctar de Minas em Grãos - Pacote com 1 quilograma', 'Pacote com 1 kg', 'Café em grãos', '105.70', 'http://localhost:3000/cafe-classico.png', 12, 'Marca irmã, tipo exportação. Vendida na mesma loja, em pacote de 1 kg em grãos. Em grãos, para moer na hora. Torra média-escura. Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '1.000', 24, 10, 32, now()),
+  ('0954bcf6-8c72-5032-976b-51fbd1d1d5fe', 'kit-canela-classico-suave-moido-3x250', 'Café Especial Canastra Canela, Clássico e Suave Moído - Caixa com 1 pacote de 250 gramas de cada', 'Caixa com 1 pacote de 250 g de cada', 'Kits', '109.70', 'http://localhost:3000/cafe-canela.png', 6, 'Café torrado e moído com canela, moída junto ao grão. O aromatizado da casa. Moído no pedido, na moagem que você escolher. Torra média-escura. Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.750', 18, 7, 24, now()),
+  ('ba8fdb92-3ae1-54a0-8904-de4f6d86b5c2', 'drip-suave-display-10', 'Café Canastra Drip Coffee Suave - Display com 10 unidades', 'Display com 10 sachês', 'Drip Coffee', '37.70', 'http://localhost:3000/cafe-suave.png', 0, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Sachê individual de drip coffee: filtro e café numa coisa só. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.110', 18, 7, 24, now()),
+  ('bfa756bf-e17f-5540-b46f-0ec7e123f5f4', 'drip-classico-display-10', 'Café Canastra Drip Coffee Clássico - Display com 10 unidades', 'Display com 10 sachês', 'Drip Coffee', '37.70', 'http://localhost:3000/cafe-classico.png', 0, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Sachê individual de drip coffee: filtro e café numa coisa só. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.110', 18, 7, 24, now()),
+  ('5ac1714d-3bfa-5a53-9947-5ac6732675c7', 'drip-classico-3-caixas', 'Drip Coffee - Canastra Clássico 3 caixas - Total 30 unidades', '3 caixas — 30 sachês', 'Drip Coffee', '0.00', 'http://localhost:3000/cafe-classico.png', 0, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Sachê individual de drip coffee: filtro e café numa coisa só. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.330', 18, 7, 24, now()),
+  ('bf24decb-ec27-522d-918e-ff4ed2fd1571', 'drip-classico-6-caixas', 'Drip Coffee - Canastra Clássico 6 caixas com 10 unidades cada - Total 60 unidades', '6 caixas — 60 sachês', 'Drip Coffee', '0.00', 'http://localhost:3000/cafe-classico.png', 0, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Sachê individual de drip coffee: filtro e café numa coisa só. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.660', 18, 7, 24, now()),
+  ('aeee3d2f-69c5-5569-9225-843857fd9eeb', 'drip-canela-3-caixas', 'Drip Coffee - Canastra Canela 3 caixas - Total 30 unidades', '3 caixas — 30 sachês', 'Drip Coffee', '0.00', 'http://localhost:3000/cafe-canela.png', 0, 'Café torrado e moído com canela, moída junto ao grão. O aromatizado da casa. Sachê individual de drip coffee: filtro e café numa coisa só. Torra média-escura. Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.330', 18, 7, 24, now()),
+  ('ba5add3b-7ee9-5a9e-9f8c-f6bc90e6702c', 'drip-canela-6-caixas', 'Drip Coffee - Canastra Canela 6 caixas com 10 unidades cada - Total 60 unidades', '6 caixas — 60 sachês', 'Drip Coffee', '0.00', 'http://localhost:3000/cafe-canela.png', 0, 'Café torrado e moído com canela, moída junto ao grão. O aromatizado da casa. Sachê individual de drip coffee: filtro e café numa coisa só. Torra média-escura. Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.660', 18, 7, 24, now()),
+  ('64ba5d13-1f28-5e15-9d66-4c245e953869', 'drip-suave-3-caixas', 'Drip Coffee - Canastra Suave 3 caixas - Total 30 unidades', '3 caixas — 30 sachês', 'Drip Coffee', '0.00', 'http://localhost:3000/cafe-suave.png', 0, 'Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve. Sachê individual de drip coffee: filtro e café numa coisa só. Torra média. Corpo médio. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.330', 18, 7, 24, now()),
+  ('9ce8f68d-4d82-5bd5-b106-e609e64d6656', 'capsula-classico-1-caixa', 'Cápsula Compatível Nespresso - Canastra Clássico 1 caixa com 10 unidades', '1 caixa — 10 cápsulas', 'Cápsulas', '0.00', 'http://localhost:3000/cafe-classico.png', 0, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Cápsula compatível com o sistema Nespresso. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.110', 18, 7, 24, now()),
+  ('9d3fc3a0-6cde-5fcc-9190-095778e03703', 'capsula-classico-6-caixas', 'Cápsula Compatível Nespresso - Canastra Clássico 6 caixas com 10 unidades cada', '6 caixas — 60 cápsulas', 'Cápsulas', '0.00', 'http://localhost:3000/cafe-classico.png', 0, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Cápsula compatível com o sistema Nespresso. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.660', 18, 7, 24, now()),
+  ('dc077306-a19b-577b-af42-acea63503208', 'capsula-canela-1-caixa', 'Cápsula Compatível Nespresso - Canastra Canela 1 caixa com 10 unidades', '1 caixa — 10 cápsulas', 'Cápsulas', '0.00', 'http://localhost:3000/cafe-canela.png', 0, 'Café torrado e moído com canela, moída junto ao grão. O aromatizado da casa. Cápsula compatível com o sistema Nespresso. Torra média-escura. Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.110', 18, 7, 24, now()),
+  ('9ade4f0e-5474-5737-abb4-024f77da14af', 'capsula-canela-6-caixas', 'Cápsula Compatível Nespresso - Canastra Canela 6 caixas com 10 unidades cada', '6 caixas — 60 cápsulas', 'Cápsulas', '0.00', 'http://localhost:3000/cafe-canela.png', 0, 'Café torrado e moído com canela, moída junto ao grão. O aromatizado da casa. Cápsula compatível com o sistema Nespresso. Torra média-escura. Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.660', 18, 7, 24, now()),
+  ('05754efb-b436-5a52-b7e7-da94d2a08bdf', 'capsula-classico-2-canela-1', 'Cápsula Compatível Nespresso - Canastra Clássico 2 caixas + Canela 1 caixa', '3 caixas — 30 cápsulas', 'Kits', '0.00', 'http://localhost:3000/cafe-classico.png', 0, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Cápsula compatível com o sistema Nespresso. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.330', 18, 7, 24, now()),
+  ('e7203f2c-8fba-586c-99be-7ae1cee1a8fd', 'capsula-classico-3-canela', 'Cápsula Compatível Nespresso - Canastra Clássico 3 caixas + Canela', '4 caixas — 40 cápsulas', 'Kits', '0.00', 'http://localhost:3000/cafe-classico.png', 0, 'Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias. Cápsula compatível com o sistema Nespresso. Torra média-escura (French roast). Corpo intenso. 100% arábica · Origem única da Serra da Canastra · Carbono zero · 100% energia fotovoltaica · Sem glúten · Vegano. Selo GOURMET / ESPECIAL / SCA 80+.', '0.440', 18, 7, 24, now())
+ON CONFLICT (sku) WHERE sku IS NOT NULL DO NOTHING;
+
+INSERT INTO canastra.produto_opcoes (id, tipo, valor) VALUES
+  ('24db0673-a9d1-54ce-b3e9-767e4424a87d', 'categoria', 'Café em grãos'),
+  ('a1c82889-e3c3-5a1d-978d-12d00ff445dd', 'categoria', 'Café moído'),
+  ('e7be3957-c71a-5238-b2f2-69c008e334b9', 'categoria', 'Drip Coffee'),
+  ('2ee030ca-11cc-514b-9611-fef844a5addc', 'categoria', 'Cápsulas'),
+  ('e50027d3-0183-58fc-a2a4-45808072b2bf', 'categoria', 'Kits'),
+  ('2af57c74-1100-5e70-9ddd-65d5d9307a38', 'tamanho', 'Pacote com 250 g'),
+  ('fd2d3b93-23ad-556b-b440-ebaf1c572c58', 'tamanho', 'Pacote com 500 g'),
+  ('b6abc48c-390a-5c27-abff-6febe5338d79', 'tamanho', 'Pacote com 1 kg'),
+  ('f7b010e1-1fe0-52c5-a8f1-b46779c1921a', 'tamanho', 'Caixa com 4 pacotes de 500 g'),
+  ('bd942eac-1999-5d07-80a9-1cae6641436e', 'tamanho', 'Caixa com 3 pacotes de 250 g'),
+  ('563f154a-ead7-5c31-b436-598a957b3bb8', 'tamanho', 'Caixa com 1 pacote de 250 g de cada'),
+  ('3a763d7c-0315-5d7a-b631-71a09c68b06f', 'tamanho', 'Display com 10 sachês'),
+  ('9e891efd-355c-52f4-864a-eb7cc4f1ad61', 'tamanho', '3 caixas — 30 sachês'),
+  ('830db52b-fade-5559-aacc-dc5e4e98470f', 'tamanho', '6 caixas — 60 sachês'),
+  ('9d5d8cd6-c033-58bb-b398-7f9e299b519a', 'tamanho', '1 caixa — 10 cápsulas'),
+  ('d662eaf9-d479-500c-92b7-f9b5a10055bd', 'tamanho', '6 caixas — 60 cápsulas'),
+  ('992d3003-3647-5acb-84e6-7264b40afc8d', 'tamanho', '3 caixas — 30 cápsulas'),
+  ('0237b204-860c-5306-a163-e17e19566bbf', 'tamanho', '4 caixas — 40 cápsulas')
+ON CONFLICT (tipo, valor) DO NOTHING;
+
+INSERT INTO canastra.config_loja
+  (id, banner_desktop, banner_mobile, titulo_site, whatsapp, barra_de_aviso)
+VALUES (1, 'http://localhost:3000/bannerdesktop.jpg', 'http://localhost:3000/imagem-banner.jpg', 'Café Canastra', '', 'Torramos na terça, enviamos na quarta.')
+ON CONFLICT (id) DO NOTHING;
+
+
+-- ----------------------------------------------------------------------------
+-- 3. Contas de teste (senha publicada — nunca em produção)
+-- ----------------------------------------------------------------------------
+
+-- >>> INICIO CONTAS DE TESTE (o teste local corta daqui)
+-- Este trecho exige o schema `auth` de verdade, do GoTrue. O harness de teste
+-- local traz so um arremedo de `auth.users` (id e email), por isso
+-- backend/test/instalacao.test.js corta daqui ate o marcador de fim. A parte de
+-- ESTRUTURA acima e comparada linha a linha; esta so se verifica num Supabase.
+
+DO $conta_admin$
+DECLARE
+  id_do_usuario uuid;
+BEGIN
+  SELECT id INTO id_do_usuario FROM auth.users WHERE email = 'admin@canastra.teste';
+
+  IF id_do_usuario IS NULL THEN
+    id_do_usuario := gen_random_uuid();
+
+    INSERT INTO auth.users (
+      instance_id, id, aud, role, email, encrypted_password,
+      email_confirmed_at, created_at, updated_at,
+      raw_app_meta_data, raw_user_meta_data
+    ) VALUES (
+      '00000000-0000-0000-0000-000000000000',
+      id_do_usuario,
+      'authenticated',
+      'authenticated',
+      'admin@canastra.teste',
+      crypt('canastra-teste-admin', gen_salt('bf')),
+      now(), now(), now(),
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      jsonb_build_object('nome', 'Administração de Teste')
+    );
+
+    INSERT INTO auth.identities (
+      provider_id, user_id, identity_data, provider,
+      last_sign_in_at, created_at, updated_at
+    ) VALUES (
+      id_do_usuario::text,
+      id_do_usuario,
+      jsonb_build_object('sub', id_do_usuario::text, 'email', 'admin@canastra.teste'),
+      'email',
+      now(), now(), now()
+    );
+
+    RAISE NOTICE 'Conta criada no GoTrue: %', 'admin@canastra.teste';
+  ELSE
+    RAISE NOTICE 'Conta já existia, senha preservada: %', 'admin@canastra.teste';
+  END IF;
+
+  -- O vinculo com a loja. E ESTA linha, e nao o token, que faz alguem ser
+  -- cliente daqui: as politicas de RLS todas passam por canastra.eh_cliente().
+  INSERT INTO canastra.clientes (user_id, nome)
+  VALUES (id_do_usuario, 'Administração de Teste')
+  ON CONFLICT (user_id) DO NOTHING;
+
+  -- Administrador e linha em canastra.admins, nunca claim no JWT — outro projeto
+  -- da mesma instancia poderia emitir o claim que quisesse.
+  INSERT INTO canastra.admins (user_id) VALUES (id_do_usuario)
+  ON CONFLICT (user_id) DO NOTHING;
+END $conta_admin$;
+
+DO $conta_cliente$
+DECLARE
+  id_do_usuario uuid;
+BEGIN
+  SELECT id INTO id_do_usuario FROM auth.users WHERE email = 'cliente@canastra.teste';
+
+  IF id_do_usuario IS NULL THEN
+    id_do_usuario := gen_random_uuid();
+
+    INSERT INTO auth.users (
+      instance_id, id, aud, role, email, encrypted_password,
+      email_confirmed_at, created_at, updated_at,
+      raw_app_meta_data, raw_user_meta_data
+    ) VALUES (
+      '00000000-0000-0000-0000-000000000000',
+      id_do_usuario,
+      'authenticated',
+      'authenticated',
+      'cliente@canastra.teste',
+      crypt('canastra-teste-cliente', gen_salt('bf')),
+      now(), now(), now(),
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      jsonb_build_object('nome', 'Cliente de Teste')
+    );
+
+    INSERT INTO auth.identities (
+      provider_id, user_id, identity_data, provider,
+      last_sign_in_at, created_at, updated_at
+    ) VALUES (
+      id_do_usuario::text,
+      id_do_usuario,
+      jsonb_build_object('sub', id_do_usuario::text, 'email', 'cliente@canastra.teste'),
+      'email',
+      now(), now(), now()
+    );
+
+    RAISE NOTICE 'Conta criada no GoTrue: %', 'cliente@canastra.teste';
+  ELSE
+    RAISE NOTICE 'Conta já existia, senha preservada: %', 'cliente@canastra.teste';
+  END IF;
+
+  -- O vinculo com a loja. E ESTA linha, e nao o token, que faz alguem ser
+  -- cliente daqui: as politicas de RLS todas passam por canastra.eh_cliente().
+  INSERT INTO canastra.clientes (user_id, nome)
+  VALUES (id_do_usuario, 'Cliente de Teste')
+  ON CONFLICT (user_id) DO NOTHING;
+END $conta_cliente$;
+
+-- <<< FIM CONTAS DE TESTE
+
+
+-- ----------------------------------------------------------------------------
+-- 4. Conferência
+-- ----------------------------------------------------------------------------
+
+-- Sete linhas: a instalacao ficou registrada e `npm run db:migrar` nao tem mais
+-- nada a fazer. Se aqui vier menos de 7, alguma migracao nao rodou.
+SELECT versao, aplicada_em FROM canastra.migracoes ORDER BY versao;
+
+-- 29 produtos, 1 configuracao, 2 clientes, 1 administrador.
+SELECT
+  (SELECT count(*) FROM canastra.produtos)       AS produtos,
+  (SELECT count(*) FROM canastra.produto_opcoes) AS opcoes,
+  (SELECT count(*) FROM canastra.config_loja)    AS config,
+  (SELECT count(*) FROM canastra.clientes)       AS clientes,
+  (SELECT count(*) FROM canastra.admins)         AS admins;
+
+-- Toda tabela da loja com a RLS ligada. Se alguma vier `false`, PARE: a
+-- instalacao esta com dado pessoal legivel por quem tiver a chave anonima.
+SELECT c.relname, c.relrowsecurity AS rls_ligada
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'canastra' AND c.relkind = 'r'
+ORDER BY c.relname;

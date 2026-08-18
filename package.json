@@ -4,6 +4,7 @@
   "description": "Loja do Café Canastra — vitrine Next 15 + API Express/PostgreSQL + painel administrativo.",
   "scripts": {
     "db:migrar": "node backend/db/migrar.js",
+    "db:gerar-sql": "node backend/db/gerar-instalacao.js",
     "db:seed": "node backend/db/seed.js",
     "db:setup": "npm run db:migrar && npm run db:seed",
     "dev:api": "npm --prefix backend run dev",
