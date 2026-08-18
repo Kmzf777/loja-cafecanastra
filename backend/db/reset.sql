@@ -1,74 +1,123 @@
 -- ============================================================================
--- Loja do Café Canastra — reset do banco
+-- Loja do Café Canastra — RESET TOTAL do banco
 --
 -- ARQUIVO GERADO. Não edite à mão.
---   Gerador: node backend/db/gerar-instalacao.js
+--   Gerador: node backend/db/gerar-instalacao.js   (npm run db:gerar-sql)
 --
--- !! LEIA ANTES DE RODAR. Isto apaga dados e nao tem volta.
+-- !!! LEIA. Isto apaga o banco inteiro e não tem desfazer. !!!
 --
 -- O QUE ISTO DESTRÓI
---   · O schema "canastra" inteiro, com CASCADE: catálogo, clientes, endereços,
---     sacolas, pedidos, promoções, configuração da loja, políticas de RLS, as
---     funções eh_cliente/eh_admin/fundir_sacola e o registro de migrações.
---   · Somente estas contas de autenticação, por endereço exato:
---     admin@canastra.teste
---     cliente@canastra.teste
+--   · TODOS os schemas que não são do Supabase — inclusive "public" (recriado
+--     vazio) e "canastra". Tabelas, dados, views, funções, políticas: tudo.
+--   · TODOS os usuários de auth.users e, em cascata, suas identidades, sessões
+--     e refresh tokens. Ninguém entra depois disto até você recriar.
+--   · TODOS os buckets e objetos do Storage.
 --
--- O QUE ISTO DEIXA EM PAZ, DE PROPÓSITO
---   · Todo o resto de auth.users. Numa instância Supabase self-hosted, auth.users
---     é ÚNICO e compartilhado entre todos os projetos que rodam nela. Um
---     "DELETE FROM auth.users" aqui apagaria as contas dos seus outros projetos.
---     Por isso o filtro é por igualdade de endereço, nunca por LIKE ou padrão:
---     um "%teste%" pegaria "contato@meurestaurante.com.br" no dia em que alguém
---     se cadastrasse com "teste" no endereço.
---   · Os schemas public, storage, realtime, extensions e vault.
---   · As extensões instaladas.
+-- O QUE FICA DE PÉ
+--   Os schemas que o Supabase administra: auth, storage, realtime, extensions,
+--   graphql, vault, supabase_functions, cron, net. Eles não são dados do seu
+--   projeto — são a instalação do Supabase. Derrubá-los não limparia nada:
+--   quebraria os serviços, e nenhum SQL de instalação reconstrói isso.
 --
 -- QUANDO USAR
---   Antes de recolar backend/db/instalacao-completa.sql num banco de TESTE.
---   Em produção, não. Não existe motivo legítimo para rodar isto num banco com
---   pedido de cliente de verdade dentro.
+--   Num banco de TESTE que é só deste projeto, para reinstalar do zero.
+--
+-- QUANDO NÃO USAR
+--   · Em produção. Nunca.
+--   · Numa instância compartilhada com outros projetos seus: este arquivo apaga
+--     por CATEGORIA, não por nome, e os outros projetos morrem junto.
+--
+-- DEPOIS DELE
+--   Cole backend/db/instalacao-completa.sql, que recria tudo: schema, tabelas,
+--   RLS, RPC, catálogo com 29 SKUs e as duas contas de teste.
 -- ============================================================================
 
 DO $reset$
 DECLARE
-  contas_de_teste text[] := ARRAY['admin@canastra.teste', 'cliente@canastra.teste'];
-  ids_apagados    uuid[];
-  havia_schema    boolean;
-  n_identidades   integer;
-  n_usuarios      integer;
+  -- Schemas da instalação do Supabase. Tudo que não estiver aqui é tratado como
+  -- dado de projeto e cai. A lista é generosa de propósito: derrubar um schema
+  -- de serviço por engano quebra a instância, enquanto o preço de ser
+  -- conservador é deixar de apagar algo de que ninguém sente falta.
+  protegidos text[] := ARRAY[
+    'information_schema', 'public',
+    'auth', 'storage', 'realtime', '_realtime', 'extensions', 'graphql',
+    'graphql_public', 'vault', 'pgsodium', 'pgsodium_masks', 'supabase_functions',
+    'supabase_migrations', 'cron', 'net', 'pgbouncer', 'dbdev', 'pgtle',
+    '_analytics', '_supavisor', 'pgmq'
+  ];
+  s          record;
+  n          integer;
+  derrubados integer := 0;
 BEGIN
-  havia_schema := EXISTS (
-    SELECT 1 FROM information_schema.schemata WHERE schema_name = 'canastra'
-  );
+  -- -- 1. Schemas do projeto ------------------------------------------------
+  -- "public" fica FORA deste laço, tratado logo abaixo: ele não pode ser
+  -- derrubado e esquecido, porque meio mundo assume que ele existe.
+  FOR s IN
+    SELECT nspname FROM pg_namespace
+    WHERE nspname <> ALL (protegidos)
+      AND nspname NOT LIKE 'pg\_%'
+    ORDER BY nspname
+  LOOP
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', s.nspname);
+    derrubados := derrubados + 1;
+    RAISE NOTICE 'Schema removido: %', s.nspname;
+  END LOOP;
 
-  -- O schema primeiro: enquanto canastra.clientes existir, a FK para auth.users
-  -- (ON DELETE CASCADE) faz o delete das contas mexer em tabela que vai morrer
-  -- de qualquer forma. Derrubar o schema antes deixa o passo seguinte trivial.
-  DROP SCHEMA IF EXISTS canastra CASCADE;
+  -- -- 2. public, zerado e devolvido ao padrão ------------------------------
+  -- Derrubar e recriar é mais confiável que apagar tabela a tabela: pega view,
+  -- função, tipo, sequência e trigger que um DROP TABLE deixaria para trás.
+  DROP SCHEMA IF EXISTS public CASCADE;
+  CREATE SCHEMA public;
 
-  IF havia_schema THEN
-    RAISE NOTICE 'Schema "canastra" removido.';
-  ELSE
-    RAISE NOTICE 'Schema "canastra" não existia — nada a remover.';
+  -- Os privilégios de fábrica. Sem isto, o PostgREST e o painel do Supabase
+  -- passam a responder "permission denied for schema public" em tudo — e o
+  -- sintoma não aponta para o reset.
+  ALTER SCHEMA public OWNER TO pg_database_owner;
+  COMMENT ON SCHEMA public IS 'standard public schema';
+  GRANT USAGE ON SCHEMA public TO public;
+  GRANT ALL   ON SCHEMA public TO postgres, anon, authenticated, service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT ALL ON FUNCTIONS TO postgres, anon, authenticated, service_role;
+  RAISE NOTICE 'Schema "public" recriado vazio, com os privilégios padrão.';
+
+  -- -- 3. Storage -----------------------------------------------------------
+  -- Objetos antes de buckets: há FK entre os dois. Os arquivos em si seguem no
+  -- disco (ou no S3) até o coletor do Storage passar; o que some aqui é o
+  -- registro, que é o que a API enxerga.
+  IF to_regclass('storage.objects') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM storage.objects';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE 'Objetos do Storage removidos: %', n;
   END IF;
 
-  -- Só as contas nomeadas. O ANY sobre o array é igualdade exata, item a item.
-  SELECT array_agg(id) INTO ids_apagados
-  FROM auth.users
-  WHERE email = ANY (contas_de_teste);
-
-  IF ids_apagados IS NULL OR array_length(ids_apagados, 1) = 0 THEN
-    RAISE NOTICE 'Nenhuma conta de teste encontrada — nada a remover em auth.';
-  ELSE
-    DELETE FROM auth.identities WHERE user_id = ANY (ids_apagados);
-    GET DIAGNOSTICS n_identidades = ROW_COUNT;
-    RAISE NOTICE 'Identidades removidas: %', n_identidades;
-
-    DELETE FROM auth.users WHERE id = ANY (ids_apagados);
-    GET DIAGNOSTICS n_usuarios = ROW_COUNT;
-    RAISE NOTICE 'Contas removidas: % (%)', n_usuarios, array_to_string(contas_de_teste, ', ');
+  IF to_regclass('storage.buckets') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM storage.buckets';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE 'Buckets do Storage removidos: %', n;
   END IF;
 
-  RAISE NOTICE 'Reset concluído. Agora cole backend/db/instalacao-completa.sql.';
+  -- -- 4. Contas ------------------------------------------------------------
+  -- DELETE, e não TRUNCATE: as tabelas do GoTrue (identities, sessions,
+  -- refresh_tokens, mfa_factors) pendem de auth.users por FK ON DELETE CASCADE,
+  -- e o DELETE dispara essas cascatas. O TRUNCATE exigiria listar cada uma — e
+  -- a lista muda de versão para versão do GoTrue.
+  IF to_regclass('auth.users') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM auth.users';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE 'Contas removidas de auth.users: %', n;
+  END IF;
+
+  IF to_regclass('auth.audit_log_entries') IS NOT NULL THEN
+    EXECUTE 'DELETE FROM auth.audit_log_entries';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE 'Entradas de auditoria do GoTrue removidas: %', n;
+  END IF;
+
+  RAISE NOTICE '---';
+  RAISE NOTICE 'Reset concluído. % schema(s) de projeto removido(s).', derrubados;
+  RAISE NOTICE 'Agora cole backend/db/instalacao-completa.sql.';
 END $reset$;

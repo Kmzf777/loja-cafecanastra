@@ -175,12 +175,26 @@ que ele não enxerga pedido de outro; entre como `admin@canastra.teste` e confir
 que enxerga todos. Em produção a conta inicial nasce por `db:seed`, pelo GoTrue,
 com `SEED_ADMIN_PASSWORD` gerado — nunca por este arquivo.
 
-**Sobre o `reset.sql` numa instância compartilhada.** Ele derruba o schema
-`canastra` inteiro e remove de `auth.users` **apenas** os dois endereços de teste,
-por igualdade exata. Isso é deliberado e é a parte mais importante do arquivo:
-`auth.users` é único por instância self-hosted, então um `DELETE` mais largo — ou
-um `LIKE '%teste%'` — apagaria as contas dos seus outros projetos. Nada fora de
-`canastra` e desses dois endereços é tocado.
+**O `reset.sql` é um reset TOTAL, e apaga por categoria.** Ele derruba todo schema
+que não seja do próprio Supabase — `public` inclusive, recriado vazio com os
+privilégios de fábrica — apaga **todos** os usuários de `auth.users` (e em cascata
+identidades, sessões e refresh tokens) e esvazia buckets e objetos do Storage.
+Ficam de pé apenas os schemas que o Supabase administra: `auth`, `storage`,
+`realtime`, `extensions`, `graphql`, `vault`, `supabase_functions`, `cron`, `net`.
+Derrubá-los não limparia nada — quebraria os serviços, e nenhum SQL de instalação
+reconstrói isso.
+
+**Só use num banco de teste que seja só deste projeto.** Como ele apaga por
+categoria e não por nome, qualquer outro projeto que divida o mesmo banco morre
+junto. Em produção, nunca.
+
+Vale o registro de por que ele é assim: a primeira versão deste arquivo derrubava
+apenas o schema `canastra`. Num banco de teste onde ainda moravam as tabelas da
+loja antiga em `public`, ela rodava, dizia "concluído" e não apagava nada do que a
+pessoa estava vendo — um reset que parece ter funcionado é pior que não ter reset.
+`backend/test/instalacao.test.js` agora planta exatamente essa situação (tabela e
+view em `public`, schema extra, conta em `auth.users`) antes de resetar, e exige
+que tudo suma.
 
 **Os dois arquivos são gerados**, por `npm run db:gerar-sql`, a partir das
 próprias migrações e do `seed.js`. Não os edite à mão: a edição se perde na

@@ -115,6 +115,41 @@ test("o arquivo no repositorio esta em dia com o gerador", () => {
   );
 });
 
+test("os dois arquivos aplicam num banco que nao seja UTF-8", () => {
+  /**
+   * Ja mordeu tres vezes nesta sessao, sempre do mesmo jeito.
+   *
+   * Um caractere fora do Latin-1 num COMENTARIO do SQL — um emoji de aviso, um
+   * traco de moldura — faz o Postgres recusar o arquivo INTEIRO com
+   * `22P05: character with byte sequence ... has no equivalent in encoding
+   * "WIN1252"`. Nao e uma linha que falha: e a instalacao que nao comeca, por
+   * causa de enfeite.
+   *
+   * O Supabase gerenciado e UTF-8 e nao se importaria. Mas um arquivo de deploy
+   * que depende do encoding do destino para os proprios comentarios e fragil de
+   * graca, e o autor nao tem como saber em que banco ele vai ser colado.
+   * Acentuacao portuguesa e travessao passam — o WIN1252 os tem.
+   */
+  for (const [nome, conteudo] of [
+    ["instalacao-completa.sql", sqlGerado],
+    ["reset.sql", gerarReset()],
+  ]) {
+    const proibidos = [...new Set(conteudo)].filter((c) => {
+      const ponto = c.codePointAt(0);
+      // Latin-1 puro passa; acima disso, so o punhado que o WIN1252 mapeia
+      // (travessao, aspas curvas, reticencias, bullet...) na faixa 0x2013-0x2026.
+      if (ponto <= 0xff) return false;
+      return !(ponto >= 0x2013 && ponto <= 0x2026);
+    });
+    assert.deepEqual(
+      proibidos,
+      [],
+      `${nome} tem caractere que um banco WIN1252 recusa (22P05): ` +
+        proibidos.map((c) => `U+${c.codePointAt(0).toString(16)}`).join(", "),
+    );
+  }
+});
+
 test("as mesmas sete migracoes ficam registradas nos dois caminhos", async () => {
   // E isto que faz `npm run db:migrar` ser um no-op depois da instalacao pelo
   // SQL. Sem o registro, o runner tentaria reaplicar tudo e morreria no primeiro
@@ -268,35 +303,85 @@ test("o catalogo semeado e byte a byte o mesmo nos dois caminhos", async () => {
   );
 });
 
-test("o reset derruba a loja e o arquivo pode ser colado de novo", async () => {
-  // O reset roda no banco `viaSql`, que sera derrubado no `after` de qualquer
-  // forma — nenhum outro teste depende dele depois deste ponto.
+test("o reset limpa o banco inteiro, e nao so o schema da loja", async () => {
+  // ESTE E O TESTE QUE A PRIMEIRA VERSAO DO RESET NAO TINHA, E POR ISSO ELA
+  // PASSOU DIREITO ESTANDO ERRADA.
   //
-  // O trecho de `auth` do reset e exercitado de verdade: o shim tem `auth.users`,
-  // e as contas nunca foram inseridas aqui, entao o caminho "nenhuma conta
-  // encontrada" e o que roda. E exatamente o caminho de um banco limpo.
-  const reset = gerarReset().replace(
-    "DELETE FROM auth.identities WHERE user_id = ANY (ids_apagados);",
-    // O shim nao tem auth.identities; trocar por um no-op mantem o resto do
-    // bloco (o DROP SCHEMA e a contagem) sob teste.
-    "PERFORM 1;",
-  );
+  // Aquele reset so derrubava `canastra`. Num banco de teste onde ainda moravam
+  // as tabelas da loja ANTIGA (em `public`), ele rodava, dizia "concluído", e
+  // nao apagava nada do que a pessoa estava vendo. O sintoma nao e um erro: e um
+  // reset que parece ter funcionado. Entao o teste planta exatamente essa
+  // situacao — sobra em `public`, conta em `auth.users` — antes de resetar.
+  //
+  // O reset roda no banco `viaSql`, derrubado no `after` de qualquer forma.
+  const reset = gerarReset();
+
+  await viaSql.pool.query(`
+    CREATE TABLE public.produtos_da_loja_antiga (id int PRIMARY KEY, nome text);
+    INSERT INTO public.produtos_da_loja_antiga VALUES (1, 'sobra do schema antigo');
+    CREATE VIEW public.uma_view AS SELECT 1 AS x;
+    CREATE SCHEMA um_outro_schema;
+    CREATE TABLE um_outro_schema.t (id int);
+    INSERT INTO auth.users (id, email)
+      VALUES ('99999999-9999-9999-9999-999999999999', 'sobrou@exemplo.com');
+  `);
+
   await viaSql.pool.query(reset);
 
-  const { rows } = await viaSql.pool.query(
-    "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'canastra'",
+  const { rows: sobrou } = await viaSql.pool.query(`
+    SELECT
+      (SELECT count(*)::int FROM information_schema.schemata
+        WHERE schema_name IN ('canastra', 'um_outro_schema'))            AS schemas_de_projeto,
+      (SELECT count(*)::int FROM pg_tables  WHERE schemaname = 'public') AS tabelas_public,
+      (SELECT count(*)::int FROM pg_views   WHERE schemaname = 'public') AS views_public,
+      (SELECT count(*)::int FROM auth.users)                             AS contas
+  `);
+  assert.deepEqual(
+    sobrou[0],
+    { schemas_de_projeto: 0, tabelas_public: 0, views_public: 0, contas: 0 },
+    "o reset deixou sobra: era para o banco voltar ao estado de projeto novo",
   );
-  assert.deepEqual(rows, [], "o reset deixou o schema canastra de pe");
 
-  // Rodar de novo num banco onde nada existe tem de passar quieto.
+  // `public` tem de continuar existindo — recriado, nao apenas removido. Meio
+  // mundo assume que ele esta la, a comecar pelo proprio painel do Supabase.
+  const { rows: temPublic } = await viaSql.pool.query(
+    "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'public'",
+  );
+  assert.equal(temPublic.length, 1, "o reset removeu public e nao recriou");
+
+  // E os privilegios de fabrica voltaram: sem isto o PostgREST responde
+  // "permission denied for schema public" em tudo, e o sintoma nao aponta daqui.
+  const { rows: grants } = await viaSql.pool.query(`
+    SELECT bool_and(has_schema_privilege(r, 'public', 'USAGE')) AS todos_enxergam
+    FROM unnest(ARRAY['anon','authenticated','service_role']) AS r
+  `);
+  assert.equal(grants[0].todos_enxergam, true, "public ficou sem GRANT para os papeis do Supabase");
+
+  // Rodar de novo num banco ja limpo tem de passar quieto.
   await viaSql.pool.query(reset);
 
-  // E o arquivo de instalacao volta a aplicar por cima do reset.
+  // E a instalacao volta a aplicar por cima do reset.
   await viaSql.pool.query(semAsContas(sqlGerado));
   const { rows: depois } = await viaSql.pool.query(
     "SELECT count(*)::int AS n FROM canastra.produtos",
   );
   assert.equal(depois[0].n, 29);
+});
+
+test("o reset nao derruba os schemas que o Supabase administra", async () => {
+  // O outro lado do risco. Derrubar `auth` nao "limparia" o GoTrue: quebraria o
+  // servico, e nenhum SQL de instalacao reconstroi aquilo. O laco do reset apaga
+  // por categoria, entao a lista de protegidos e a unica coisa entre ele e uma
+  // instancia inutilizavel.
+  const { rows } = await viaSql.pool.query(
+    "SELECT 1 FROM information_schema.schemata WHERE schema_name = 'auth'",
+  );
+  assert.equal(rows.length, 1, "o reset derrubou o schema auth");
+
+  const { rows: fn } = await viaSql.pool.query(
+    "SELECT auth.uid() IS NULL AS ok",
+  );
+  assert.equal(fn[0].ok, true, "auth.uid() sumiu junto com o schema");
 });
 
 test("a guarda recusa colar o arquivo em cima de uma instalacao existente", async () => {
@@ -312,43 +397,62 @@ test("a guarda recusa colar o arquivo em cima de uma instalacao existente", asyn
   );
 });
 
-test("as contas de teste estao declaradas e sao coerentes entre os dois arquivos", () => {
-  // O trecho de contas nao roda aqui, mas o acordo entre os dois arquivos roda:
-  // toda conta que a instalacao cria, o reset tem de apagar. Um e-mail a menos no
-  // reset deixa conta orfa em auth.users, e a reinstalacao reaproveita a senha
-  // antiga sem avisar ninguem.
+test("as contas de teste estao declaradas na instalacao", () => {
+  // O trecho de contas nao roda no harness (o shim de `auth` e minimo), mas a
+  // declaracao roda: um admin e um cliente comum. O cliente comum existe para se
+  // conferir a fronteira de RLS na mao — e com ele que se ve, no navegador, que
+  // um cliente nao enxerga pedido alheio.
   assert.ok(CONTAS_DE_TESTE.length >= 2, "esperado ao menos um admin e um cliente");
   assert.equal(CONTAS_DE_TESTE.filter((c) => c.admin).length, 1);
+  assert.equal(CONTAS_DE_TESTE.filter((c) => !c.admin).length >= 1, true);
 
-  const reset = gerarReset();
   for (const conta of CONTAS_DE_TESTE) {
     assert.ok(
       sqlGerado.includes(conta.email),
       `${conta.email} nao aparece na instalacao`,
     );
-    assert.ok(
-      reset.includes(conta.email),
-      `${conta.email} e criado na instalacao mas o reset nao apaga`,
-    );
   }
 
-  // O reset nao pode apagar por padrao — um LIKE '%teste%' pegaria conta real de
-  // outro projeto na mesma instancia compartilhada.
-  //
-  // A checagem e sobre o SQL EXECUTAVEL, com os comentarios fora: o cabecalho do
-  // reset explica por extenso por que nao se usa LIKE, e uma busca ingenua no
-  // arquivo inteiro reprovaria o arquivo por causa da propria explicacao.
+  // O reset nao precisa mais nomear conta nenhuma — ele apaga auth.users
+  // inteiro. Mas justamente por isso o cabecalho tem de gritar, e o arquivo NAO
+  // pode ser usado numa instancia compartilhada.
+  const reset = gerarReset();
+  assert.ok(
+    /RESET TOTAL/.test(reset) && /compartilhada/i.test(reset),
+    "o cabecalho do reset perdeu o aviso de raio total / instancia compartilhada",
+  );
+});
+
+test("o reset protege os schemas de servico e apaga o resto por categoria", () => {
+  // A lista de protegidos e a unica coisa entre este arquivo e uma instancia
+  // Supabase inutilizavel. Vale afirma-la por nome, e nao so pelo comportamento
+  // no harness — que so tem `auth` e nao exercita os outros.
+  const reset = gerarReset();
   const executavel = reset
     .split("\n")
     .filter((linha) => !linha.trim().startsWith("--"))
     .join("\n");
 
+  for (const schema of [
+    "auth",
+    "storage",
+    "realtime",
+    "extensions",
+    "graphql",
+    "vault",
+    "supabase_functions",
+    "supabase_migrations",
+  ]) {
+    assert.ok(
+      new RegExp(`'${schema}'`).test(executavel),
+      `${schema} saiu da lista de protegidos — o reset passaria a derruba-lo`,
+    );
+  }
+
+  // E o `public` tem de ser recriado, nao so derrubado.
   assert.ok(
-    !/\bI?LIKE\b/i.test(executavel),
-    "o reset usa LIKE: numa instancia compartilhada isso apaga conta de terceiro",
-  );
-  assert.ok(
-    /email = ANY \(contas_de_teste\)/.test(executavel),
-    "o reset deixou de casar e-mail por igualdade exata",
+    /DROP SCHEMA IF EXISTS public CASCADE/.test(executavel) &&
+      /CREATE SCHEMA public/.test(executavel),
+    "o reset derruba public sem recriar",
   );
 });
