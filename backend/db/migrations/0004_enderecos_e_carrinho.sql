@@ -1,4 +1,13 @@
 -- Enderecos e carrinho.
+--
+-- `atualizado_em` NAS DUAS PRIMEIRAS TABELAS E MANTIDA POR QUEM ESCREVE, e nao
+-- por trigger: nao ha `moddatetime` neste schema (o unico gatilho nao-interno e
+-- o `admins_nunca_zero` de 0002), entao a coluna fica igual a `criado_em` para
+-- sempre a menos que cada UPDATE inclua `atualizado_em = now()`. Uma data de
+-- alteracao que nao alterou engana mais do que ajuda. Nao foi criada trigger
+-- aqui para nao introduzir funcao nova sem a tarefa dona da escrita pedir; em
+-- troca a regra fica explicita, e quem mais precisa dela e a RPC de fusao da
+-- sacola (0007), que toca `carrinhos` a cada login.
 
 CREATE TABLE canastra.enderecos (
   endereco_id  uuid PRIMARY KEY DEFAULT gen_random_uuid(),

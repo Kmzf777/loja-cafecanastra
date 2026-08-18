@@ -227,25 +227,22 @@ test("item de carrinho sobrevive ao produto sair do catalogo", async () => {
   assert.deepEqual(rows, [{ nome: "Efemero", preco: "54.90" }]);
 });
 
-test("as tres tabelas de 0004 saem com a RLS ligada e fechadas para anon", async () => {
-  // Nada aqui e publico: endereco e carrinho sao dados pessoais. As duas camadas
-  // negam — sem GRANT para `anon` (Regra 1 de 0001) e com a chave geral da RLS
-  // ligada antes de qualquer politica existir (Regra 2).
+test("nada de 0004 e legivel por anon", async () => {
+  // Endereco e sacola sao dados pessoais: nenhum GRANT para `anon` (Regra 1 de
+  // 0001). A outra metade — a RLS ligada — nao e conferida aqui: virou uma
+  // invariante de schema, valida para toda tabela de toda migracao, em
+  // test/schema.test.js. Uma lista fixa de tabelas neste arquivo daria verde para
+  // uma tabela nova criada em 0009 sem ENABLE ROW LEVEL SECURITY, que e
+  // exatamente o esquecimento contra o qual a regra existe.
   const { rows } = await bd.pool.query(`
-    SELECT
-      c.relname AS tabela,
-      c.relrowsecurity AS ligada,
-      has_table_privilege('anon', 'canastra.' || c.relname, 'SELECT') AS anon_le
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'canastra'
-      AND c.relname IN ('enderecos', 'carrinhos', 'carrinho_itens')
-    ORDER BY c.relname
+    SELECT t.tabela, has_table_privilege('anon', 'canastra.' || t.tabela, 'SELECT') AS anon_le
+    FROM (VALUES ('enderecos'), ('carrinhos'), ('carrinho_itens')) AS t(tabela)
+    ORDER BY t.tabela
   `);
 
   assert.deepEqual(rows, [
-    { tabela: "carrinho_itens", ligada: true, anon_le: false },
-    { tabela: "carrinhos", ligada: true, anon_le: false },
-    { tabela: "enderecos", ligada: true, anon_le: false },
+    { tabela: "carrinho_itens", anon_le: false },
+    { tabela: "carrinhos", anon_le: false },
+    { tabela: "enderecos", anon_le: false },
   ]);
 });

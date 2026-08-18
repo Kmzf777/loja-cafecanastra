@@ -42,6 +42,67 @@ test("o schema canastra existe e os tres papeis o enxergam", async () => {
   ]);
 });
 
+/**
+ * Toda tabela de `canastra` com a RLS ligada, sem lista de nomes.
+ *
+ * `migracoes` fica de fora por ser a escrituracao do proprio runner: ela nao
+ * guarda dado de ninguem, e nasce fora de qualquer migracao (o bootstrap de
+ * db/migrar.js a cria antes de existir migracao para ligar RLS nela).
+ */
+const SQL_TABELAS_SEM_RLS = `
+  SELECT c.relname AS tabela
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'canastra'
+    -- 'r' = tabela comum, 'p' = particionada. Views nao tem RLS propria (quem
+    -- decide e a tabela de baixo) e sequencias tampouco, entao ficam fora.
+    AND c.relkind IN ('r', 'p')
+    AND c.relname <> 'migracoes'
+    AND NOT c.relrowsecurity
+  ORDER BY c.relname
+`;
+
+test("REGRA: toda tabela de canastra sai das migracoes com a RLS ligada", async () => {
+  // A Regra 2 do projeto, afirmada como INVARIANTE e nao como lista.
+  //
+  // Antes disto, cada migracao tinha seu proprio teste conferindo as suas
+  // tabelas pelo nome. Todos passavam e a regra mesmo assim nao estava
+  // protegida: uma tabela criada em 0009 sem `ENABLE ROW LEVEL SECURITY` nao
+  // aparece em lista nenhuma escrita antes dela, entao os tres testes seguiriam
+  // verdes enquanto a tabela nova nasce aberta a quem tiver GRANT. Uma regra que
+  // so vale para o que ja existe nao e uma regra, e um inventario.
+  //
+  // Assim, quem esquecer o ENABLE numa migracao futura descobre no CI, sem
+  // precisar saber que esta regra existe — que e o unico jeito de uma convencao
+  // sobreviver a quem nao leu a convencao.
+  const { rows } = await bd.pool.query(SQL_TABELAS_SEM_RLS);
+
+  assert.deepEqual(
+    rows.map((r) => r.tabela),
+    [],
+    "estas tabelas estao sem RLS; falta ALTER TABLE ... ENABLE ROW LEVEL SECURITY na migracao que as criou",
+  );
+});
+
+test("e a invariante de RLS realmente reprova uma tabela nova sem ENABLE", async () => {
+  // Um teste que so afirma "a lista esta vazia" passa verde tambem quando a
+  // consulta esta errada e nunca acharia nada — e ai a rede de seguranca nao
+  // existe e ninguem fica sabendo. Entao a rede e testada: uma tabela de sonda
+  // sem RLS TEM de aparecer.
+  await bd.pool.query("CREATE TABLE canastra.sonda_sem_rls (id int)");
+  try {
+    const { rows } = await bd.pool.query(SQL_TABELAS_SEM_RLS);
+    assert.deepEqual(rows.map((r) => r.tabela), ["sonda_sem_rls"]);
+
+    // E some da lista assim que a migracao faz o que devia.
+    await bd.pool.query("ALTER TABLE canastra.sonda_sem_rls ENABLE ROW LEVEL SECURITY");
+    const depois = await bd.pool.query(SQL_TABELAS_SEM_RLS);
+    assert.deepEqual(depois.rows, []);
+  } finally {
+    await bd.pool.query("DROP TABLE IF EXISTS canastra.sonda_sem_rls");
+  }
+});
+
 test("nenhuma tabela da loja fica em public", async () => {
   const { rows } = await bd.pool.query(
     "SELECT tablename FROM pg_tables WHERE schemaname = 'public'",
