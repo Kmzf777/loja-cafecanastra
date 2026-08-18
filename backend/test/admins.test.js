@@ -272,10 +272,28 @@ test("os GRANTs padrao de 0001 alcancaram as duas tabelas, e anon ficou de fora"
       tabela: "admins",
       anon_le: false,
       auth_le: true,
-      auth_apaga: true,
+      // ERA `true` ATE A MIGRACAO 0003, e a mudanca e deliberada. O default de
+      // 0001 de fato alcancou `admins` — quem prova isso agora e a linha de
+      // `clientes` logo abaixo —, mas 0003 REVOGA a escrita de `authenticated`
+      // aqui de proposito: enquanto ela existisse, uma unica politica permissiva
+      // de INSERT escrita na migracao de politicas deixaria um token de OUTRO
+      // projeto da instancia compartilhada se promover a administrador desta
+      // loja. Que e exatamente o ataque que esta tabela inteira existe para
+      // impedir quando referencia `clientes` em vez de `auth.users` (ver o teste
+      // "nao da para virar admin sem ser cliente da loja" acima) — sem o REVOKE,
+      // a defesa estrutural de 0002 dependia de ninguem escrever a politica
+      // errada em 0006.
+      //
+      // Quem escreve em `admins` e o `service_role`, que continua com tudo.
+      auth_apaga: false,
       servico_escreve: true,
     },
     {
+      // `clientes` NAO leva REVOKE e por isso continua sendo a testemunha de que
+      // o ALTER DEFAULT PRIVILEGES de 0001 alcanca as tabelas das migracoes: o
+      // cliente logado escreve mesmo na propria linha (cria a conta, corrige
+      // telefone), e o recorte de QUAL linha e trabalho da politica de RLS, que
+      // sabe distinguir dono de vizinho. Privilegio de tabela nao sabe.
       tabela: "clientes",
       anon_le: false,
       auth_le: true,

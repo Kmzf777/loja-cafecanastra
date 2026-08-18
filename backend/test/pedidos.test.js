@@ -1,6 +1,6 @@
 "use strict";
 
-const { test, before, after } = require("node:test");
+const { test, before, after, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { subirPostgres } = require("./ajuda/postgres.js");
 const { aplicarMigracoes } = require("../db/migrar.js");
@@ -17,6 +17,17 @@ before(async () => {
 
 after(async () => {
   await bd?.derrubar();
+});
+
+beforeEach(() => {
+  // Sem esta guarda, um before() que falha faz CADA teste morrer num
+  // "Cannot read properties of undefined (reading 'pool')", e o erro de boot —
+  // que e a informacao util — some sob oito erros derivados.
+  if (!bd) {
+    throw new Error(
+      "O Postgres nao subiu no before(); a causa real esta no erro daquele hook.",
+    );
+  }
 });
 
 test("o mesmo pagamento do MP nao pode gerar dois pedidos", async () => {
@@ -44,14 +55,22 @@ test("varios pedidos podem estar sem pagamento_id_mp", async () => {
   // Pedido criado ANTES de cobrar (correcao da auditoria): nesse instante ainda
   // nao ha id do MP. Se o indice unico nao fosse parcial, o segundo pedido
   // pendente da loja inteira falharia.
+  //
+  // As duas linhas sao MARCADAS e a contagem filtra pela marca. Contar todos os
+  // `pagamento_id_mp IS NULL` da tabela parecia mais simples e era uma armadilha:
+  // o numero so fechava porque os testes anteriores deste arquivo tinham inserido
+  // exatamente o que tinham inserido. Reordenar, renomear ou acrescentar um teste
+  // acima quebraria este aqui, e a mensagem de falha apontaria para o lugar
+  // errado.
   await bd.pool.query(
-    `INSERT INTO canastra.pedidos (pedido_id, user_id, total) VALUES
-       (gen_random_uuid(), $1, 10), (gen_random_uuid(), $1, 20)`,
+    `INSERT INTO canastra.pedidos (pedido_id, user_id, total, chave_idempotencia) VALUES
+       (gen_random_uuid(), $1, 10, 'sem-mp-a'), (gen_random_uuid(), $1, 20, 'sem-mp-b')`,
     [ANA],
   );
 
   const { rows } = await bd.pool.query(
-    "SELECT count(*)::int AS n FROM canastra.pedidos WHERE pagamento_id_mp IS NULL",
+    `SELECT count(*)::int AS n FROM canastra.pedidos
+     WHERE pagamento_id_mp IS NULL AND chave_idempotencia IN ('sem-mp-a', 'sem-mp-b')`,
   );
   assert.equal(rows[0].n, 2);
 });
@@ -96,18 +115,38 @@ test("apagar o cliente preserva o pedido, orfao", async () => {
     ORFAO,
   ]);
   const { rows: criado } = await bd.pool.query(
-    `INSERT INTO canastra.pedidos (user_id, total) VALUES ($1, 99.90)
-     RETURNING pedido_id`,
-    [ORFAO],
+    `INSERT INTO canastra.pedidos (user_id, total, endereco_json)
+     VALUES ($1, 99.90, $2::jsonb) RETURNING pedido_id`,
+    [
+      ORFAO,
+      JSON.stringify({ nome: "Ana Silva", cpf: "12345678901", rua: "R. X 99" }),
+    ],
   );
 
   await bd.pool.query("DELETE FROM canastra.clientes WHERE user_id = $1", [ORFAO]);
 
   const { rows } = await bd.pool.query(
-    "SELECT user_id, total FROM canastra.pedidos WHERE pedido_id = $1",
+    "SELECT user_id, total, endereco_json FROM canastra.pedidos WHERE pedido_id = $1",
     [criado[0].pedido_id],
   );
-  assert.deepEqual(rows, [{ user_id: null, total: "99.90" }]);
+  assert.equal(rows[0].user_id, null);
+  assert.equal(rows[0].total, "99.90");
+
+  // E A PARTE DESCONFORTAVEL, afirmada aqui para nao virar so uma frase de
+  // comentario: apagar o cliente NAO apaga os dados pessoais da pessoa. Nome, CPF
+  // e endereco continuam em `endereco_json` (e o que foi comprado, em `itens`),
+  // porque o SET NULL preserva a VENDA inteira, nao so o valor dela.
+  //
+  // Ou seja, atender a um pedido de exclusao pela LGPD exige um passo A MAIS que
+  // este schema ainda nao tem: redigir esses dois campos preservando o que a
+  // obrigacao fiscal manda guardar. Este teste existe para que a lacuna fique
+  // MEDIDA, e nao lembrada; quando a tarefa da redacao chegar, e ele que muda —
+  // de proposito, para que a mudanca seja consciente.
+  assert.deepEqual(rows[0].endereco_json, {
+    nome: "Ana Silva",
+    cpf: "12345678901",
+    rua: "R. X 99",
+  });
 });
 
 test("config_loja aceita no maximo uma linha", async () => {
@@ -155,23 +194,30 @@ test("o que 0005 abre para anon: promocoes e config, nunca pedidos", async () =>
   ]);
 });
 
-test("as tres tabelas de 0005 saem com a RLS ligada", async () => {
-  // Inclusive as publicas. GRANT e permissao de TABELA; a RLS decide a LINHA, e
-  // ate a migracao de politicas chegar ela nega tudo. Ou seja, um deploy que pare
-  // entre esta migracao e aquela deixa a vitrine sem banner — visivel e
-  // inofensivo — em vez de deixar `pedidos` aberto, que seria o contrario.
+test("authenticated nao escreve em promocoes nem na config da loja", async () => {
+  // A guarda de catalogo dos REVOKEs de 0005, gemea da de 0003 e pelo mesmo
+  // motivo: o `arwd` que 0001 concede por padrao esta inerte apenas enquanto a
+  // RLS nao tiver politica, e a primeira politica ampla demais o acorda. O dano
+  // aqui seria o banner e a barra de aviso da loja reescritos, ou promocao
+  // inventada, por um token de outro projeto da instancia compartilhada.
+  //
+  // `pedidos` NAO entra nesta lista de proposito: ali o cliente logado escreve de
+  // verdade (fecha o proprio pedido), e o recorte e trabalho da politica de RLS,
+  // que sabe distinguir a linha do dono da linha do vizinho. Privilegio de tabela
+  // nao sabe.
   const { rows } = await bd.pool.query(`
-    SELECT c.relname AS tabela, c.relrowsecurity AS ligada
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'canastra'
-      AND c.relname IN ('pedidos', 'promocoes', 'config_loja')
-    ORDER BY c.relname
+    SELECT
+      t.tabela,
+      has_table_privilege('authenticated', 'canastra.' || t.tabela, 'INSERT') AS insere,
+      has_table_privilege('authenticated', 'canastra.' || t.tabela, 'UPDATE') AS altera,
+      has_table_privilege('authenticated', 'canastra.' || t.tabela, 'DELETE') AS apaga,
+      has_table_privilege('authenticated', 'canastra.' || t.tabela, 'SELECT') AS le
+    FROM (VALUES ('promocoes'), ('config_loja')) AS t(tabela)
+    ORDER BY t.tabela
   `);
 
   assert.deepEqual(rows, [
-    { tabela: "config_loja", ligada: true },
-    { tabela: "pedidos", ligada: true },
-    { tabela: "promocoes", ligada: true },
+    { tabela: "config_loja", insere: false, altera: false, apaga: false, le: true },
+    { tabela: "promocoes", insere: false, altera: false, apaga: false, le: true },
   ]);
 });

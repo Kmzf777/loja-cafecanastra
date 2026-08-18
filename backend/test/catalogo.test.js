@@ -1,6 +1,6 @@
 "use strict";
 
-const { test, before, after } = require("node:test");
+const { test, before, after, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { subirPostgres } = require("./ajuda/postgres.js");
 const { comoPapel, PERMISSAO_NEGADA } = require("./ajuda/sessao.js");
@@ -28,6 +28,17 @@ before(async () => {
 
 after(async () => {
   await bd?.derrubar();
+});
+
+beforeEach(() => {
+  // Sem esta guarda, um before() que falha faz CADA teste morrer num
+  // "Cannot read properties of undefined (reading 'pool')", e o erro de boot —
+  // que e a informacao util — some sob dez erros derivados.
+  if (!bd) {
+    throw new Error(
+      "O Postgres nao subiu no before(); a causa real esta no erro daquele hook.",
+    );
+  }
 });
 
 test("a busca por texto acha o produto pelo termo da descricao", async () => {
@@ -200,43 +211,97 @@ test("a view publica nao e porta de ESCRITA para authenticated", async () => {
   assert.equal(rows[0].n, 0);
 });
 
-test("produto_opcoes e publico no nivel de TABELA; produtos nao", async () => {
+test("o que anon LE: os filtros e a view, nunca a tabela de produtos", async () => {
   // Regra 1 de 0001: nada nasce legivel por `anon`, quem for publico leva GRANT
   // proprio. `produto_opcoes` alimenta os filtros da vitrine e leva; `produtos`
   // fica fechada porque o publico dela e a view.
+  //
+  // So LEITURA e conferida aqui, e a versao anterior deste teste tinha duas
+  // asercoes a mais que nao provavam nada: `anon` NUNCA recebe INSERT de default
+  // privilege nenhum, entao "anon nao escreve" seria verdade mesmo com esta
+  // migracao inteira apagada. Quem tem escrita por padrao e `authenticated`, e e
+  // o teste seguinte que cobre esse — o que de fato pode dar errado.
   const { rows } = await bd.pool.query(`
     SELECT
       has_table_privilege('anon', 'canastra.produtos', 'SELECT')           AS anon_le_produtos,
       has_table_privilege('anon', 'canastra.produto_opcoes', 'SELECT')     AS anon_le_opcoes,
-      has_table_privilege('anon', 'canastra.produto_opcoes', 'INSERT')     AS anon_escreve_opcoes,
-      has_table_privilege('anon', 'canastra.produtos_publicos', 'SELECT')  AS anon_le_view,
-      has_table_privilege('anon', 'canastra.produtos_publicos', 'INSERT')  AS anon_escreve_view
+      has_table_privilege('anon', 'canastra.produtos_publicos', 'SELECT')  AS anon_le_view
   `);
 
   assert.deepEqual(rows[0], {
     anon_le_produtos: false,
     anon_le_opcoes: true,
-    anon_escreve_opcoes: false,
     anon_le_view: true,
-    anon_escreve_view: false,
   });
 });
 
-test("as duas tabelas de 0003 saem com a RLS ligada", async () => {
-  // Mesma chave geral de 0002: entre o COMMIT desta migracao e o da que escreve
-  // as politicas ha uma janela real, e um deploy que pare no meio tem de parar
-  // FECHADO. Vale inclusive para `produtos`, cuja leitura publica nao depende de
-  // politica nenhuma — depende da view.
+test("authenticated nao tem privilegio de ESCRITA no catalogo nem em admins", async () => {
+  // A guarda de catalogo dos REVOKEs de 0003 — a camada de baixo, que sobrevive a
+  // qualquer politica de RLS escrita depois.
+  //
+  // Por que ela precisa existir: os ALTER DEFAULT PRIVILEGES de 0001 dao `arwd` a
+  // `authenticated` em TODA tabela das migracoes, e isso hoje esta inerte apenas
+  // porque a RLS nao tem politica. A primeira politica ampla demais acorda o
+  // privilegio — `FOR ALL USING (true)` em `produto_opcoes`, que e como se
+  // escreve "os filtros do catalogo sao publicos" sem pensar duas vezes, entrega
+  // o DELETE dos filtros a um token de OUTRO projeto da instancia. Em `admins` a
+  // mesma distracao entrega auto-promocao a administrador da loja.
+  //
+  // Sem REVOKE, a diferenca entre correto e vazamento mora numa palavra
+  // (FOR ALL x FOR SELECT), num arquivo que ainda nao existe, escrito noutro dia.
+  // Com REVOKE, a politica larga demais deixa de bastar.
   const { rows } = await bd.pool.query(`
-    SELECT c.relname AS tabela, c.relrowsecurity AS ligada
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'canastra' AND c.relname IN ('produtos', 'produto_opcoes')
-    ORDER BY c.relname
+    SELECT
+      t.relacao,
+      has_table_privilege('authenticated', 'canastra.' || t.relacao, 'INSERT') AS insere,
+      has_table_privilege('authenticated', 'canastra.' || t.relacao, 'UPDATE') AS altera,
+      has_table_privilege('authenticated', 'canastra.' || t.relacao, 'DELETE') AS apaga,
+      has_table_privilege('authenticated', 'canastra.' || t.relacao, 'SELECT') AS le
+    FROM (VALUES ('produtos'), ('produto_opcoes'), ('produtos_publicos'), ('admins'))
+      AS t(relacao)
+    ORDER BY t.relacao
   `);
 
-  assert.deepEqual(rows, [
-    { tabela: "produto_opcoes", ligada: true },
-    { tabela: "produtos", ligada: true },
-  ]);
+  assert.deepEqual(
+    rows.map(({ relacao, insere, altera, apaga }) => ({ relacao, insere, altera, apaga })),
+    [
+      { relacao: "admins", insere: false, altera: false, apaga: false },
+      { relacao: "produto_opcoes", insere: false, altera: false, apaga: false },
+      { relacao: "produtos", insere: false, altera: false, apaga: false },
+      { relacao: "produtos_publicos", insere: false, altera: false, apaga: false },
+    ],
+  );
+
+  // A LEITURA continua de pe, e conferir isso importa tanto quanto o resto: um
+  // `REVOKE ALL` distraido no lugar do REVOKE de escrita passaria na asercao
+  // acima e quebraria o painel inteiro, que le estas tabelas como usuario logado.
+  assert.deepEqual(rows.map((r) => r.le), [true, true, true, true]);
+});
+
+test("na pratica: authenticated de fora da loja nao apaga o catalogo", async () => {
+  // O que o teste acima afirma pelo catalogo do Postgres, agora como comando de
+  // verdade: `sub` que NAO esta em `canastra.clientes` — o token de outro projeto
+  // da instancia compartilhada — indo direto na tabela, sem passar pela view.
+  for (const sql of [
+    "INSERT INTO canastra.produtos (nome) VALUES ('Invasor direto')",
+    "UPDATE canastra.produtos SET preco = 0.01",
+    "DELETE FROM canastra.produtos",
+    "DELETE FROM canastra.produto_opcoes",
+  ]) {
+    await assert.rejects(
+      () =>
+        comoPapel(bd.pool, { papel: "authenticated", sub: INTRUSO }, (cliente) =>
+          cliente.query(sql),
+        ),
+      (erro) => {
+        assert.equal(erro.code, PERMISSAO_NEGADA, `deveria recusar: ${sql}`);
+        return true;
+      },
+    );
+  }
+
+  const { rows } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.produtos",
+  );
+  assert.ok(rows[0].n > 0, "o catalogo deveria continuar de pe");
 });

@@ -1,14 +1,31 @@
 -- Pedidos, promocoes e configuracao da loja.
 
 -- ON DELETE SET NULL, e nao CASCADE — a UNICA excecao entre as chaves
--- estrangeiras que apontam para `clientes`. Apagar um cliente (pedido de
--- exclusao de dados, engano do operador) nao pode apagar a VENDA: faturamento e
--- contabilidade dependem dela.
+-- estrangeiras que apontam para `clientes`. O que isto preserva e a VENDA:
+-- apagada a linha do cliente, o pedido continua existindo com seu total, sua
+-- data e seus itens, porque faturamento e contabilidade dependem dele. CASCADE
+-- destruiria a venda; RESTRICT tornaria impossivel apagar o cliente.
+--
+-- ISTO NAO E, POR SI, UM CAMINHO DE APAGAMENTO DE DADOS PESSOAIS — e foi medido
+-- que nao e. Depois de apagar o cliente, o pedido guarda:
+--
+--   endereco_json -> {"nome": "Ana Silva", "cpf": "...", "rua": "R. X 99", ...}
+--   itens         -> o que a pessoa comprou
+--
+-- ou seja, nome, CPF e endereco sobrevivem intactos. Atender de verdade a um
+-- pedido de exclusao (LGPD art. 18; ver docs/seguranca-dados-pessoais.md) exige
+-- um passo A MAIS que este schema ainda nao tem: redigir `endereco_json` e
+-- `itens`, preservando so o que a obrigacao fiscal manda guardar. Esse passo e
+-- de uma tarefa posterior e esta anotado aqui para nao se perder — quem ler este
+-- arquivo procurando "como a loja apaga os dados de alguem" precisa sair sabendo
+-- que a resposta NAO e "apagando o cliente".
 --
 -- E por isso que `user_id` aqui e NULAVEL enquanto `enderecos.user_id` e NOT
--- NULL: ON DELETE SET NULL contra uma coluna NOT NULL nao e configuracao valida
--- — o DELETE do cliente estouraria com 23502 e a exclusao ficaria impossivel.
--- As duas colunas sao coerentes justamente por serem diferentes.
+-- NULL: o Postgres ACEITA declarar ON DELETE SET NULL numa coluna NOT NULL — o
+-- DDL nao reclama —, e a incompatibilidade so aparece no DELETE do cliente, que
+-- estoura com 23502 e deixa a exclusao impossivel. Ou seja, seria uma armadilha
+-- que so dispara em producao, no dia do primeiro pedido de exclusao. As duas
+-- colunas sao coerentes justamente por serem diferentes.
 --
 -- O TROCO, que a migracao de politicas precisa saber: com `user_id` NULL, uma
 -- politica de dono do tipo `USING (user_id = auth.uid())` avalia NULL, que nao e
@@ -19,6 +36,11 @@ CREATE TABLE canastra.pedidos (
   pedido_id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id            uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
   total              numeric(10,2) NOT NULL DEFAULT 0,
+  -- TEXTO LIVRE, sem CHECK e sem enum, e isto e uma decisao ADIADA e nao tomada:
+  -- 'pendnete' entra calado e some de todo filtro que procure 'pendente'. A
+  -- tarefa que escrever as transicoes de status (0010) e quem tem a lista dos
+  -- valores validos e deve decidir explicitamente entre um CHECK, um enum ou
+  -- deixar livre de proposito. Nao herde este `text` por inercia.
   status             text NOT NULL DEFAULT 'pendente',
   metodo_pagamento   text,
   pagamento_id_mp    text,
@@ -31,6 +53,17 @@ CREATE TABLE canastra.pedidos (
   metodo_envio       text,
   codigo_rastreio    text,
   criado_em          timestamptz NOT NULL DEFAULT now(),
+  -- MANTIDA POR QUEM ESCREVE, nao por trigger. Nao existe trigger de
+  -- `moddatetime` neste schema (o unico gatilho nao-interno e o
+  -- `admins_nunca_zero` de 0002), entao esta coluna fica IGUAL a `criado_em` para
+  -- sempre a menos que cada UPDATE inclua `atualizado_em = now()` — e um valor
+  -- que parece uma data de alteracao e nao e engana mais do que ajuda.
+  --
+  -- Ficou assim de proposito, para nao introduzir uma funcao de trigger nova sem
+  -- que a tarefa dona da escrita a tenha pedido. A regra, entao, e explicita:
+  -- TODO UPDATE nesta tabela, no checkout, no webhook do MP e no painel, escreve
+  -- `atualizado_em = now()` junto. Vale igual para `enderecos` e `carrinhos` em
+  -- 0004 — a RPC de fusao da sacola (0007) e o caso mais obvio.
   atualizado_em      timestamptz NOT NULL DEFAULT now()
 );
 
@@ -98,6 +131,16 @@ CREATE TABLE canastra.config_loja (
 -- comprados de cada cliente.
 GRANT SELECT ON canastra.promocoes  TO anon;
 GRANT SELECT ON canastra.config_loja TO anon;
+
+-- E a escrita fecha, pelo mesmo motivo detalhado em 0003 (bloco do REVOKE): o
+-- `arwd` que 0001 concede por padrao a `authenticated` esta inerte hoje so porque
+-- a RLS ainda nao tem politica, e a primeira politica ampla demais na migracao
+-- seguinte o acorda. Aqui o dano seria banner e barra de aviso da loja
+-- reescritos, ou promocao criada, por um token de outro projeto da instancia
+-- compartilhada. Preco e promocao sao coisa do painel, que fala pelo
+-- `service_role` — nenhum cliente tem o que escrever nestas duas.
+REVOKE INSERT, UPDATE, DELETE ON canastra.promocoes, canastra.config_loja
+  FROM authenticated;
 
 -- Chave geral fechada, ainda sem politica nenhuma — mesmo motivo de 0002, e vale
 -- inclusive para as duas publicas: GRANT e permissao de TABELA, a RLS decide a

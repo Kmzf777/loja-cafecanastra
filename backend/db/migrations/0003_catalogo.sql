@@ -92,8 +92,8 @@ CREATE TABLE canastra.produto_opcoes (
  * LEVEL SECURITY nela. E por isso que o ENABLE ROW LEVEL SECURITY do fim deste
  * arquivo NAO cega a vitrine.
  *
- * Medido com um dono NAO-superusuario, que e a forma de producao — a isencao e
- * mesmo a do dono, e nao um efeito do superusuario dos testes:
+ * Medido com um dono NAO-superusuario — assim a isencao medida e mesmo a do
+ * DONO, e nao um efeito colateral do superusuario que o harness usa:
  *   RLS ligada, sem policy .......... anon le o catalogo normalmente
  *   + FORCE ROW LEVEL SECURITY ...... anon le ZERO linhas, sem erro nenhum
  *   + security_invoker = true ....... 42501, permission denied for table produtos
@@ -106,6 +106,14 @@ CREATE TABLE canastra.produto_opcoes (
  * no catalogo do Postgres, e nao so o comportamento: no harness o dono e
  * superusuario, e superusuario ignora ate o FORCE, entao um teste apenas
  * comportamental passaria verde com a producao quebrada.
+ *
+ * NAO ESTA APURADO se o dono em PRODUCAO e superusuario, e a frase acima nao
+ * afirma que e. Na imagem oficial do Supabase self-hosted o papel `postgres` E
+ * superusuario; se for esse o papel do DATABASE_URL neste VPS, o harness ja
+ * espelha a producao e o risco do FORCE e teorico la. Mas isso depende do papel
+ * configurado na instancia, que nao foi inspecionado daqui. As asercoes de
+ * catalogo cobrem os dois mundos sem custo nenhum, entao a duvida nao precisa
+ * ser resolvida para o schema estar correto — precisa e nao ser esquecida.
  *
  * O preco disso: quem alterar esta view esta alterando uma fronteira de
  * seguranca. Nenhuma coluna nova entra aqui sem ser publica de verdade.
@@ -146,6 +154,74 @@ REVOKE INSERT, UPDATE, DELETE ON canastra.produtos_publicos FROM authenticated;
 -- e leva o GRANT explicito que a Regra de 0001 exige (nada nasce legivel por
 -- `anon`). So SELECT: escrever nos filtros e coisa do painel.
 GRANT SELECT ON canastra.produto_opcoes TO anon;
+
+/**
+ * O MESMO FURO, pela porta da frente: `authenticated` escreve nas TABELAS.
+ *
+ * O REVOKE acima fecha a view. Mas os ALTER DEFAULT PRIVILEGES de 0001 dao
+ * INSERT/UPDATE/DELETE a `authenticated` em toda tabela criada nas migracoes, e
+ * `produtos` e `produto_opcoes` estao nesse pacote. Hoje isso e inerte so porque
+ * a RLS esta ligada e nao ha politica nenhuma — ou seja, a protecao inteira do
+ * catalogo depende de NINGUEM escrever uma politica ampla demais.
+ *
+ * Nao e um risco imaginario, e o erro NATURAL de quem escrever a migracao de
+ * politicas. "Os filtros do catalogo sao publicos" escrito do jeito obvio:
+ *
+ *   CREATE POLICY tudo ON canastra.produto_opcoes FOR ALL USING (true) WITH CHECK (true);
+ *
+ * e a partir dai um token de OUTRO projeto da instancia compartilhada APAGA os
+ * filtros do catalogo. Escrito FOR SELECT, o mesmo intruso leva 42501. Uma
+ * palavra separa o certo do vazamento, e a palavra esta noutro arquivo, escrito
+ * por outra pessoa, noutro dia.
+ *
+ * Com o REVOKE, a politica ampla deixa de ser suficiente para causar dano: falta
+ * o privilegio de tabela, que e a camada de baixo. Volta a valer o principio de
+ * 0001 — as duas camadas negam.
+ *
+ * ISTO NAO CONTRADIZ A RECUSA DA ESCADA GRANT-E-REVOGA DE 0001, e a diferenca
+ * importa. La o problema era uma regra ILIMITADA: `anon` recebendo SELECT em toda
+ * tabela FUTURA, com um REVOKE devido por tabela para sempre — esquecer um vira
+ * vazamento silencioso, e a lista nunca fecha. Aqui o conjunto e FECHADO e
+ * ENUMERAVEL (relacoes em que cliente nenhum tem o que escrever) e esta afirmado
+ * em test/catalogo.test.js e test/pedidos.test.js, entao um esquecimento futuro
+ * fica vermelho no CI em vez de silencioso.
+ *
+ * O CONSERTO ESTRUTURALMENTE MELHOR seria outro: estreitar 0001 para
+ * `GRANT SELECT ON TABLES TO authenticated` e conceder escrita tabela a tabela,
+ * na migracao de cada uma. Isso mata a classe inteira em vez destes casos.
+ * Deliberadamente NAO feito aqui porque mexeria numa migracao ja revisada e ja
+ * aplicada — e migracao aplicada nao roda de novo, entao a alteracao valeria so
+ * para instalacoes novas e as duas populacoes divergiriam em silencio, que e o
+ * pior desfecho possivel para uma correcao de seguranca. Fica registrado como a
+ * direcao certa para quando houver uma migracao propria para isso.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.produtos, canastra.produto_opcoes
+  FROM authenticated;
+
+/**
+ * `admins` entra aqui, e nao numa migracao de catalogo por afinidade de assunto.
+ *
+ * Ela nasce em 0002 com o mesmo `arwd` para `authenticated` herdado de 0001, e e
+ * a tabela onde o estrago e maior de longe: uma unica politica permissiva de
+ * INSERT em `admins` e um token de outro projeto da instancia se PROMOVE a
+ * administrador desta loja — exatamente o ataque que 0002 inteira existe para
+ * impedir quando fez `admins` referenciar `clientes` em vez de `auth.users`.
+ *
+ * Por que neste arquivo: 0002 ja foi aplicada, e o runner nunca reexecuta uma
+ * versao registrada — corrigir la fecharia o furo apenas em instalacoes novas e
+ * deixaria a instancia do VPS aberta, com as duas populacoes divergindo sem
+ * aviso. O conserto tem de vir numa migracao NOVA, e 0003 e a primeira que roda
+ * depois de `admins` existir: escolhida por ser a mais cedo possivel, que e o
+ * criterio certo para janela de exposicao. A arrumacao por assunto perde para
+ * isso.
+ *
+ * `clientes` NAO leva REVOKE, e nem `enderecos`, `carrinhos`, `carrinho_itens`
+ * (0004) ou `pedidos` (0005): nessas o cliente logado escreve de verdade — cria
+ * a propria conta, salva endereco, mexe na sacola, fecha pedido. Ali quem tem de
+ * fazer o recorte e a politica de RLS, que sabe distinguir a linha do dono da
+ * linha do vizinho; o privilegio de tabela nao sabe.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.admins FROM authenticated;
 
 -- Chave geral fechada, ainda sem politica nenhuma — mesmo motivo de 0002: entre
 -- o COMMIT desta migracao e o da que escreve as politicas ha uma janela real, e
