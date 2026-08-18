@@ -32,6 +32,41 @@
 /** Origem da API, liberada no connect-src para o navegador poder falar com ela. */
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
 
+/**
+ * Origem do projeto Supabase.
+ *
+ * O navegador passa a falar direto com o Supabase (PostgREST em /rest/v1, auth
+ * em /auth/v1, realtime em wss://.../realtime/v1). O connect-src que existia
+ * listava so 'self', a API e o Mercado Pago — ou seja, TODA chamada ao Supabase
+ * seria bloqueada. E o bloqueio de CSP nao gera erro de servidor, nao aparece em
+ * teste nenhum e nao quebra o build: so uma linha vermelha no console de quem
+ * visita a loja, com a pagina carregando vazia.
+ *
+ * Nao vai chumbado: o projeto de producao tem outra referencia. Vem da mesma
+ * variavel que lib/supabase/ambiente.ts le, entao os dois nao podem divergir.
+ * O carregamento do .env acontece dentro do loadConfig do Next, ANTES deste
+ * arquivo ser importado — mesmo mecanismo em que NEXT_PUBLIC_API_URL acima ja
+ * se apoia.
+ *
+ * Um source https:// no CSP tambem cobre wss:// do mesmo host (CSP3), entao o
+ * realtime nao precisa de entrada separada.
+ */
+const SUPABASE = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/$/, "");
+if (!SUPABASE) {
+  // Avisa em vez de abortar, pela mesma razao de conferirApiBase() em
+  // lib/conta/sessao.ts: uma verificacao local tem de conseguir compilar sem o
+  // projeto configurado. Mas o aviso fica no log do build, que e onde alguem
+  // vai procurar quando a loja subir e nao carregar nada.
+  console.warn(
+    "[csp] NEXT_PUBLIC_SUPABASE_URL nao definida: a origem do Supabase NAO " +
+      "entrou no connect-src. Se o build for de producao, o navegador vai " +
+      "bloquear todas as chamadas ao banco.",
+  );
+}
+
+/** Junta as origens de um source list ignorando as que nao foram configuradas. */
+const origens = (...partes) => partes.filter(Boolean).join(" ");
+
 const csp = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -44,7 +79,7 @@ const csp = [
   // O backend serve /uploads (imagem enviada pelo painel quando o Cloudinary
   // nao esta configurado), entao a origem da API tambem precisa entrar aqui.
   `img-src 'self' data: blob: ${API} https://res.cloudinary.com https://cdn-icons-png.flaticon.com https://*.mlstatic.com`,
-  `connect-src 'self' ${API} https://api.mercadopago.com https://api.mercadolibre.com`,
+  `connect-src ${origens("'self'", API, SUPABASE, "https://api.mercadopago.com", "https://api.mercadolibre.com")}`,
   // O checkout transparente do Mercado Pago roda os campos de cartao num iframe.
   "frame-src https://www.mercadopago.com https://sdk.mercadopago.com",
   "upgrade-insecure-requests",

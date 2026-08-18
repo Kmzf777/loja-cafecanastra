@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@mercadopago/sdk-react": "^1.0.7",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.112.3",
     "framer-motion": "^12.6.3",
     "just-debounce-it": "^3.2.0",
     "lucide-react": "^0.487.0",
