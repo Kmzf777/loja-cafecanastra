@@ -7,6 +7,7 @@
     "db:gerar-sql": "node backend/db/gerar-instalacao.js",
     "db:seed": "node backend/db/seed.js",
     "db:setup": "npm run db:migrar && npm run db:seed",
+    "verifica:rls": "node backend/scripts/verifica-rls.mjs",
     "dev:api": "npm --prefix backend run dev",
     "dev:web": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
