@@ -55,7 +55,8 @@ data/catalogo-canastra.json   catálogo real, com procedência por SKU
                               — fonte única da vitrine E do seed do banco
 
 backend/
-  db/schema.sql               DDL completo (idempotente)
+  db/migrations/              migrações versionadas do schema `canastra`
+  db/migrar.js                aplica as pendentes, em ordem e em transação
   db/seed.js                  popula catálogo, filtros, config e conta inicial
   src/controllers/            pagamento, pedidos, frete, config
   src/repositories/           acesso ao banco

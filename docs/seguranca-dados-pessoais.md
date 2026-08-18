@@ -31,8 +31,10 @@ diretamente utilizável para ataque.
 2. `*.csv` e `.dumps-antigos/` entraram no `.gitignore` para o caso não se
    repetir por descuido.
 3. O conhecimento que esses arquivos carregavam — a **estrutura** das tabelas —
-   foi preservado sem os dados, em `backend/db/schema.sql`, que documenta de
-   onde cada coluna veio.
+   foi preservado sem os dados. Ele vivia em `backend/db/schema.sql`; desde a
+   migração para o Supabase self-hosted vive em
+   `backend/db/migrations/NNNN_*.sql`, que documentam de onde cada coluna veio e,
+   diferente do arquivo antigo, também registram cada alteração posterior.
 
 ## O que AINDA FALTA — ação de quem administra o repositório
 
@@ -69,5 +71,5 @@ no GitHub. Para fechar de verdade, é preciso, nesta ordem:
 ## Regra daqui pra frente
 
 Dump de banco não entra no repositório. Para reproduzir o ambiente, use
-`backend/db/schema.sql` + `backend/db/seed.js`, que criam um banco completo com
-o catálogo real do Café Canastra e **nenhum dado pessoal**.
+`npm run db:setup` (`backend/db/migrar.js` + `backend/db/seed.js`), que cria um
+banco completo com o catálogo real do Café Canastra e **nenhum dado pessoal**.
