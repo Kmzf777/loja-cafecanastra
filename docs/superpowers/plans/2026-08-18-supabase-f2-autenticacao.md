@@ -236,3 +236,39 @@ antigos. São F3, F4 e F5.
 a confirmação de e-mail está ligada e o SMTP configurado — sem provedor de
 e-mail, cadastro e recuperação de senha param, e o erro só aparece no log do
 GoTrue.
+
+---
+
+## Descoberta que reordena as fases restantes
+
+Durante a Task 4 apareceu, e foi confirmado de três formas independentes, que
+**o serviço Express inteiro está morto contra o banco migrado.** Não é o
+carrinho: são os oito repositories.
+
+| Repository | Tabelas que consulta |
+|---|---|
+| `addressRepository` | `addresses` |
+| `cartRepository` | `carts`, `cart_items`, `products` |
+| `configRepository` | `store_config` |
+| `dashboardRepository` | `orders`, `products`, `users` |
+| `optionsRepository` | `product_options`, `products` |
+| `ordersRepository` | `orders`, `users` |
+| `promotionsRepository` | `promotions` |
+
+Nenhuma existe: as migrações só criam `canastra.*`, em português. `GET /cart`
+responde 500 (`42P01`), e a vitrine engole. `GET /dashboard` idem — por isso a
+loja mostra preço do JSON versionado em vez do banco, que é a degradação
+graciosa funcionando, e não um bug.
+
+Isso invalida a premissa do faseamento original, que assumia o Express de pé até
+a F5. **Decisão do usuário: antecipar a F4.** Depois da F2, a vitrine e a sacola
+passam a ler e escrever direto no PostgREST, e o Express fica só com pagamento,
+webhook, frete e e-mail — o destino final dele de qualquer forma. Consertar os
+oito repositories seria editar ~1.000 linhas de SQL que as fases seguintes
+apagam.
+
+**Consequência para a Task 5:** as rotas de carrinho não são repontadas, são
+removidas. E o ramo de hidratação por `GET /cart` em `sacola.tsx:145` sai junto —
+o revisor mostrou que ele vira uma máquina de dobrar sacola no instante em que
+aquele endpoint voltar a responder, porque a sacola da conta chegaria pelo
+`localStorage` e seria lida como sacola anônima pendente.
