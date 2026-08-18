@@ -1,11 +1,10 @@
 /**
  * Conferencia de ambiente na subida do processo.
  *
- * O `.env.example` e versionado e traz segredos de desenvolvimento escritos por
+ * O `.env.example` e versionado e traz valores de desenvolvimento escritos por
  * extenso — e o jeito certo de documentar as variaveis, mas cria um risco
  * concreto: quem faz deploy copia o exemplo, esquece de trocar, e sobe a loja
- * com JWT_SECRET publicamente conhecido. Quem le este repositorio consegue
- * assinar um token de admin.
+ * com credencial publicamente conhecida.
  *
  * Em producao, entao, o processo RECUSA subir se algum segredo obrigatorio
  * estiver ausente, curto demais ou igual ao valor de exemplo. Falhar no
@@ -14,10 +13,15 @@
  * Em desenvolvimento nada disso trava — so avisa.
  */
 
-/** Valores publicados no .env.example. Nunca podem valer em producao. */
+/**
+ * Valores publicados no .env.example. Nunca podem valer em producao.
+ *
+ * Os dois segredos de JWT proprios da loja sairam desta lista junto com as
+ * variaveis: quem assina token agora e o GoTrue, e o segredo dele
+ * (SUPABASE_JWT_SECRET) e gerado por quem sobe a instancia — nao existe valor
+ * de exemplo dele para reconhecer aqui.
+ */
 const VALORES_DE_EXEMPLO = new Set([
-  "canastra-dev-access-secret-nao-usar-em-producao",
-  "canastra-dev-refresh-secret-nao-usar-em-producao",
   "teste@teste.com",
   "123456",
 ]);
@@ -37,17 +41,56 @@ const TAMANHO_MINIMO_SENHA_ADMIN = 12;
  */
 const AMBIENTES_VALIDOS = new Set(["development", "test", "production"]);
 
-/** Obrigatorias em producao: sem elas a loja nao funciona ou fica insegura. */
+/**
+ * Obrigatorias em producao: sem elas a loja nao funciona ou fica insegura.
+ *
+ * AS TRES DO SUPABASE ENTRARAM NA F2, E `JWT_SECRET`/`JWT_SECRET_REFRESH`
+ * SAIRAM. O Express nao emite mais token; ele verifica o do GoTrue.
+ *
+ *  - SUPABASE_JWT_SECRET: e o `JWT_SECRET` do stack self-hosted, o mesmo com
+ *    que o GoTrue assina. Sem ele, `jwt.verify` falha em TODA requisicao
+ *    autenticada e a loja responde 403 para clientes legitimos — sintoma sem
+ *    relacao obvia com uma variavel esquecida.
+ *  - SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY: exclusao de conta passa pela
+ *    Admin API do GoTrue (`auth.users` pertence ao GoTrue; nem `service_role`
+ *    escreve nele). Sem as duas, a pessoa pede exclusao e nada e apagado.
+ *
+ * NAO HA CHECAGEM DE `localhost` EM SUPABASE_URL, e isso e deliberado: o
+ * Express roda na MESMA VPS do stack, e `http://localhost:8000` (o Kong) e o
+ * valor certo em producao. Copiar a trava de CORS_ORIGIN para ca impediria o
+ * deploy correto de subir.
+ */
 const OBRIGATORIAS_EM_PRODUCAO = [
   { nome: "DATABASE_URL", segredo: false },
-  { nome: "JWT_SECRET", segredo: true },
-  { nome: "JWT_SECRET_REFRESH", segredo: true },
+  { nome: "SUPABASE_URL", segredo: false },
+  { nome: "SUPABASE_JWT_SECRET", segredo: true },
+  { nome: "SUPABASE_SERVICE_ROLE_KEY", segredo: true },
   { nome: "CORS_ORIGIN", segredo: false },
   // Sem o segredo do webhook o backend recusa toda notificacao do Mercado Pago
   // (ver validarAssinaturaWebhook), e nenhum pedido sai de "pendente".
   { nome: "MP_WEBHOOK_SECRET", segredo: true },
   { nome: "MP_ACCESS_TOKEN", segredo: true },
 ];
+
+/**
+ * O papel declarado dentro de uma chave de API do Supabase.
+ *
+ * Nao verifica assinatura — nao e conferencia de seguranca, e conferencia de
+ * digitacao: a chave e um JWT e o payload dela diz `{"role": "..."}`. Devolve
+ * `null` quando o formato nao e reconhecido, e ai nada e reclamado: uma
+ * instancia que emita chave em outro formato nao pode ser motivo para o
+ * servidor recusar subir.
+ */
+function papelDaChave(chave, esperado) {
+  const partes = String(chave).split(".");
+  if (partes.length !== 3) return true;
+  try {
+    const payload = JSON.parse(Buffer.from(partes[1], "base64url").toString("utf8"));
+    return payload.role === undefined || payload.role === esperado;
+  } catch {
+    return true;
+  }
+}
 
 function conferirAmbiente({ ehProducao = process.env.NODE_ENV === "production" } = {}) {
   const erros = [];
@@ -102,15 +145,17 @@ function conferirAmbiente({ ehProducao = process.env.NODE_ENV === "production" }
     }
   }
 
-  // Os dois segredos de JWT precisam ser DIFERENTES: se forem iguais, um
-  // refresh token passa como access token e vice-versa, e a expiracao curta do
-  // access token deixa de valer para qualquer coisa.
-  if (
-    process.env.JWT_SECRET &&
-    process.env.JWT_SECRET === process.env.JWT_SECRET_REFRESH
-  ) {
+  /**
+   * A `service_role key` e a `anon key` sao JWT parecidos, emitidos pelo mesmo
+   * lugar e faceis de trocar um pelo outro no painel do provedor. Trocados, o
+   * Express perde poder em silencio: a exclusao de conta passa a responder 401
+   * do GoTrue, e ninguem liga isso a variavel errada. O papel viaja DENTRO da
+   * chave, entao da para conferir sem pedir nada a instancia.
+   */
+  const chaveDeServico = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (chaveDeServico && !papelDaChave(chaveDeServico, "service_role")) {
     (ehProducao ? erros : avisos).push(
-      "JWT_SECRET e JWT_SECRET_REFRESH são iguais: um refresh token passaria como token de acesso.",
+      "SUPABASE_SERVICE_ROLE_KEY não é uma chave de service_role (confira se não colou a anon key).",
     );
   }
 

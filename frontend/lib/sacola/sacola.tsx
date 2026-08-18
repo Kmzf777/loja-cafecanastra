@@ -6,11 +6,9 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { API_BASE, recuperarSessao } from "@/lib/conta/sessao";
 import { clienteNavegador } from "@/lib/supabase/cliente";
 import { CHAVE_DA_SACOLA, fundirSacola, reiniciarFusao } from "./fusao";
 
@@ -21,27 +19,31 @@ import { CHAVE_DA_SACOLA, fundirSacola, reiniciarFusao } from "./fusao";
  * handler. A loja anunciava preço, estoque e moagem e não tinha como receber um
  * pedido — o pior tipo de defeito numa vitrine, porque parece pronta.
  *
- * DUAS CAMADAS, DE PROPÓSITO
- *  - `localStorage["cart"]` é a verdade para quem não está logado. Quem monta a
- *    sacola deslogado e depois entra tem os itens fundidos com os da conta em
- *    vez de perdê-los — ver `fusao.ts`.
- *  - Com sessão, o servidor manda: `POST /cart/replace` grava, e o que ele
- *    devolve substitui o estado local. Assim a sacola sobrevive à troca de
- *    aparelho e o estoque é reconferido no servidor.
+ * ONDE A SACOLA VIVE, DEPOIS DA TASK 5
+ *  - `localStorage["cart"]` é a verdade da tela, logado ou não. É daqui que a
+ *    PDP, o cabeçalho e o checkout leem.
+ *  - `canastra.carrinho_itens` recebe a sacola quando a pessoa entra, pela RPC
+ *    `canastra.fundir_sacola` — ver `fusao.ts`, que também relê a sacola da
+ *    conta na primeira vez que a conta aparece neste aparelho. É o que faz a
+ *    sacola montada no celular reaparecer no computador.
  *
- * QUEM FUNDE A SACOLA NO LOGIN MUDOU, E A COSTURA VELHA NÃO EXISTE MAIS.
- * Até a Task 3, `localStorage["cart"]` viajava como `localCart` no `signIn` do
- * Express e era o próprio backend que fundia. Esse `signIn` morreu com o GoTrue.
- * Hoje a fusão é a RPC `canastra.fundir_sacola`, chamada daqui pelo
- * `onAuthStateChange` — e a trava que impede fundir duas vezes está em
- * `fusao.ts`, fora do React, porque este provedor remonta.
+ * O QUE SAIU DAQUI, E POR QUÊ. Este arquivo falava com o Express em dois
+ * pontos: `GET /cart` na montagem e `POST /cart/replace` a cada edição. As duas
+ * rotas foram APAGADAS na Task 5, e não repontadas: elas consultavam `carts` e
+ * `cart_items`, tabelas em inglês que migração nenhuma cria — respondiam 500 e
+ * a vitrine engolia. Repontá-las seria reescrever código que a F4 apaga.
  *
- * ATENÇÃO AO QUE ISSO IMPLICA NESTA FASE: a fusão grava em
- * `canastra.carrinho_itens`, e as chamadas de `persistir()` logo abaixo
- * continuam falando com o Express (`carts`/`cart_items`), que é OUTRO lugar. A
- * unificação é da F5. Enquanto isso, `fusao.ts` relê a sacola da conta pelo
- * PostgREST e devolve os itens já fundidos — é por isso que o resultado da
- * fusão vence a resposta do `GET /cart` no efeito de montagem.
+ * O RAMO DE HIDRATAÇÃO SAIU INTEIRO, e não foi remendado, porque ele era uma
+ * máquina de dobrar sacola esperando a hora: no dia em que `GET /cart` voltasse
+ * a responder, a sacola da CONTA chegaria ao `localStorage` SEM selo e a fusão
+ * a leria como sacola anônima pendente — cada carga de página somaria a sacola
+ * da conta nela mesma. Quem traz a sacola da conta é `fusao.ts`, que carimba o
+ * que grava.
+ *
+ * O QUE ISSO CUSTA ENQUANTO A F4 NÃO CHEGA, dito sem rodeio: entre uma entrada
+ * e outra, a sacola de quem está logado vive só no `localStorage` deste
+ * aparelho, mais o que a fusão já escreveu em `canastra.carrinho_itens`. Não é
+ * regressão — já era assim, porque os endpoints respondiam 500.
  *
  * O preço guardado aqui é só para exibir. Quem cobra é o checkout, que relê
  * preço e estoque do banco antes de gerar o pagamento (PaymentController).
@@ -68,7 +70,7 @@ export type ItemDaSacola = {
    *
    * Ele sobrevive às edições porque `adicionar`, `alterarQuantidade` e `remover`
    * copiam o item com `...spread`. Quem monta corpo de requisição (checkout,
-   * frete, `/cart/replace`) escolhe os campos um a um, então ele não vaza.
+   * frete) escolhe os campos um a um, então ele não vaza.
    */
   selo?: string;
 };
@@ -109,7 +111,6 @@ function gravarLocal(itens: ItemDaSacola[]) {
 export function ProvedorDaSacola({ children }: { children: ReactNode }) {
   const [itens, setItens] = useState<ItemDaSacola[]>([]);
   const [sincronizando, setSincronizando] = useState(false);
-  const tokenRef = useRef<string | null>(null);
 
   // Hidrata do localStorage só depois de montar: ler no primeiro render faria o
   // HTML do servidor divergir do cliente e o React descartaria a árvore.
@@ -117,63 +118,6 @@ export function ProvedorDaSacola({ children }: { children: ReactNode }) {
     setItens(lerLocal());
 
     let montado = true;
-    /**
-     * A fusão VENCE a hidratação do Express, e este sinalizador é o que garante
-     * isso mesmo quando o `GET /cart` responde depois dela.
-     *
-     * Os dois leem sacolas de LUGARES DIFERENTES nesta fase (ver o cabeçalho), e
-     * a fusão é a única das duas que acabou de escrever no banco. Sem isto, uma
-     * resposta atrasada do Express sobrescreveria a sacola recém-fundida com uma
-     * versão sem os itens que a pessoa montou deslogada — a perda silenciosa que
-     * esta tarefa inteira existe para impedir, só que uns segundos depois.
-     */
-    let fusaoVenceu = false;
-
-    recuperarSessao()
-      .then((sessao) => {
-        if (!sessao || !montado) return;
-        tokenRef.current = sessao.accessToken;
-        return fetch(`${API_BASE}/cart`, {
-          credentials: "include",
-          headers: { Authorization: `Bearer ${sessao.accessToken}` },
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => {
-            /**
-             * TASK 5: este ramo inteiro sai junto com as rotas de carrinho do
-             * Express. Enquanto ele existir, há um perigo NOVO além do descrito
-             * abaixo: no dia em que `GET /cart` voltar a responder, a sacola da
-             * CONTA chegaria por aqui até o `localStorage` SEM selo, e a fusão a
-             * leria como sacola anônima pendente — cada carga de página somaria
-             * a sacola da conta nela mesma. Hoje isso não acontece porque o
-             * endpoint responde 500 (`findOrCreateCart` relança o 42P01 de
-             * `carts`, tabela que nenhuma migração cria), e por isso a correção
-             * é apagar o ramo, não remendá-lo.
-             *
-             * A SACOLA REMOTA SÓ PREENCHE A LOCAL VAZIA — ELA NÃO SUBSTITUI
-             * MAIS, e esta linha mudou de sentido nesta fase.
-             *
-             * A regra antiga era "o servidor vence quando tem itens", e ela era
-             * segura porque o `signIn` do Express fundia `localCart` ANTES de
-             * qualquer `GET /cart`: o que voltava já continha a sacola anônima.
-             * Esse `signIn` morreu com o GoTrue (Task 3). Mantida como estava, a
-             * resposta do Express passaria por cima da sacola que a pessoa acabou
-             * de montar deslogada — no `localStorage`, antes de a fusão ler dali
-             * — e os itens sumiriam sem erro nenhum. É a falha desta tarefa,
-             * chegando pela porta dos fundos.
-             *
-             * Vazia, a sacola local não tem nada a perder: aí a remota entra e a
-             * promessa de atravessar aparelhos continua valendo.
-             */
-            if (montado && !fusaoVenceu && d?.items?.length && !lerLocal().length) {
-              setItens(d.items);
-              gravarLocal(d.items);
-            }
-          });
-      })
-      .catch(() => {
-        // Sem sessão ou API fora: segue com a sacola local.
-      });
 
     /**
      * A FUSÃO PENDURADA NO EVENTO DE SESSÃO, E NÃO NA MONTAGEM.
@@ -199,7 +143,6 @@ export function ProvedorDaSacola({ children }: { children: ReactNode }) {
       const { data: inscricao } = supabase.auth.onAuthStateChange(
         (evento, sessaoGoTrue) => {
           if (evento === "SIGNED_OUT") {
-            tokenRef.current = null;
             // Sem isto, quem sai e entra com OUTRA conta na mesma aba não teria
             // a sacola fundida — a trava seguiria valendo da sessão anterior.
             reiniciarFusao();
@@ -207,7 +150,6 @@ export function ProvedorDaSacola({ children }: { children: ReactNode }) {
           }
 
           if (!sessaoGoTrue) return;
-          tokenRef.current = sessaoGoTrue.access_token;
 
           // Enquanto a fusão corre, a tela continua mostrando a sacola local
           // (que é tudo o que a pessoa montou) e a página da sacola exibe
@@ -218,10 +160,7 @@ export function ProvedorDaSacola({ children }: { children: ReactNode }) {
           fundirSacola()
             .then((resultado) => {
               if (!montado) return;
-              if (resultado.situacao === "fundida") {
-                fusaoVenceu = true;
-                setItens(resultado.itens);
-              }
+              if (resultado.situacao === "fundida") setItens(resultado.itens);
             })
             .finally(() => {
               if (montado) setSincronizando(false);
@@ -247,37 +186,21 @@ export function ProvedorDaSacola({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  /** Grava local sempre; no servidor só quando há sessão. */
+  /**
+   * Grava a sacola: estado da tela e `localStorage`, e mais nada.
+   *
+   * Aqui havia um `POST /cart/replace` (com um `GET /csrf-token` na frente).
+   * Os dois endpoints deixaram de existir na Task 5 — ver o cabeçalho. Quem
+   * leva a sacola para o banco é a fusão, no evento de sessão.
+   *
+   * CONTINUA `async` DE PROPÓSITO: `adicionar`, `alterarQuantidade`, `remover`
+   * e `limpar` são prometidos como `Promise<void>` no tipo `Sacola` e as telas
+   * dão `await` neles. Tirar o `async` para "simplificar" mudaria a interface
+   * de todo consumidor sem ganho nenhum.
+   */
   const persistir = useCallback(async (novos: ItemDaSacola[]) => {
     setItens(novos);
     gravarLocal(novos);
-
-    if (!tokenRef.current) return;
-    setSincronizando(true);
-    try {
-      const csrf = await fetch(`${API_BASE}/csrf-token`, {
-        credentials: "include",
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => d?.csrfToken)
-        .catch(() => null);
-
-      await fetch(`${API_BASE}/cart/replace`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${tokenRef.current}`,
-          ...(csrf ? { "X-CSRF-Token": csrf } : {}),
-        },
-        body: JSON.stringify({ items: novos }),
-      });
-    } catch {
-      // Falha de rede não pode desfazer o que a pessoa acabou de fazer na tela:
-      // o estado local já foi gravado e sincroniza na próxima ação.
-    } finally {
-      setSincronizando(false);
-    }
   }, []);
 
   const adicionar = useCallback(

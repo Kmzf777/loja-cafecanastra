@@ -4,9 +4,18 @@ import type { ItemDaSacola } from "./sacola";
 /**
  * Chamadas do checkout.
  *
- * Separadas da tela para o componente cuidar só de estado e render. Todas
- * carregam o token CSRF, porque o backend protege todo POST com `csurf`, e
- * `credentials: "include"`, porque o cookie de sessão mora no domínio da API.
+ * Separadas da tela para o componente cuidar só de estado e render.
+ *
+ * O TOKEN CSRF SAIU DAQUI NA TASK 5, e o motivo não é limpeza: o `csurf` saiu
+ * do backend porque a premissa dele saiu junto. A API autentica exclusivamente
+ * por `Authorization: Bearer` e não aceita mais cookie de sessão — sem
+ * credencial que o navegador anexe sozinho, não há CSRF a prevenir (o
+ * raciocínio inteiro está em `backend/src/index.js`). `/csrf-token` deixou de
+ * existir; continuar chamando seria um 404 por requisição.
+ *
+ * `credentials: "include"` FICA: o backend responde com
+ * `Access-Control-Allow-Credentials`, e tirar de um lado só é o tipo de mudança
+ * que quebra com erro de CORS em vez de erro de autenticação.
  */
 
 export type Endereco = {
@@ -27,21 +36,10 @@ export type OpcaoDeFrete = {
   company_picture?: string;
 };
 
-async function csrf(): Promise<string | null> {
-  try {
-    const r = await fetch(`${API_BASE}/csrf-token`, { credentials: "include" });
-    if (!r.ok) return null;
-    return (await r.json()).csrfToken ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function cabecalhos(token: string, csrfToken: string | null) {
+function cabecalhos(token: string) {
   return {
     "Content-Type": "application/json",
     Authorization: `Bearer ${token}`,
-    ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
   };
 }
 
@@ -66,7 +64,7 @@ export async function salvarEndereco(
   const r = await fetch(`${API_BASE}/address`, {
     method: "POST",
     credentials: "include",
-    headers: cabecalhos(token, await csrf()),
+    headers: cabecalhos(token),
     body: JSON.stringify(endereco),
   });
   if (!r.ok) {
@@ -134,7 +132,7 @@ export async function pagarComPix(
   const r = await fetch(`${API_BASE}/checkout/process_payment`, {
     method: "POST",
     credentials: "include",
-    headers: cabecalhos(token, await csrf()),
+    headers: cabecalhos(token),
     body: JSON.stringify({
       formData: {
         paymentMethodId: "pix",

@@ -7,16 +7,13 @@ require("./config/ambiente").conferirAmbiente();
 const express = require("express");
 const helmet = require("helmet");
 const cors = require("cors");
-const cookieParser = require("cookie-parser");
-const csrf = require("csurf");
 const rateLimit = require("express-rate-limit");
 const pool = require("./pgPool");
 
 const productsRoutes = require("./routes/products.routes");
-const loginRoutes = require("./routes/login.routes");
+const { contaRoutes } = require("./routes/conta.routes");
 const optionsRoutes = require("./routes/options.routes");
 const promotionsRoutes = require("./routes/promotions.routes");
-const cartRoutes = require("./routes/cart.routes");
 const paymentRoutes = require("./routes/orders.routes");
 const addressRoutes = require("./routes/address.routes");
 const PaymentController = require("./controllers/PaymentController");
@@ -42,10 +39,15 @@ const isProd = process.env.NODE_ENV === "production";
  * Origens liberadas.
  *
  * Antes a lista misturava os dominios da loja ANTERIOR (shopnaw) com localhost,
- * e valia igual em producao. Com `credentials: true`, qualquer origem da lista
- * pode fazer requisicao autenticada com o cookie de sessao — entao manter
- * localhost liberado em producao significa que uma pagina rodando na maquina de
- * um atacante (ou um app local malicioso) fala com a API do cliente logado.
+ * e valia igual em producao. Manter localhost liberado em producao significa
+ * que uma pagina rodando na maquina de um atacante (ou um app local malicioso)
+ * fala com esta API a partir do navegador de quem esta logado.
+ *
+ * `credentials: true` FICA, apesar de nao existir mais cookie de sessao. Nao e
+ * sobra: a vitrine e o painel chamam esta API com `credentials: "include"`, e
+ * sem o `Access-Control-Allow-Credentials` na resposta o navegador BLOQUEIA a
+ * resposta inteira — checkout, endereco e frete parariam com erro de CORS, nao
+ * com erro de autenticacao. Enquanto quem chama mandar `include`, isto fica.
  *
  * Em producao vale so o que vier de CORS_ORIGIN (aceita lista separada por
  * virgula, para www e apex). Em desenvolvimento, as portas locais entram.
@@ -74,7 +76,10 @@ app.use(
       }
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "X-CSRF-Token", "Authorization", "Accept"],
+    // `X-CSRF-Token` saiu da lista junto com o csurf: um cabecalho liberado no
+    // preflight que ninguem valida so confunde quem le. Ver o bloco do CSRF,
+    // logo abaixo do healthcheck.
+    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
     credentials: true,
   }),
 );
@@ -88,16 +93,15 @@ app.options("*", (req, res) => res.sendStatus(200));
 // o proprio limite. 10 MB de JSON por requisicao e superficie de exaustao de
 // memoria de graca.
 app.use(express.json({ limit: "256kb" }));
-app.use(cookieParser());
 app.use(express.urlencoded({ limit: "256kb", extended: true }));
 
 // Pasta pública de uploads
 app.use("/uploads", express.static("uploads"));
 
 /**
- * Rotas que ficam FORA do CSRF, por natureza:
- *  - o webhook e chamado pelo Mercado Pago, que nao tem como carregar o token;
- *    ele se autentica por assinatura HMAC (ver PaymentController).
+ * As duas rotas sem autenticacao alguma, por natureza:
+ *  - o webhook e chamado pelo Mercado Pago, que nao carrega token da loja; ele
+ *    se autentica por assinatura HMAC (ver PaymentController).
  *  - a cotacao de frete e consultada antes de haver sessao.
  *
  * Ambas sao publicas e ambas custam dinheiro quando abusadas: o frete consome
@@ -129,47 +133,40 @@ app.get("/health", async (req, res) => {
   }
 });
 
-// CSRF protection via cookie.
-//
-// `secure: true` + `SameSite=None` e obrigatorio em producao, onde front e back
-// vivem em dominios diferentes sob HTTPS. Em desenvolvimento e o oposto: o
-// navegador DESCARTA silenciosamente um cookie `Secure` vindo de
-// http://localhost, entao o backend nunca reconhece o token que ele mesmo
-// emitiu e todo POST — inclusive o login — responde 403 "Formulario expirado".
-// Nada no log denuncia isso; o cookie simplesmente nao existe.
-const csrfProtection = csrf({
-  cookie: {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? "None" : "Lax",
-    signed: false,
-  },
-});
-
-app.use(csrfProtection);
-
-// Rota para fornecer o token CSRF ao frontend
-app.get("/csrf-token", (req, res) => {
-  res.json({ csrfToken: req.csrfToken() });
-});
+/**
+ * NAO HA MAIS CSRF AQUI, E O MOTIVO E ESPECIFICO.
+ *
+ * O `csurf` saiu porque a PREMISSA dele saiu, nao porque o pacote esta
+ * obsoleto. CSRF e um ataque contra credencial que o NAVEGADOR ANEXA SOZINHO:
+ * cookie de sessao. Enquanto esta API autenticava por cookie (`refreshToken`
+ * emitido pelo antigo /auth/sign-in), um formulario em outro site conseguia
+ * disparar um POST autenticado sem ler nada da resposta, e o token de CSRF era
+ * a defesa.
+ *
+ * A partir da F2 a identidade vem de `Authorization: Bearer <token do GoTrue>`,
+ * e a API RECUSA autenticacao por cookie — `middleware/isAuthenticated.js` le
+ * exclusivamente aquele cabecalho e nao existe mais nenhum caminho que aceite
+ * cookie. Um cabecalho tem de ser escrito por JavaScript da propria origem: o
+ * site do atacante nao consegue anexa-lo, e a requisicao chega anonima. Sem
+ * credencial ambiente, nao ha o que forjar.
+ *
+ * SE UM DIA ALGUMA ROTA VOLTAR A LER `req.cookies` PARA AUTENTICAR, o CSRF
+ * volta junto — a protecao nao foi julgada desnecessaria, a superficie que ela
+ * cobria e que deixou de existir. Pelo mesmo motivo o `cookie-parser` saiu:
+ * nenhuma rota le cookie.
+ */
 
 // Rotas protegidas
 app.use("/promotions", promotionsRoutes);
-app.use("/cart", cartRoutes);
 app.use(productsRoutes);
-app.use("/auth", loginRoutes);
+// So a exclusao da propria conta sobrou sob /auth — o resto virou GoTrue.
+app.use("/auth", contaRoutes);
 app.use("/options", optionsRoutes);
 app.use(paymentRoutes);
 app.use(addressRoutes);
 
-// Tratamento de erros gerais e CSRF
+// Tratamento de erros gerais
 app.use((err, req, res, next) => {
-  if (err.code === "EBADCSRFTOKEN") {
-    console.warn("Bloqueio CSRF detectado. Headers:", req.headers.origin);
-    return res
-      .status(403)
-      .json({ message: "Formulário expirado ou inválido. Tente novamente." });
-  }
   console.error(err);
   res.status(500).json({ message: "Erro interno no servidor." });
 });
