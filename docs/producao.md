@@ -5,11 +5,11 @@ ordem, e as falhas que acontecem **em silêncio** — que é para isso que este
 documento serve.
 
 > **Leia isto antes de qualquer coisa: a loja ainda NÃO sobe inteira.**
-> Só a fundação de dados (fase F1) está pronta, e **nada foi aplicado na VPS
-> ainda**. O que dá para fazer hoje é criar o schema `canastra` num Postgres
-> Supabase e semear o catálogo. O resto — login pelo GoTrue, imagens no Storage,
-> serviço Node enxuto, painel novo — é F2 a F7 e não existe.
-> O desenho completo está em
+> A fundação de dados (F1) e a autenticação (F2) estão prontas, e **nada foi
+> aplicado na VPS ainda**. O que dá para fazer hoje é criar o schema `canastra`
+> num Postgres Supabase, semear o catálogo e cadastrar/entrar pelo GoTrue. O
+> catálogo do banco, as imagens no Storage, o serviço Node enxuto e o painel novo
+> não existem. O desenho completo está em
 > `docs/superpowers/specs/2026-08-17-supabase-selfhosted-design.md`.
 
 ---
@@ -19,23 +19,49 @@ documento serve.
 | Fase | Escopo | Estado |
 |---|---|---|
 | **F1** | Schema `canastra`, migrações versionadas, RLS provada por teste positivo **e** negativo, `clientes`/`admins`, RPC `fundir_sacola`, seed contra o GoTrue | **pronta**, não aplicada na VPS |
-| F2 | GoTrue assume cadastro, login, confirmação e reset; `@supabase/ssr`; fusão da sacola no login | não existe |
+| **F2** | GoTrue assume cadastro, login, confirmação e reset; `@supabase/ssr`; RPC `garantir_cliente`; fusão da sacola no login; Express deixa de emitir token | **pronta**, não aplicada na VPS |
+| **F4** (antecipada) | Vitrine e sacola lendo e escrevendo o PostgREST direto; Express fica só com pagamento, webhook, frete e e-mail | **próxima** |
 | F3 | Bucket `canastra-produtos` no Storage; saída do Cloudinary | não existe |
-| F4 | Vitrine e painel lendo o catálogo direto do Supabase | não existe |
-| F5 | Serviço Node enxuto (5 endpoints), transação e idempotência no webhook | não existe |
+| F5 | Serviço Node enxuto, transação e idempotência no webhook | não existe |
 | F6 | Painel novo em App Router; `frontend/legacy/` apagado; CSP fechado | não existe |
 | F7 | Proxy reverso, backup agendado, verificação ponta a ponta | não existe |
 
-**O que isso significa na prática.** Hoje o Express continua com autenticação
-própria (`bcrypt` + `jsonwebtoken`) lendo as tabelas antigas em `public`, e o
-painel continua sendo a ilha React em `frontend/legacy/`. As tabelas de
-`canastra` estão prontas e **ninguém as usa ainda**. Aplicar as migrações não
-liga a loja; prepara o terreno.
+**A F4 passou na frente da F3, e o motivo importa.** Durante a F2 descobriu-se
+que **os oito repositories do Express estão mortos contra o banco migrado**: eles
+consultam as tabelas antigas em inglês (`orders`, `products`, `users`,
+`addresses`, `carts`, `store_config`, `promotions`, `product_options`) e as
+migrações só criam `canastra.*`, em português. Não é um endpoint: é o serviço
+inteiro. Consertar aquele SQL seria escrever ~1.000 linhas que a própria F4
+apaga. Registrado no fim de
+`docs/superpowers/plans/2026-08-18-supabase-f2-autenticacao.md`.
 
-Enquanto F2–F6 não chegarem, o `.env` do serviço Express ainda precisa de
-`JWT_SECRET`, `JWT_SECRET_REFRESH` e `CLOUDINARY_*`. Elas estão marcadas como
-"EM SAÍDA" em `backend/src/.env.example` de propósito: apagá-las agora derrubaria
-o serviço que está de pé sem substituir nada.
+### 1.1 O que NÃO funciona hoje, dito sem rodeio
+
+Vale a pena ler antes de abrir um chamado — nada abaixo é bug novo:
+
+- **O painel autentica e não mostra dado nenhum.** O login passou a ser do
+  GoTrue e funciona; a decisão de administrador vem de `canastra.admins` e
+  funciona. O que não funciona é o que vem depois: `GET /dashboard`,
+  `GET /orders` e `GET /promotions` consultam tabelas que não existem e
+  respondem **500 (`42P01`, "relation does not exist")**. O painel fica de pé e
+  vazio. Fecha na F4/F6.
+- **A vitrine mostra preço e estoque do JSON versionado**
+  (`data/catalogo-canastra.json`), e não do banco — pelo mesmo `GET /dashboard`
+  morto. **Isso é a degradação graciosa funcionando**, não um defeito: "loja
+  fechada é pior que preço de ontem". Mas significa que **mudar o preço pelo
+  painel não muda a vitrine hoje.** Fecha na F4.
+- **A sacola de quem está logado vive em dois lugares.** A fusão do login grava
+  em `canastra.carrinho_itens` (RPC `fundir_sacola`); a vitrine desenha a partir
+  do `localStorage`. Enquanto a F4 não chega, a ponte é o `fusao.ts` reler a
+  conta na primeira fusão de cada aparelho. Fecha na F4.
+- **As imagens continuam no Cloudinary.** F3.
+- **O webhook do Mercado Pago continua sem transação nem idempotência.** F5.
+
+**O que a F2 tirou do `.env`:** `JWT_SECRET`, `JWT_SECRET_REFRESH`,
+`ACCESS_TOKEN_EXPIRY` e `REFRESH_TOKEN_EXPIRY_DAYS`. O Express **não emite mais
+token** — quem emite é o GoTrue, e este serviço só verifica, com
+`SUPABASE_JWT_SECRET`. `bcrypt`, `csurf`, `cookie-parser` e `express-validator`
+saíram junto com as rotas que os usavam. `CLOUDINARY_*` continua, e sai na F3.
 
 ---
 
@@ -78,25 +104,42 @@ Três consequências operacionais:
 
 ## 3. Subir o banco
 
-Este é o único passo executável hoje.
-
 ### 3.1 Variáveis
+
+Obrigatórias em produção. `backend/src/config/ambiente.js` **recusa subir o
+processo** sem qualquer uma delas quando `NODE_ENV=production` — falhar no `npm
+start` é barulhento e barato; descobrir depois, não.
 
 | Variável | Para quê | Sem ela |
 |---|---|---|
 | `DATABASE_URL` | Postgres da instância Supabase. O papel precisa de `CREATE` no banco. | `db:migrar` e `db:seed` **recusam rodar** (ver §5.1) |
-| `SUPABASE_URL` | origem pública da instância (o que o Kong atende) | `db:seed` **falha** ao criar a conta inicial |
-| `SUPABASE_SERVICE_ROLE_KEY` | chave `service_role`; é com ela que o seed fala com a Admin API do GoTrue | idem |
+| `SUPABASE_URL` | origem da instância (o que o Kong atende). Usada pelo seed e pela exclusão de conta. | `db:seed` **falha** ao criar a conta inicial; exclusão de conta responde **503** |
+| `SUPABASE_SERVICE_ROLE_KEY` | chave `service_role`; é com ela que o serviço fala com a **Admin API do GoTrue** | idem |
+| `SUPABASE_JWT_SECRET` | o segredo **com que o GoTrue assina** — o `JWT_SECRET` do stack self-hosted | **todo cliente** recebe 403 e o log diz só `invalid signature` (§6) |
+| `CORS_ORIGIN` | origem da vitrine | o painel não fala com a API |
+| `MP_WEBHOOK_SECRET`, `MP_ACCESS_TOKEN` | Mercado Pago | nenhum pedido sai de "pendente" |
 
-`SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` são novas nesta fase e **não são
-opcionais quando `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` estão preenchidas**. O
-seed levanta erro em vez de pular a etapa: pular em silêncio deixaria a produção
-no ar com ninguém capaz de entrar no painel, e o sintoma só apareceria dias
-depois, quando alguém tentasse mudar um preço.
+**Onde achar o `SUPABASE_JWT_SECRET`:** é o `JWT_SECRET` do `docker/.env` do
+stack self-hosted (no Supabase hospedado, Settings → API → JWT Settings). Precisa
+ser **idêntico** ao da instância. Não há chave assimétrica aqui: JWKS/ECC é
+recurso da plataforma hospedada; um stack self-hosted assina em HS256 com esse
+segredo único, e é por isso que `isAuthenticated` fixa `algorithms: ["HS256"]`.
+
+**`SUPABASE_URL` NÃO tem trava de `localhost`, e a ausência é deliberada.** O
+Express roda na **mesma VPS** do Kong, então `http://localhost:8000` é o valor
+**certo** em produção. `CORS_ORIGIN` tem essa trava porque é um endereço de
+navegador; copiá-la para cá impediria o deploy correto de subir.
+
+`SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` também **não são opcionais quando
+`SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` estão preenchidas**. O seed levanta erro
+em vez de pular a etapa: pular em silêncio deixaria a produção no ar com ninguém
+capaz de entrar no painel, e o sintoma só apareceria dias depois, quando alguém
+tentasse mudar um preço.
 
 **Saíram:** `SEED_ADMIN_ROLE` (ser administrador é uma **linha** em
-`canastra.admins`, nunca um claim de JWT), e, quando F2/F3 chegarem, `JWT_SECRET`,
-`JWT_SECRET_REFRESH` e `CLOUDINARY_*`.
+`canastra.admins`, nunca um claim de JWT) e, na F2, `JWT_SECRET`,
+`JWT_SECRET_REFRESH`, `ACCESS_TOKEN_EXPIRY` e `REFRESH_TOKEN_EXPIRY_DAYS` — o
+Express não emite mais token. `CLOUDINARY_*` continua, e sai na F3.
 
 ### 3.2 Ordem
 
@@ -165,7 +208,7 @@ Há dois jeitos de levantar este banco, e eles servem a momentos diferentes.
 2.  backend/db/instalacao-completa.sql
 ```
 
-O arquivo de instalação já registra as sete versões em `canastra.migracoes`, então
+O arquivo de instalação já registra as oito versões em `canastra.migracoes`, então
 um `npm run db:migrar` depois dele responde "Nada pendente." — é isso que permite
 começar pelo editor SQL e seguir com o runner daí para frente.
 
@@ -203,6 +246,58 @@ próxima geração e, pior, cria um banco diferente do que o runner produz.
 compara colunas, índices, políticas, funções, privilégios de coluna e o catálogo
 semeado — se alguém editar o SQL ou acrescentar uma migração sem regerar, é ali
 que aparece.
+
+### 3.5 Configuração do GoTrue — três passos manuais, três falhas mudas
+
+**Nada em código faz isto, e nenhum teste alcança.** São ajustes no painel do
+Supabase (Authentication) e, se faltarem, a loja sobe inteira, sem erro em lugar
+nenhum, com o cadastro quebrado. Os três foram descobertos exercendo a F2 à mão.
+
+#### 3.5.1 Allow-list de redirecionamento (Authentication → URL Configuration)
+
+Precisam estar na lista, com o domínio real da loja no lugar de `${origin}`:
+
+```
+${origin}/account/verify-email
+${origin}/account/reset-password
+```
+
+**Uma URL fora da lista não dá erro: ela é SILENCIOSAMENTE TROCADA pela Site
+URL.** O cliente recebe o e-mail, clica no link, e cai na **home**, logado ou
+não, sem mensagem nenhuma — nem na tela, nem no console, nem no log do GoTrue. A
+leitura natural disso é "o link do e-mail está quebrado" ou "o cadastro não
+funcionou", e as duas conclusões estão erradas: o cadastro funcionou e o link
+estava certo. Se aparecer confirmação de e-mail "que não faz nada", comece aqui.
+
+Vale para **todo** ambiente separadamente — a lista de produção não conhece o
+`http://localhost:3000` do desenvolvimento, e vice-versa.
+
+#### 3.5.2 Modelos de e-mail: `{{ .ConfirmationURL }}` × `{{ .TokenHash }}`
+
+Os dois funcionam, e não funcionam nas mesmas circunstâncias:
+
+| No modelo | Como funciona | Quando falha |
+|---|---|---|
+| `{{ .ConfirmationURL }}` | fluxo **PKCE**: o verificador fica no navegador que **começou** o cadastro | abrir o link em **outro navegador ou outro aparelho** |
+| `{{ .TokenHash }}` | token no próprio link, verificado no servidor | — |
+
+**A pessoa se cadastra no computador e abre o e-mail no celular.** Isso é o caso
+comum, não a exceção, e com `{{ .ConfirmationURL }}` ele falha — com uma
+mensagem de código inválido que não explica que o problema é o aparelho. Prefira
+`{{ .TokenHash }}` nos modelos de confirmação e de recuperação de senha.
+
+#### 3.5.3 SMTP configurado (Authentication → Emails / SMTP Settings)
+
+Sem provedor de e-mail, **cadastro e recuperação de senha simplesmente param**:
+a conta é criada, o e-mail nunca sai, e o erro aparece **só no log do GoTrue** —
+a tela da loja mostra "confira sua caixa de entrada" e fica esperando para
+sempre. O servidor SMTP embutido do stack self-hosted não entrega para fora.
+
+> A conta inicial do `db:seed` nasce **já confirmada** justamente por isto (§7):
+> numa instalação nova o envio de e-mail é o que ainda não está de pé, e ela
+> nasceria travada em "confirme seu e-mail" sem ninguém para destravá-la.
+
+---
 
 ## 4. Duas invariantes que só o TESTE protege
 
@@ -351,7 +446,18 @@ Tabela de busca. Se está caçando um problema às 2h da manhã, comece por aqui
 | Sintoma | Causa provável | Onde |
 |---|---|---|
 | **404 em toda rota da loja**, com migrações aplicadas | `canastra` fora de `PGRST_DB_SCHEMAS` | §3.3 |
-| **404 em `/rest/v1/rpc/fundir_sacola`** | a mesma | §3.3 |
+| **404 em `/rest/v1/rpc/fundir_sacola`** ou **`/rpc/garantir_cliente`** | a mesma | §3.3 |
+| **TODO cliente recebe 403** do serviço Node, e o log só diz `invalid signature` | `SUPABASE_JWT_SECRET` diferente do `JWT_SECRET` da instância. Não é a conta de ninguém: é a variável | §3.1 |
+| **UM cliente recebe 403** com `"Sua conta ainda não está vinculada a esta loja."` | esse `sub` não tem linha em `canastra.clientes` — e-mail não confirmado, ou `garantir_cliente` nunca rodou para ele. É a defesa da §9.1 fazendo o trabalho dela | §9.1, migração 0008 |
+| **Rota autenticada responde 503** ("Não consegui confirmar sua conta agora") | a consulta de vínculo falhou. O problema é o **banco**, não o token — banco fora do ar não pode virar "entra sem conferir" | §9.1 |
+| **Exclusão de conta responde 503** | `SUPABASE_URL` ou `SUPABASE_SERVICE_ROLE_KEY` ausentes: `auth.users` pertence ao GoTrue e só a Admin API apaga de lá | §3.1 |
+| **Login responde `Database error querying schema`** | conta criada por SQL com os campos de token em NULL em `auth.users`. Não cita conta nem senha, e não é nenhuma das duas | §3.4 |
+| **O cliente clica no e-mail de confirmação e cai na HOME**, sem erro nenhum | a URL de redirecionamento não está na allow-list e foi trocada em silêncio pela Site URL | §3.5.1 |
+| **O link do e-mail falha só quando aberto em OUTRO aparelho** | modelo usando `{{ .ConfirmationURL }}` (PKCE) em vez de `{{ .TokenHash }}` | §3.5.2 |
+| **Cadastro e recuperação de senha param, e a tela fica esperando** | SMTP não configurado. O erro só existe no log do GoTrue | §3.5.3 |
+| **O painel entra e não mostra dado nenhum** (500, `42P01`) | não é a autenticação: os repositories do Express consultam as tabelas antigas em inglês. Fecha na F4 | §1.1 |
+| **Preço mudado no painel não aparece na vitrine** | a vitrine lê o JSON versionado porque `GET /dashboard` está morto — é a degradação graciosa, não um bug | §1.1 |
+| **A sacola do cliente dobra a cada visita** | a base `cart:na_conta` do `localStorage` se perdeu; a RPC `fundir_sacola` soma por desenho e quem impede a segunda soma é ela | `frontend/lib/sacola/fusao.ts` |
 | **404 numa tabela nova**, com RLS correta | tabela criada fora das migrações, sem `GRANT` | §5.2 |
 | **Painel do admin vazio e cliente sem ver o próprio endereço, sem erro** | `FORCE ROW LEVEL SECURITY` ligado em `admins`/`clientes` | §4.1 |
 | **`42501` citando "row-level security policy for table admins"** | a mesma, já denunciada pelo `SET row_security = off` | §4.1 |
@@ -403,8 +509,8 @@ escreve nessa tabela.
 Depois de qualquer mudança em migração, schema ou seed:
 
 ```bash
-npm --prefix backend test   # 123 testes: regras de pagamento + banco (RLS, migrações, seed)
-npm test                    # 52 testes da vitrine (vitest)
+npm --prefix backend test   # 174 testes: regras de pagamento + banco (RLS, migrações, seed, RPCs)
+npm test                    # 185 testes da vitrine (vitest)
 ```
 
 Os testes de banco sobem um Postgres embutido, aplicam as migrações de verdade e
@@ -413,20 +519,59 @@ o negativo: um `sub` de JWT válido que **não** está em `canastra.clientes` n�
 enxerga absolutamente nada. É a trava da §9; se ela falhar em silêncio, o
 isolamento entre projetos da instância desaparece.
 
+### 8.1 `npm run verifica:rls` — a fronteira contra uma instância de verdade
+
+```bash
+npm run verifica:rls
+```
+
+**Os testes acima provam a POLÍTICA; este script prova o CAMINHO.** Cada peça
+entre o navegador e a linha da tabela — GoTrue emitindo o token, Kong
+repassando, PostgREST injetando o claim, `Accept-Profile` escolhendo o schema,
+`GRANT` de coluna escondendo `custo`, `REVOKE EXECUTE` barrando o `anon` numa
+RPC — pode estar errada com **todas as políticas certas**. Foi ele que achou o
+`canastra` fora de "Exposed schemas" e a conta com campos de token em NULL.
+
+O que ele exerce, além da F1: `garantir_cliente` recusada ao `anon` e deixando
+**exatamente um** vínculo para o próprio `sub`; um token de outro projeto da
+instância levando **vazio** do PostgREST e **403** do serviço Node com a frase
+que a tela mostra; e a fusão da sacola entrando **uma vez** e não somando de novo
+numa segunda carga de página — com a contraprova de que, perdida a base do
+navegador, a mesma sacola dobra.
+
+Três coisas a saber antes de rodar:
+
+- **Ele escreve no banco.** Só dentro da conta de `VERIFICA_EMAIL_CLIENTE`, com o
+  token dela, sob RLS, e apaga as próprias sondas de `canastra.carrinho_itens` no
+  fim. Ainda assim: aponte-o para uma instância de **teste**.
+- **Ele degrada.** Sem `VERIFICA_EMAIL_*`/`VERIFICA_SENHA_*` roda só a metade
+  anônima; sem `SUPABASE_JWT_SECRET` a seção do token estrangeiro é **pulada**
+  com o motivo escrito; com o serviço Node fora do ar, idem. Pulado não conta
+  como aprovado nem reprova a corrida.
+- **Refazendo a fusão à mão no navegador, limpe as TRÊS chaves** de
+  `localStorage`: `cart`, `cart:na_conta` e `cart:fundindo`. Limpar só `cart`
+  deixa a base de pé, a fusão calcula zero pendente, não chama a RPC — e **parece
+  quebrada estando certa**.
+
 Depois de aplicar na VPS, confira à mão:
 
 - [ ] `npm run db:migrar` rodado uma segunda vez responde "Nada pendente.".
 - [ ] `SELECT versao, aplicada_em FROM canastra.migracoes ORDER BY versao;` lista
-      as 7 migrações.
+      as 8 migrações.
 - [ ] `SELECT count(*) FROM canastra.produtos;` devolve os 29 SKUs.
 - [ ] Uma requisição anônima à instância lê `canastra.produtos_publicos` e **não**
       lê `canastra.clientes`.
 - [ ] A conta de `SEED_ADMIN_EMAIL` existe no GoTrue **e** tem linha em
       `canastra.admins`.
+- [ ] Os três passos da §3.5 estão feitos: allow-list de redirecionamento,
+      modelos com `{{ .TokenHash }}` e SMTP.
+- [ ] Um cadastro novo, de ponta a ponta, num navegador limpo: formulário →
+      e-mail → link → conta com linha em `canastra.clientes`.
 
 `npm run verifica` (37 checagens num Chromium real) cobre a loja **antiga**,
-contra o Express e o painel legado. Ele só volta a valer para a arquitetura nova
-na F7, quando for reescrito.
+contra o Express e o painel legado, e **boa parte dele já não vale**: ele exerce
+o login do Express e as rotas de carrinho, que a F2 apagou. Ele só volta a valer
+para a arquitetura nova na F7, quando for reescrito.
 
 ---
 
@@ -452,6 +597,24 @@ assinatura.
 | `REVOKE` de INSERT | `clientes`, `admins` e `pedidos` têm `INSERT` revogado de `authenticated` no nível de tabela (mais `DELETE`, em `clientes` e `pedidos`), além da RLS. Uma política distraída amanhã não abre a porta sozinha — e `clientes` é o alvo mais valioso dos três, porque inserir uma linha ali **fabrica** `eh_cliente()`, que é a metade que sustenta toda política de dono do schema |
 
 Resultado: um token estrangeiro autentica, não é cliente, e não enxerga nada.
+
+**A F2 acrescentou o espelho disso no serviço Node, e ele não é redundante.** O
+PostgREST responde ao token estrangeiro com **zero linhas** — silêncio, que é a
+resposta certa de uma política de RLS. O Express não pode se contentar com isso:
+ele não lê por política, lê por consulta, e um controller distraído sem
+`WHERE user_id = ...` entregaria tudo. Por isso `isAuthenticated` confere o
+**vínculo** (`canastra.clientes`) depois de verificar a assinatura, e responde
+**403** antes de qualquer controller. É o caso que `npm run verifica:rls` mede
+nos dois lados com o mesmo token (§8).
+
+**A decisão de "esta pessoa é administradora" vem de `canastra.admins`, nunca de
+um claim do JWT — e ela FALHA FECHADA.** Numa instância compartilhada, qualquer
+claim é forjável por um projeto vizinho: quem consegue assinar um token escreve
+`role: "admin"` dentro dele sem esforço. Por isso `role` no token só serve para
+**recusar** (o que não for `authenticated` é barrado, o que fecha a `anon key` e
+a `service_role key` usadas como credencial de pessoa), nunca para conceder. Se a
+consulta de vínculo não puder ser respondida, a resposta é 503 — e não "entra sem
+conferir". Vale igual para o painel legado e para o painel novo da F6.
 
 ### 9.2 O que **não** está protegido
 
@@ -501,13 +664,11 @@ Ordenado por urgência. Cada item diz qual fase o fecha, ou que não há fase.
   da mesma notificação podem inflar o estoque, e o MP reenvia por desenho. **F5.**
 - **A cobrança acontece antes de o pedido existir no banco**, sem chave de
   idempotência: uma queda entre as duas coisas deixa pagamento sem pedido. **F5.**
-- **Refresh token gravado em texto puro** — morre junto com a autenticação
-  própria. **F2.**
 - **`PUT /promotions/:id` e `PUT /config`** sobrescrevem com NULL os campos
   ausentes e respondem 200 sem checar `rowCount`. Esses endpoints deixam de
   existir; a escrita passa a ser `PATCH` via PostgREST, parcial por natureza.
   **F5.**
-- **`csurf` (arquivado) e `axios` (advisory)** — saem com o serviço enxuto. **F5.**
+- **`axios` (advisory)** — sai com o serviço enxuto. **F5.**
 - **CSP com `unsafe-inline` e `unsafe-eval` no `script-src`** — existem só por
   causa do styled-components do painel legado. **F6.**
 - **O bundle do painel é servido a qualquer visitante** e o guard é de cliente. A
@@ -544,3 +705,17 @@ Ordenado por urgência. Cada item diz qual fase o fecha, ou que não há fase.
 **Fechado na F1:** "sem migrações versionadas". `schema.sql` não existe mais;
 cada alteração de schema é um arquivo em `backend/db/migrations/`, aplicado uma
 vez e registrado.
+
+**Fechado na F2:**
+
+- "refresh token gravado em texto puro" — o Express não emite mais token nenhum,
+  e a sessão do GoTrue não passa por aqui;
+- "`csurf` arquivado" — saiu junto com `bcrypt`, `cookie-parser` e
+  `express-validator`, com as 1.239 linhas das rotas que os usavam;
+- "senha da loja em `bcrypt` num banco nosso" — quem guarda credencial agora é o
+  GoTrue.
+
+**Nasceu na F2 e não tem fase:** a loja depende de **três passos manuais no
+painel do Supabase** (§3.5) que nada em código verifica. Um script de verificação
+de configuração do GoTrue seria o fecho; hoje o que existe é a lista de conferência
+da §8.
