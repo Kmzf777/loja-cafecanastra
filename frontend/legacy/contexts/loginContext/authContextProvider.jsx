@@ -1,241 +1,137 @@
+/**
+ * Sessão do painel legado — agora sobre o GoTrue.
+ *
+ * O CONTRATO DO CONTEXTO NÃO MUDOU, de propósito: `user`, `accessToken`,
+ * `initialized`, `createUser`, `loginUser`, `logoutUser` e `authFetch`
+ * continuam com os mesmos nomes e os mesmos papéis, e nenhum dos consumidores
+ * (Header, Sidebar, Cart, LoginForm, productContext, as telas do painel)
+ * precisou de edição por causa disto. O que mudou é o que existe do outro lado.
+ *
+ * O QUE SAIU
+ *  - `POST /auth/refresh-token`, `/sign-in`, `/sign-out`, `/sign-up`: apagados
+ *    na Task 5. Quem responde agora é o `lib/conta/sessao.ts`, que a vitrine já
+ *    usava — este arquivo NÃO reimplementa nada, ele chama.
+ *  - `localStorage["has_refresh"]`: era a pista de "vale a pena tentar o
+ *    refresh" do esquema de cookie do Express. Morre junto com o esquema; o
+ *    supabase-js guarda a sessão em cookie e sabe sozinho se há o que renovar.
+ *    `sair()` ainda APAGA a chave, para quem já a tinha gravada.
+ *  - `getCsrfToken`, que este provedor exportava pelo contexto. Ver `api.js`.
+ *    O único consumidor era `productContextProvider.jsx`, que já o chamava sob
+ *    `typeof getCsrfToken === "function"` — sem ele, o `X-CSRF-Token` continua
+ *    `null` e o cabeçalho simplesmente não é montado. Isso IMPORTA: o cabeçalho
+ *    saiu do `allowedHeaders` do CORS, e enviá-lo hoje quebraria o preflight.
+ *  - O `AbortController` compartilhado: ele existia para cancelar os `fetch`
+ *    de login/cadastro. As chamadas do supabase-js não recebem signal, e o
+ *    controlador viraria estado morto. O `error.name === "AbortError"` que
+ *    sobrou nas telas é inofensivo — nunca casa.
+ *
+ * O PAPEL DE ADMINISTRADOR VEM DE `canastra.admins`, e não de claim nenhum:
+ * quem lê é `lerPapel()` em `sessao.ts`, e ele cai para "cliente" quando a
+ * consulta FALHA. Numa instância compartilhada do Supabase, um projeto vizinho
+ * pode cunhar o claim que quiser; a tabela, não — escrever nela é privilégio de
+ * `service_role`. `routes/AdminRoutes.jsx` compara com `"admin"` e é só isso
+ * que ele precisa saber.
+ *
+ * SOBRE `shop:cartMerged`: o evento sumiu daqui porque a fusão de sacola sumiu
+ * do login — `/auth/sign-in` levava o carrinho local no corpo e devolvia o
+ * carrinho fundido, e essa rota não existe mais. O ouvinte em
+ * `productContextProvider.jsx` fica inerte; a fusão de verdade é a
+ * `canastra.fundir_sacola` da vitrine. `shop:logout` CONTINUA sendo disparado,
+ * porque é ele que esvazia o carrinho em memória do painel.
+ */
 import PropTypes from "prop-types";
 import authContext from "./createAuthContext";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { API_BASE } from "../../api";
+import { useEffect, useState } from "react";
+import { authFetch } from "../../api";
+import { entrar, recuperarSessao, sair } from "../../../lib/conta/sessao";
+import { cadastrar } from "../../../lib/conta/cadastro";
 
 const AuthProvider = ({ children }) => {
   const [accessToken, setAccessToken] = useState(null);
   const [user, setUser] = useState(null);
   const [initialized, setInitialized] = useState(false);
 
-  const activeController = useRef(null);
-  const abortActiveRequest = () => {
-    if (activeController.current) activeController.current.abort();
-    activeController.current = new AbortController();
-    return activeController.current.signal;
-  };
+  useEffect(() => {
+    let montado = true;
 
-  const getCsrfToken = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/csrf-token`, {
-        credentials: "include",
+    // `recuperarSessao()` não rejeita: ele devolve `null` para "sem sessão" e
+    // também para "deu erro", que é o estado seguro (visitante). O `finally`
+    // está aqui mesmo assim porque `initialized` NÃO PODE ficar falso — o
+    // painel inteiro fica preso na tela de carregamento se ficar.
+    recuperarSessao()
+      .then((sessao) => {
+        if (!montado || !sessao) return;
+        setUser(sessao.usuario);
+        setAccessToken(sessao.accessToken);
+      })
+      .finally(() => {
+        if (montado) setInitialized(true);
       });
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.csrfToken;
-    } catch (err) {
-      console.warn("getCsrfToken failed:", err);
-      return null;
-    }
+
+    return () => {
+      montado = false;
+    };
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    const tryRefresh = async () => {
-      try {
-        const hasRefresh = localStorage.getItem("has_refresh");
-        if (!hasRefresh) {
-          if (mounted) setInitialized(true);
-          return;
-        }
+  /**
+   * `cadastrar()` devolve `{ situacao, email }`, não uma `Response`. Quem chama
+   * é `components/SignUpForm/SignUpForm.jsx`, ajustado junto.
+   */
+  const createUser = async (userData) =>
+    cadastrar({
+      nome: userData.name,
+      email: userData.email,
+      senha: userData.password,
+      telefone: userData.phone ?? null,
+      cpf: userData.cpf ?? null,
+    });
 
-        const csrfToken = await getCsrfToken();
-        const res = await fetch(`${API_BASE}/auth/refresh-token`, {
-          method: "POST",
-          credentials: "include",
-          headers: csrfToken ? { "X-CSRF-Token": csrfToken } : {},
-        });
-
-        if (!res.ok) {
-          localStorage.removeItem("has_refresh");
-          if (mounted) setInitialized(true);
-          return;
-        }
-        const json = await res.json();
-
-        if (mounted) {
-          if (json.accessToken) setAccessToken(json.accessToken);
-          if (json.user) setUser(json.user);
-        }
-      } catch (err) {
-        console.warn("refresh-token failed:", err);
-        localStorage.removeItem("has_refresh");
-      } finally {
-        if (mounted) setInitialized(true);
-      }
-    };
-    tryRefresh();
-    return () => {
-      mounted = false;
-      if (activeController.current) activeController.current.abort();
-    };
-  }, [getCsrfToken]);
-
-  const createUser = async (userData) => {
-    try {
-      const csrfToken = await getCsrfToken();
-      const signal = abortActiveRequest();
-      const response = await fetch(`${API_BASE}/auth/sign-up`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
-        },
-        body: JSON.stringify(userData),
-        credentials: "include",
-        signal,
-      });
-
-      return response;
-    } catch (error) {
-      if (error.name !== "AbortError")
-        console.error("Error creating user:", error);
-      throw error;
-    }
-  };
-
+  /**
+   * Erros sobem como `ErroDeLogin`, cuja `.message` já é frase de loja em
+   * português — as telas fazem `toast.error(error.message)` e continuam certas
+   * sem mudar uma linha.
+   */
   const loginUser = async (credentials) => {
-    try {
-      const localCart = JSON.parse(localStorage.getItem("cart") || "[]");
-      const csrfToken = await getCsrfToken();
-      const signal = abortActiveRequest();
-      const payload = { ...credentials, localCart };
-
-      const response = await fetch(`${API_BASE}/auth/sign-in`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
-        },
-        body: JSON.stringify(payload),
-        credentials: "include",
-        signal,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || "Erro ao realizar login");
-      }
-
-      setAccessToken(data.accessToken);
-      setUser(data.user);
-      localStorage.setItem("has_refresh", "true");
-
-      if (data.mergedCart) {
-        window.dispatchEvent(
-          new CustomEvent("shop:cartMerged", { detail: data.mergedCart }),
-        );
-      }
-
-      return data;
-    } catch (error) {
-      if (error.name !== "AbortError")
-        console.error("Error logging in user:", error);
-      throw error;
-    }
+    const sessao = await entrar(credentials.email, credentials.password);
+    setUser(sessao.usuario);
+    setAccessToken(sessao.accessToken);
+    return sessao;
   };
 
   const logoutUser = async () => {
-    try {
-      const csrfToken = await getCsrfToken();
-      const signal = abortActiveRequest();
-
-      const response = await fetch(`${API_BASE}/auth/sign-out`, {
-        method: "POST",
-        headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
-        credentials: "include",
-        signal,
-      });
-
-      if (response.ok) {
-        setAccessToken(null);
-        setUser(null);
-        localStorage.removeItem("cart");
-        localStorage.removeItem("has_refresh");
-        window.dispatchEvent(new Event("shop:logout"));
-      }
-
-      return response;
-    } catch (error) {
-      if (error.name !== "AbortError")
-        console.error("Error logging out user:", error);
-      setAccessToken(null);
-      setUser(null);
-      localStorage.removeItem("has_refresh");
-      window.dispatchEvent(new Event("shop:logout"));
-    }
+    // `sair()` não lança: ele já engole a falha do servidor de propósito, para
+    // que ninguém fique preso dentro da conta por causa de uma rede ruim.
+    await sair();
+    setUser(null);
+    setAccessToken(null);
+    // O evento vai ANTES do localStorage: quem ouve (`productContextProvider`)
+    // é que esvazia o carrinho em memória, e num navegador em modo privado sem
+    // cota o `removeItem` pode lançar. Nessa ordem, uma falha de storage não
+    // deixa a sacola da sessão anterior visível na tela.
+    window.dispatchEvent(new Event("shop:logout"));
+    localStorage.removeItem("cart");
   };
-
-  const authFetch = useCallback(
-    async (url, options = {}) => {
-      const opts = { ...options, headers: { ...(options.headers || {}) } };
-      const method = (opts.method || "GET").toUpperCase();
-
-      if (method !== "GET" && method !== "HEAD") {
-        const csrfToken = await getCsrfToken();
-        if (csrfToken) opts.headers["X-CSRF-Token"] = csrfToken;
-      }
-
-      if (accessToken) {
-        opts.headers["Authorization"] = `Bearer ${accessToken}`;
-      }
-      opts.credentials = "include";
-
-      let res = await fetch(url, opts);
-
-      if (res.status === 401 && accessToken) {
-        try {
-          const hasRefresh = localStorage.getItem("has_refresh");
-          if (!hasRefresh) {
-            setAccessToken(null);
-            setUser(null);
-            return res;
-          }
-
-          const csrfToken = await getCsrfToken();
-          const refreshRes = await fetch(`${API_BASE}/auth/refresh-token`, {
-            method: "POST",
-            credentials: "include",
-            headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
-          });
-
-          if (!refreshRes.ok) {
-            localStorage.removeItem("has_refresh");
-            setAccessToken(null);
-            setUser(null);
-            return res;
-          }
-
-          const { accessToken: newToken, user: newUser } =
-            await refreshRes.json();
-          setAccessToken(newToken);
-          if (newUser) setUser(newUser);
-
-          const retryOpts = { ...opts, headers: { ...(opts.headers || {}) } };
-          retryOpts.headers["Authorization"] = `Bearer ${newToken}`;
-          res = await fetch(url, retryOpts);
-        } catch (err) {
-          console.warn("authFetch -> refresh failed:", err);
-          localStorage.removeItem("has_refresh");
-        }
-      }
-      return res;
-    },
-    [accessToken, getCsrfToken],
-  );
 
   return (
     <authContext.Provider
       value={{
         user,
+        /**
+         * Continua exposto porque fazia parte do contrato, mas NINGUÉM no
+         * painel o lê — conferido por grep. E ele é um retrato do momento da
+         * montagem: quando o supabase-js renova a sessão, este valor fica para
+         * trás. Quem precisa de token usa `authFetch`, que pergunta ao
+         * supabase-js a cada chamada.
+         */
         accessToken,
         initialized,
         createUser,
         loginUser,
         logoutUser,
+        // Função de módulo, identidade estável entre renders. Ela lê o token do
+        // supabase-js a cada chamada, e não do `accessToken` acima — é por isso
+        // que não precisa de `useCallback` nem entra em lista de dependência.
         authFetch,
-        getCsrfToken,
       }}
     >
       {children}

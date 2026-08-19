@@ -44,7 +44,6 @@ function SignUpForm() {
     control,
     watch,
     reset,
-    setError,
     trigger,
     formState: { errors, isSubmitting, isValid, dirtyFields, touchedFields },
   } = useForm({ mode: "onChange" });
@@ -107,30 +106,29 @@ function SignUpForm() {
       password: data.password,
     };
 
+    // `createUser` fala com o GoTrue e devolve `{ situacao, email }` — não uma
+    // `Response`. Não há mais `resData.errors` por campo: o GoTrue recusa o
+    // cadastro inteiro com um código, e a frase traduzida vem em `.message`.
     try {
-      const response = await createUser(userData);
-      const resData = await response.json();
+      const resultado = await createUser(userData);
 
-      if (response.ok) {
-        toast.success(
-          resData.message || "Cadastro realizado! Verifique seu e-mail.",
-        );
+      toast.success(
+        resultado.situacao === "aguardandoConfirmacao"
+          ? `Cadastro realizado! Confirme o link que enviamos para ${resultado.email}.`
+          : "Cadastro realizado!",
+      );
 
-        reset();
-        setTimeout(() => {
-          navigate("/account/login", { replace: true });
-        }, 2500);
-      } else {
-        if (resData.errors) {
-          resData.errors.forEach((err) => {
-            setError(err.field, { type: "server", message: err.message });
-          });
-        }
-
-        toast.error(resData.message || "Erro ao cadastrar.");
-      }
+      reset();
+      setTimeout(() => {
+        navigate("/account/login", { replace: true });
+      }, 2500);
     } catch (error) {
-      toast.error("Erro ao cadastrar. Verifique os dados ou tente novamente.");
+      // `ErroDeCadastro.message` e `ErroDeVinculo.message` já são frases de
+      // loja em português. O fallback cobre só falha de rede.
+      toast.error(
+        error?.message ||
+          "Erro ao cadastrar. Verifique os dados ou tente novamente.",
+      );
       console.error(error);
     }
   };

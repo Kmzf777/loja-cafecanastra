@@ -1,9 +1,8 @@
-import { useContext, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "react-toastify";
-import { API_BASE } from "../../api";
 import Loading from "../../components/Loading/Loading";
-import authContext from "../../contexts/loginContext/createAuthContext";
+import { pedirRedefinicao } from "../../../lib/conta/senha";
 
 import {
   Container,
@@ -17,7 +16,6 @@ import { HiOutlineMail } from "react-icons/hi";
 function ForgotPassword() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const { authFetch } = useContext(authContext);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -25,23 +23,22 @@ function ForgotPassword() {
 
     setLoading(true);
     try {
-      const res = await authFetch(`${API_BASE}/auth/forgot-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-
-      const data = await res.json();
-
-      if (res.ok) {
-        toast.success(data.message);
-        setEmail("");
-      } else {
-        toast.error(data.message || "Erro ao enviar.");
-      }
+      await pedirRedefinicao(email);
+      // A FRASE NÃO PODE CONFIRMAR QUE A CONTA EXISTE. O GoTrue responde 200
+      // igual para endereço conhecido e desconhecido, de propósito: um "não
+      // encontramos esse e-mail" transformaria este formulário num verificador
+      // de quem é cliente da loja. A mensagem antiga vinha do servidor; esta é
+      // fixa porque não há mais servidor nenhum dizendo o contrário.
+      toast.success(
+        "Se este e-mail estiver cadastrado, o link de redefinição já está a " +
+          "caminho. Confira a caixa de entrada e o spam.",
+      );
+      setEmail("");
     } catch (err) {
+      // `ErroDeSenha.message` já é frase de loja (limite de envio, e-mail
+      // inválido). Só sobra rede como caso sem mensagem própria.
       console.error(err);
-      toast.error("Erro de conexão.");
+      toast.error(err?.message || "Erro de conexão.");
     } finally {
       setLoading(false);
     }
