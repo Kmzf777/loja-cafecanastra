@@ -179,6 +179,22 @@ const server = app.listen(port, () => {
 });
 
 /**
+ * Sobra algum caminho de verificacao de token? — e ja aquece o cache do JWKS.
+ *
+ * Fica DEPOIS do `listen` porque e a unica conferencia da subida que precisa de
+ * rede: atrasar a porta por causa dela faria o health check do orquestrador
+ * falhar enquanto o Kong ainda sobe, na mesma VPS. Quando a resposta e
+ * definitiva ("nada aqui verifica nada"), o processo encerra — e a mesma
+ * postura do `conferirAmbiente`: falhar no `npm start` e barato.
+ */
+require("./config/ambiente")
+  .conferirCaminhosDeVerificacao()
+  .catch((erro) => {
+    console.error(erro.message);
+    encerrar("configuração de verificação de token", 1);
+  });
+
+/**
  * Rede de seguranca do processo.
  *
  * Sem estes dois ouvintes, uma promessa rejeitada sem catch derruba o Node em

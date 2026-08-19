@@ -449,6 +449,20 @@ if (!estrangeiro) {
       `não consegui falar com ${API} (${noNode.rede}). Suba com \`npm run dev:api\` ` +
         "e rode de novo — a fronteira do banco acima já foi conferida.",
     );
+  } else if (noNode.status === 503) {
+    /**
+     * 503 aqui NÃO é reprovação: é o serviço Node dizendo que não tem como
+     * verificar um token HS256 — ele roda contra uma instância que assina em
+     * ES256/RS256 e está (corretamente) sem `SUPABASE_JWT_SECRET`. O token
+     * forjado acima é HS256 por construção, então esta sonda não se aplica
+     * àquele deploy. Reprovar seria um vermelho permanente e falso.
+     */
+    pula(
+      `serviço Node em ${API} responde 403 a token sem vínculo`,
+      "o serviço respondeu 503: ele verifica token por JWKS (ES256/RS256) e não " +
+        "tem SUPABASE_JWT_SECRET. O token forjado aqui é HS256, então esta seção " +
+        "não se aplica a este deploy. A fronteira do banco acima já foi conferida.",
+    );
   } else {
     marca(
       noNode.status === 403,
@@ -463,31 +477,37 @@ if (!estrangeiro) {
       "e diz por quê, com a frase que a tela mostra",
       noNode.corpo,
     );
+  }
 
-    if (tokenCliente) {
-      /**
-       * O CRITÉRIO É `!== 403`, E NÃO `=== 200` — a diferença é o que separa
-       * esta sonda de um falso vermelho permanente.
-       *
-       * O que está sendo medido é o PORTÃO: `isAuthenticated` deixou passar
-       * quem tem vínculo. O que vem depois do portão é o controller, e hoje
-       * TODOS eles estão mortos contra o banco migrado (consultam as tabelas
-       * antigas em inglês, que as migrações não criam — ver docs/producao.md
-       * §1.1). Exigir 200 aqui faria esta linha reprovar até a F4 por um motivo
-       * que nada tem a ver com autenticação, e uma checagem que vive vermelha
-       * deixa de ser lida.
-       *
-       * 500 aqui é o repositório morto; 403 seria a defesa recusando quem
-       * deveria entrar — e é só isso que esta linha promete distinguir.
-       */
-      const legitimo = await api("/address", tokenCliente);
-      marca(
-        legitimo.status !== 403,
-        `o mesmo endpoint NÃO barra quem tem vínculo (HTTP ${legitimo.status}` +
-          `${legitimo.status >= 500 ? " — é o repositório morto da F4, não o portão" : ""})`,
-        legitimo.corpo,
-      );
-    }
+  /**
+   * FORA do `else` de proposito: esta metade usa um token EMITIDO PELO GoTrue,
+   * e portanto vale nos dois desenhos de assinatura. Deixa-la la dentro faria
+   * um deploy que verifica por JWKS (onde o token forjado acima vira 503)
+   * perder justamente a checagem que ainda se aplica a ele.
+   */
+  if (!noNode.rede && tokenCliente) {
+    /**
+     * O CRITÉRIO É `!== 403`, E NÃO `=== 200` — a diferença é o que separa
+     * esta sonda de um falso vermelho permanente.
+     *
+     * O que está sendo medido é o PORTÃO: `isAuthenticated` deixou passar
+     * quem tem vínculo. O que vem depois do portão é o controller, e hoje
+     * TODOS eles estão mortos contra o banco migrado (consultam as tabelas
+     * antigas em inglês, que as migrações não criam — ver docs/producao.md
+     * §1.1). Exigir 200 aqui faria esta linha reprovar até a F4 por um motivo
+     * que nada tem a ver com autenticação, e uma checagem que vive vermelha
+     * deixa de ser lida.
+     *
+     * 500 aqui é o repositório morto; 403 seria a defesa recusando quem
+     * deveria entrar — e é só isso que esta linha promete distinguir.
+     */
+    const legitimo = await api("/address", tokenCliente);
+    marca(
+      legitimo.status !== 403,
+      `o mesmo endpoint NÃO barra quem tem vínculo (HTTP ${legitimo.status}` +
+        `${legitimo.status >= 500 ? " — é o repositório morto da F4, não o portão" : ""})`,
+      legitimo.corpo,
+    );
   }
 }
 

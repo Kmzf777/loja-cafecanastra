@@ -44,16 +44,19 @@ const AMBIENTES_VALIDOS = new Set(["development", "test", "production"]);
 /**
  * Obrigatorias em producao: sem elas a loja nao funciona ou fica insegura.
  *
- * AS TRES DO SUPABASE ENTRARAM NA F2, E `JWT_SECRET`/`JWT_SECRET_REFRESH`
+ * AS DUAS DO SUPABASE ENTRARAM NA F2, E `JWT_SECRET`/`JWT_SECRET_REFRESH`
  * SAIRAM. O Express nao emite mais token; ele verifica o do GoTrue.
  *
- *  - SUPABASE_JWT_SECRET: e o `JWT_SECRET` do stack self-hosted, o mesmo com
- *    que o GoTrue assina. Sem ele, `jwt.verify` falha em TODA requisicao
- *    autenticada e a loja responde 403 para clientes legitimos — sintoma sem
- *    relacao obvia com uma variavel esquecida.
  *  - SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY: exclusao de conta passa pela
  *    Admin API do GoTrue (`auth.users` pertence ao GoTrue; nem `service_role`
  *    escreve nele). Sem as duas, a pessoa pede exclusao e nada e apagado.
+ *    SUPABASE_URL ficou ainda mais central depois que `isAuthenticated` passou
+ *    a saber verificar token assinado por chave assimetrica: e dela que sai o
+ *    `/auth/v1/.well-known/jwks.json`.
+ *
+ * `SUPABASE_JWT_SECRET` SAIU DAQUI, e a ausencia dela NAO virou "tanto faz" —
+ * virou a conferencia de `conferirCaminhosDeVerificacao`, mais abaixo. O motivo
+ * esta explicado la.
  *
  * NAO HA CHECAGEM DE `localhost` EM SUPABASE_URL, e isso e deliberado: o
  * Express roda na MESMA VPS do stack, e `http://localhost:8000` (o Kong) e o
@@ -63,7 +66,6 @@ const AMBIENTES_VALIDOS = new Set(["development", "test", "production"]);
 const OBRIGATORIAS_EM_PRODUCAO = [
   { nome: "DATABASE_URL", segredo: false },
   { nome: "SUPABASE_URL", segredo: false },
-  { nome: "SUPABASE_JWT_SECRET", segredo: true },
   { nome: "SUPABASE_SERVICE_ROLE_KEY", segredo: true },
   { nome: "CORS_ORIGIN", segredo: false },
   // Sem o segredo do webhook o backend recusa toda notificacao do Mercado Pago
@@ -146,6 +148,25 @@ function conferirAmbiente({ ehProducao = process.env.NODE_ENV === "production" }
   }
 
   /**
+   * `SUPABASE_JWT_SECRET` e OPCIONAL — mas, quando existe, nunca fraca.
+   *
+   * Ela saiu das obrigatorias porque um projeto hospedado ja migrado para
+   * chaves de assinatura NAO TEM uso para ela: o GoTrue assina em ES256 e quem
+   * verifica busca a chave publica no JWKS. Exigi-la ali forcaria o operador a
+   * inventar um valor so para o processo subir — um segredo de mentira, que e
+   * pior do que nenhum. A ausencia dela, porem, nao passa em branco: quem
+   * decide se sobra algum caminho de verificacao e
+   * `conferirCaminhosDeVerificacao`.
+   */
+  const segredoDoGoTrue = process.env.SUPABASE_JWT_SECRET;
+  if (segredoDoGoTrue && segredoDoGoTrue.length < TAMANHO_MINIMO_SEGREDO) {
+    (ehProducao ? erros : avisos).push(
+      `SUPABASE_JWT_SECRET tem menos de ${TAMANHO_MINIMO_SEGREDO} caracteres — curto demais para assinar token. ` +
+        "Se a instância assina em ES256/RS256, deixe a variável VAZIA em vez de preenchê-la com um valor qualquer.",
+    );
+  }
+
+  /**
    * A `service_role key` e a `anon key` sao JWT parecidos, emitidos pelo mesmo
    * lugar e faceis de trocar um pelo outro no painel do provedor. Trocados, o
    * Express perde poder em silencio: a exclusao de conta passa a responder 401
@@ -183,4 +204,107 @@ function conferirAmbiente({ ehProducao = process.env.NODE_ENV === "production" }
   return { erros, avisos };
 }
 
-module.exports = { conferirAmbiente, VALORES_DE_EXEMPLO };
+/**
+ * SOBRA ALGUM CAMINHO DE VERIFICACAO DE TOKEN? A pergunta que substitui
+ * "SUPABASE_JWT_SECRET esta definida?".
+ *
+ * O QUE "CONFIGURADO" PASSOU A SIGNIFICAR. `isAuthenticated` verifica por dois
+ * caminhos, e a loja precisa de PELO MENOS UM funcionando:
+ *
+ *   HS256, com `SUPABASE_JWT_SECRET` -> o stack self-hosted, alvo de producao;
+ *   ES256/RS256, pelo JWKS de `SUPABASE_URL` -> o projeto hospedado.
+ *
+ * Um teste puramente sintatico ("uma das duas variaveis esta preenchida?") NAO
+ * serve, e vale dizer por que: `SUPABASE_URL` e obrigatoria de qualquer jeito
+ * (a exclusao de conta depende dela), entao ela estaria SEMPRE preenchida e a
+ * condicao passaria sempre — inclusive num stack self-hosted que esqueceu o
+ * segredo e cujo JWKS responde `{"keys":[]}`. Seria exatamente o "aceitar em
+ * silencio uma configuracao onde nada verifica nada". Nesse deploy toda
+ * requisicao autenticada responderia 503, e o `npm start` teria dito que estava
+ * tudo bem.
+ *
+ * ENTAO A CONFERENCIA PERGUNTA A INSTANCIA. So quando `SUPABASE_JWT_SECRET`
+ * esta ausente — nesse caso o JWKS e o unico caminho, e a unica forma de saber
+ * se ele existe e buscar. Conjunto VAZIO (ou 404) e resposta definitiva: nao ha
+ * chave assimetrica publicada, nao ha segredo, nada jamais sera verificado; em
+ * producao isso derruba a subida, que e barulhento e barato. Conjunto
+ * INALCANCAVEL e outra coisa: pode ser so ordem de subida (o Express e o Kong
+ * sobem juntos na mesma VPS), entao vira aviso alto e o processo segue —
+ * enquanto durar, as requisicoes autenticadas respondem 503, que e a resposta
+ * honesta.
+ *
+ * COM O SEGREDO DEFINIDO NADA DISSO ACONTECE, e isso importa: a subida do
+ * Express nao ganha dependencia de rede no caminho que ja funcionava. A busca
+ * ainda e feita (aquece o cache, e a primeira requisicao autenticada nao paga a
+ * ida), mas falhar nela nao e nem erro nem aviso — e so a informacao de que
+ * aquele deploy nao usa o caminho assimetrico.
+ */
+async function conferirCaminhosDeVerificacao({
+  ehProducao = process.env.NODE_ENV === "production",
+  chaves = require("../utils/chavesDoGoTrue"),
+} = {}) {
+  const temSegredo = Boolean(process.env.SUPABASE_JWT_SECRET);
+
+  let quantasChaves = null;
+  let falha = null;
+  try {
+    quantasChaves = await chaves.aquecerCache();
+  } catch (erro) {
+    falha = erro;
+  }
+
+  if (temSegredo) {
+    const extra =
+      quantasChaves > 0
+        ? ` e ${quantasChaves} chave(s) no JWKS da instância`
+        : falha
+          ? ` (o JWKS não respondeu: ${falha.message} — sem efeito, o segredo dá conta)`
+          : " (a instância não publica chave assimétrica — normal em stack self-hosted)";
+    console.log(`Verificação de token: HS256 por SUPABASE_JWT_SECRET${extra}.`);
+    return { ok: true, temSegredo, quantasChaves };
+  }
+
+  if (quantasChaves > 0) {
+    console.log(
+      `Verificação de token: ${quantasChaves} chave(s) assimétrica(s) do JWKS. ` +
+        "SUPABASE_JWT_SECRET não está definida, e para esta instância não precisa estar.",
+    );
+    return { ok: true, temSegredo, quantasChaves };
+  }
+
+  if (falha) {
+    console.warn(
+      "\n⚠️  SUPABASE_JWT_SECRET não está definida e o JWKS da instância não respondeu:\n" +
+        `   · ${falha.message}\n` +
+        "   Enquanto isso durar, TODA rota autenticada responde 503.\n" +
+        "   Se o stack ainda está subindo, isso se resolve sozinho. Se não,\n" +
+        "   confira SUPABASE_URL — ou defina SUPABASE_JWT_SECRET.\n",
+    );
+    return { ok: false, temSegredo, quantasChaves: null, falha };
+  }
+
+  const mensagem =
+    "Nenhum caminho de verificação de token está configurado: SUPABASE_JWT_SECRET " +
+    "não está definida e o JWKS da instância não publica nenhuma chave assimétrica " +
+    "utilizável. Toda requisição autenticada seria recusada.";
+
+  if (!ehProducao) {
+    console.warn(`\n⚠️  ${mensagem}\n`);
+    return { ok: false, temSegredo, quantasChaves: 0 };
+  }
+
+  console.error(
+    `\n❌ ${mensagem}\n` +
+      "   Escolha um dos dois:\n" +
+      "   · stack self-hosted → defina SUPABASE_JWT_SECRET com o JWT_SECRET da instância;\n" +
+      "   · projeto com chaves de assinatura → confira SUPABASE_URL e se as chaves\n" +
+      "     assimétricas estão publicadas (Settings → API Keys → JWT Keys).\n",
+  );
+  throw new Error("Nenhum caminho de verificação de token configurado.");
+}
+
+module.exports = {
+  conferirAmbiente,
+  conferirCaminhosDeVerificacao,
+  VALORES_DE_EXEMPLO,
+};

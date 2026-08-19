@@ -59,9 +59,12 @@ Vale a pena ler antes de abrir um chamado — nada abaixo é bug novo:
 
 **O que a F2 tirou do `.env`:** `JWT_SECRET`, `JWT_SECRET_REFRESH`,
 `ACCESS_TOKEN_EXPIRY` e `REFRESH_TOKEN_EXPIRY_DAYS`. O Express **não emite mais
-token** — quem emite é o GoTrue, e este serviço só verifica, com
-`SUPABASE_JWT_SECRET`. `bcrypt`, `csurf`, `cookie-parser` e `express-validator`
-saíram junto com as rotas que os usavam. `CLOUDINARY_*` continua, e sai na F3.
+token** — quem emite é o GoTrue, e este serviço só verifica: em **HS256** com
+`SUPABASE_JWT_SECRET` (stack self-hosted) **ou** em **ES256/RS256** pela chave
+pública do JWKS da instância (projeto já migrado para chaves de assinatura). Os
+dois caminhos convivem e a §3.1 diz qual é o seu. `bcrypt`, `csurf`,
+`cookie-parser` e `express-validator` saíram junto com as rotas que os usavam.
+`CLOUDINARY_*` continua, e sai na F3.
 
 ---
 
@@ -115,15 +118,44 @@ start` é barulhento e barato; descobrir depois, não.
 | `DATABASE_URL` | Postgres da instância Supabase. O papel precisa de `CREATE` no banco. | `db:migrar` e `db:seed` **recusam rodar** (ver §5.1) |
 | `SUPABASE_URL` | origem da instância (o que o Kong atende). Usada pelo seed e pela exclusão de conta. | `db:seed` **falha** ao criar a conta inicial; exclusão de conta responde **503** |
 | `SUPABASE_SERVICE_ROLE_KEY` | chave `service_role`; é com ela que o serviço fala com a **Admin API do GoTrue** | idem |
-| `SUPABASE_JWT_SECRET` | o segredo **com que o GoTrue assina** — o `JWT_SECRET` do stack self-hosted | **todo cliente** recebe 403 e o log diz só `invalid signature` (§6) |
 | `CORS_ORIGIN` | origem da vitrine | o painel não fala com a API |
 | `MP_WEBHOOK_SECRET`, `MP_ACCESS_TOKEN` | Mercado Pago | nenhum pedido sai de "pendente" |
 
-**Onde achar o `SUPABASE_JWT_SECRET`:** é o `JWT_SECRET` do `docker/.env` do
-stack self-hosted (no Supabase hospedado, Settings → API → JWT Settings). Precisa
-ser **idêntico** ao da instância. Não há chave assimétrica aqui: JWKS/ECC é
-recurso da plataforma hospedada; um stack self-hosted assina em HS256 com esse
-segredo único, e é por isso que `isAuthenticated` fixa `algorithms: ["HS256"]`.
+**`SUPABASE_JWT_SECRET` saiu da tabela: ela é CONDICIONAL.** Depende de como a
+sua instância assina o token — e as duas formas são reais.
+
+| Como a instância assina | Precisa de `SUPABASE_JWT_SECRET`? | Como o serviço verifica |
+|---|---|---|
+| **HS256 com segredo compartilhado** — stack self-hosted padrão, só com `GOTRUE_JWT_SECRET`. É o alvo de produção desta loja | **sim** | `jwt.verify` com o segredo, `algorithms: ["HS256"]` |
+| **Chaves de assinatura assimétricas** (ES256/RS256) — Supabase hospedado já migrado, ou self-hosted com `GOTRUE_JWT_KEYS` | **não** — deixe **vazia** | busca a chave pública em `SUPABASE_URL/auth/v1/.well-known/jwks.json`, casa pelo `kid`, e fixa o algoritmo **pelo tipo da chave** |
+
+**Onde achar o `SUPABASE_JWT_SECRET`, quando ele é o caso:** é o `JWT_SECRET` do
+`docker/.env` do stack self-hosted (no Supabase hospedado que ainda usa segredo
+legado, Settings → API → JWT Settings). Precisa ser **idêntico** ao da instância.
+
+**A versão anterior deste parágrafo dizia "não há chave assimétrica aqui: JWKS/ECC
+é recurso da plataforma hospedada". Isso é verdade da VPS e falso do projeto de
+teste**, e custou caro: contra um projeto hospedado já migrado, um serviço que só
+sabe HS256 responde **403 a toda requisição autenticada** e loga apenas
+`invalid signature` — o sintoma que a linha da §6 atribuía a um segredo errado.
+Vale dizer também que `GOTRUE_JWT_KEYS` existe no self-hosted: "assimétrico = só
+hospedado" não é uma regra, é um padrão de configuração.
+
+**O serviço não escolhe entre um e outro; ele lê o `alg` do token.** `alg: HS256`
+só alcança `SUPABASE_JWT_SECRET`; `alg: ES256`/`RS256` só alcança a chave pública
+do `kid` correspondente, e o algoritmo aceito é derivado do **tipo da chave**,
+nunca do cabeçalho. Não dá para "tentar o JWKS primeiro e cair para o segredo":
+num stack só com `GOTRUE_JWT_SECRET`, o endpoint responde `200 {"keys":[]}` (o
+GoTrue **omite** chave HMAC de propósito) ou 404, em versão anterior ao endpoint.
+
+**Deixar as duas de fora não passa em silêncio.** Se `SUPABASE_JWT_SECRET` estiver
+vazia, o processo **busca o JWKS na subida**; se ele responder um conjunto vazio,
+nada neste serviço consegue verificar token nenhum e a API **recusa subir** em
+produção. Se o JWKS não responder, é só aviso — pode ser o Kong ainda subindo na
+mesma VPS —, e enquanto durar as rotas autenticadas respondem **503**.
+
+**Com o segredo definido, a subida não ganha dependência de rede.** A busca ainda
+acontece (aquece o cache), mas falhar nela não é erro nem aviso.
 
 **`SUPABASE_URL` NÃO tem trava de `localhost`, e a ausência é deliberada.** O
 Express roda na **mesma VPS** do Kong, então `http://localhost:8000` é o valor
@@ -447,7 +479,11 @@ Tabela de busca. Se está caçando um problema às 2h da manhã, comece por aqui
 |---|---|---|
 | **404 em toda rota da loja**, com migrações aplicadas | `canastra` fora de `PGRST_DB_SCHEMAS` | §3.3 |
 | **404 em `/rest/v1/rpc/fundir_sacola`** ou **`/rpc/garantir_cliente`** | a mesma | §3.3 |
-| **TODO cliente recebe 403** do serviço Node, e o log só diz `invalid signature` | `SUPABASE_JWT_SECRET` diferente do `JWT_SECRET` da instância. Não é a conta de ninguém: é a variável | §3.1 |
+| **TODO cliente recebe 403** do serviço Node, e o log diz `[auth:assinatura-hs256] invalid signature` | `SUPABASE_JWT_SECRET` diferente do `JWT_SECRET` da instância. Não é a conta de ninguém: é a variável. **Confira o prefixo do log antes de mexer no segredo** — se ele não citar `assinatura-hs256`, o problema é outro | §3.1 |
+| **TODO cliente recebe 403** e o log diz `[auth:kid-desconhecido]` ou `[auth:alg-nao-suportado]` | a instância assina em **ES256/RS256** e o token não casa com nenhuma chave publicada — `SUPABASE_URL` aponta para outro projeto, ou a chave foi rotacionada e o JWKS de lá não a publica. **O segredo não tem nada a ver**: mexer nele não muda nada | §3.1 |
+| **TODO cliente recebe 503** ("Não consegui verificar sua credencial agora") e o log diz `[auth:jwks-indisponivel]` ou `JWKS indisponível` | o `/auth/v1/.well-known/jwks.json` não respondeu. É infraestrutura, não credencial: Kong fora do ar, `SUPABASE_URL` errada, rede bloqueada | §3.1 |
+| **TODO cliente recebe 503** e o log diz `[auth:hs256-sem-segredo]` | chegou token HS256 e `SUPABASE_JWT_SECRET` está vazia. Ou a instância assina em HS256 e falta a variável, ou alguém está mandando a `anon`/`service_role` legada como credencial de pessoa | §3.1 |
+| **A API recusa subir** com "Nenhum caminho de verificação de token configurado" | `SUPABASE_JWT_SECRET` vazia **e** o JWKS da instância sem nenhuma chave assimétrica. É a trava de §3.1 fazendo o trabalho dela: sem ela, a loja subiria e responderia 503 para todo mundo | §3.1 |
 | **UM cliente recebe 403** com `"Sua conta ainda não está vinculada a esta loja."` | esse `sub` não tem linha em `canastra.clientes` — e-mail não confirmado, ou `garantir_cliente` nunca rodou para ele. É a defesa da §9.1 fazendo o trabalho dela | §9.1, migração 0008 |
 | **Rota autenticada responde 503** ("Não consegui confirmar sua conta agora") | a consulta de vínculo falhou. O problema é o **banco**, não o token — banco fora do ar não pode virar "entra sem conferir" | §9.1 |
 | **Exclusão de conta responde 503** | `SUPABASE_URL` ou `SUPABASE_SERVICE_ROLE_KEY` ausentes: `auth.users` pertence ao GoTrue e só a Admin API apaga de lá | §3.1 |

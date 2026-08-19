@@ -131,9 +131,13 @@ criam, então a vitrine mostra o JSON. Vale para o painel também. Fecha na F4 �
 
 Leia **`docs/producao.md`**. Em resumo:
 
-- `SUPABASE_JWT_SECRET` precisa ser **idêntico** ao `JWT_SECRET` da instância —
-  é com ele que o GoTrue assina. Um caractere diferente e **todo** cliente recebe
-  403, com nada no log além de `invalid signature`.
+- `SUPABASE_JWT_SECRET` é **condicional**, e depende de como a instância assina.
+  Instância em **HS256** (stack self-hosted padrão): a variável é obrigatória e
+  precisa ser **idêntica** ao `JWT_SECRET` de lá — um caractere diferente e
+  **todo** cliente recebe 403, com `[auth:assinatura-hs256] invalid signature` no
+  log. Instância com **chaves de assinatura** ES256/RS256 (Supabase hospedado já
+  migrado): deixe **vazia** — a chave pública vem do JWKS. Vazia **e** sem chave
+  no JWKS, a API recusa subir. `docs/producao.md` §3.1.
 - `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` são obrigatórias. Em produção a
   API **recusa subir** sem elas.
 - Troque `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` antes do seed.
