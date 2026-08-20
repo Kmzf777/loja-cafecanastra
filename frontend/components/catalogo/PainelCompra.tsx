@@ -11,6 +11,7 @@ import {
 } from "@/lib/catalogo/repositorio";
 import { Botao } from "@/components/ui/Botao";
 import { useSacola } from "@/lib/sacola/sacola";
+import { eventoAddToCart } from "@/lib/analytics";
 
 /**
  * Painel de compra da PDP — estetica.md §5.5, §5.6 e §7.3.
@@ -127,6 +128,19 @@ export function PainelCompra({ lote }: { lote: Lote }) {
         image: lote.fotos.pacote.src,
         size: variante.rotuloEmbalagem,
         moagem: MOAGENS.find((m) => m.valor === variante.moagem)?.rotulo,
+        // Identidade estável do funil GA4 — o begin_checkout da sacola reporta
+        // este mesmo id. Ver o comentário de `sku` em lib/sacola/sacola.tsx.
+        sku: variante.skuLoja,
+      });
+      // Depois do sucesso, nunca antes: um add_to_cart de item que a sacola
+      // recusou seria numero inventado no funil. No-op sem gtag (consentimento
+      // negado ou GA4 sem env) — ver lib/analytics.ts.
+      eventoAddToCart({
+        id: variante.skuLoja,
+        nome: `${lote.nome} — ${variante.rotuloEmbalagem}`,
+        precoCentavos: variante.preco,
+        quantidade,
+        variante: MOAGENS.find((m) => m.valor === variante.moagem)?.rotulo,
       });
       setAdicionado(true);
       window.setTimeout(() => setAdicionado(false), 2500);

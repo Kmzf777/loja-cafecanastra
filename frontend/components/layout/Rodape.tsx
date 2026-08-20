@@ -1,5 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
+import { linkWhatsApp } from "@/lib/whatsapp";
+import { BotaoReverCookies } from "./BotaoReverCookies";
 
 /**
  * estetica.md §5.10 — fundo fuligem, quatro colunas, e encerra com o lockup
@@ -43,12 +45,39 @@ const COLUNAS = [
   },
 ];
 
+type ItemDeColuna = { href: string; rotulo: string; externo?: boolean };
+
+/**
+ * As colunas com o canal de contato anexado quando ele existe.
+ *
+ * O link vem de `lib/whatsapp.ts` — a MESMA fonte do botão flutuante
+ * (BotaoWhatsApp), para número e mensagem nunca divergirem entre os dois.
+ * Sem a env, a coluna fica como está: link de contato que abre conversa com
+ * ninguém é pior do que não ter link.
+ */
+function colunas(): { titulo: string; itens: ItemDeColuna[] }[] {
+  const whatsapp = linkWhatsApp();
+  if (!whatsapp) return COLUNAS;
+
+  return COLUNAS.map((coluna) =>
+    coluna.titulo === "Ajuda"
+      ? {
+          ...coluna,
+          itens: [
+            ...coluna.itens,
+            { href: whatsapp, rotulo: "WhatsApp", externo: true },
+          ],
+        }
+      : coluna,
+  );
+}
+
 export function Rodape() {
   return (
     <footer className="mt-auto bg-fuligem text-cal">
       <div className="mx-auto max-w-[1440px] px-4 py-14 md:px-10 md:py-24">
         <div className="grid grid-cols-2 gap-x-8 gap-y-10 md:grid-cols-4">
-          {COLUNAS.map((coluna) => (
+          {colunas().map((coluna) => (
             <div key={coluna.titulo}>
               <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-juta">
                 {coluna.titulo}
@@ -56,14 +85,35 @@ export function Rodape() {
               <ul className="mt-4 space-y-2.5">
                 {coluna.itens.map((item) => (
                   <li key={item.href}>
-                    <Link
-                      href={item.href}
-                      className="text-[15px] text-cal/80 transition-colors hover:text-cal focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
-                    >
-                      {item.rotulo}
-                    </Link>
+                    {item.externo ? (
+                      // <a> e nao <Link>: destino fora da loja (wa.me).
+                      <a
+                        href={item.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[15px] text-cal/80 transition-colors hover:text-cal focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+                      >
+                        {item.rotulo}
+                      </a>
+                    ) : (
+                      <Link
+                        href={item.href}
+                        className="text-[15px] text-cal/80 transition-colors hover:text-cal focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+                      >
+                        {item.rotulo}
+                      </Link>
+                    )}
                   </li>
                 ))}
+                {coluna.titulo === "Ajuda" ? (
+                  // Botão, não link: revoga o consentimento de cookies na hora
+                  // (LGPD — sair tem de ser tão fácil quanto entrar). Estilo dos
+                  // vizinhos, passado por prop porque o padrão do componente é o
+                  // da página clara.
+                  <li>
+                    <BotaoReverCookies className="text-[15px] text-cal/80 transition-colors hover:text-cal focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho" />
+                  </li>
+                ) : null}
               </ul>
             </div>
           ))}

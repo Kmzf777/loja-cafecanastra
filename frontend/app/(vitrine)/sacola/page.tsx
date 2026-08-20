@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSacola } from "@/lib/sacola/sacola";
 import { formatarPreco } from "@/lib/catalogo/repositorio";
 import { BotaoLink } from "@/components/ui/Botao";
+import { eventoBeginCheckout } from "@/lib/analytics";
 
 /**
  * Sacola.
@@ -145,7 +146,28 @@ export default function PaginaSacola() {
             </p>
 
             <div className="mt-6">
-              <BotaoLink href="/checkout" variante="primario" className="w-full">
+              {/* begin_checkout ANTES da navegação: o clique é o momento em
+                  que a intenção existe. No-op sem consentimento/GA4, e não
+                  atrasa nada — o gtag enfileira e a navegação segue. */}
+              <BotaoLink
+                href="/checkout"
+                variante="primario"
+                className="w-full"
+                onClick={() =>
+                  eventoBeginCheckout(
+                    itens.map((i) => ({
+                      // O MESMO id do add_to_cart (skuLoja), senão o funil do
+                      // GA4 não liga os dois eventos. Fallback para o id de
+                      // banco: item antigo no localStorage não carrega `sku`.
+                      id: i.sku ?? i.product_id,
+                      nome: i.name,
+                      precoCentavos: Math.round(Number(i.price) * 100),
+                      quantidade: Number(i.quantity),
+                      variante: i.moagem,
+                    })),
+                  )
+                }
+              >
                 Fechar pedido
               </BotaoLink>
             </div>

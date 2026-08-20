@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { PaginaTexto, AvisoJuridico } from "@/components/layout/PaginaTexto";
+import { BotaoReverCookies } from "@/components/layout/BotaoReverCookies";
 
 export const metadata: Metadata = {
   title: "Política de privacidade — Café Canastra",
@@ -45,6 +46,10 @@ export default function PoliticaDePrivacidade() {
         Usamos cookies necessários para manter você conectado e guardar a sacola.
         Cookies de medição só são usados se você aceitar no aviso que aparece na
         primeira visita.
+      </p>
+      <p>
+        Mudou de ideia? <BotaoReverCookies /> — o aviso volta a aparecer e a
+        medição para na hora. Sessão e sacola continuam funcionando.
       </p>
 
       <h2>Seus direitos</h2>

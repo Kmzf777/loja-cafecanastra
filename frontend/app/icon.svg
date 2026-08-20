@@ -1,0 +1,10 @@
+<!-- Favicon da vitrine (convencao de arquivo do App Router).
+     A silhueta e o perfil da serra de components/marca/Serra.tsx, simplificado
+     para ler em 16px. Cores dos tokens de app/globals.css: fundo fuligem
+     (#14110E), serra em juta (#C9A87A) — o kraft sobre o preto da embalagem. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#14110E"/>
+  <path
+    fill="#C9A87A"
+    d="M0 52 L6.3 46.2 L10.5 42.5 L14.3 38.8 L18.8 35 L22.6 32.6 L26.6 28.9 L30.2 25.8 L33.5 19.4 L35.1 16 L36.7 18.4 L38.1 22.5 L39.6 20.8 L41.3 24.8 L44.7 27.5 L48.3 30.3 L51.8 33.7 L55.5 37.4 L59.1 43.8 L64 51 L64 64 L0 64 Z"/>
+</svg>

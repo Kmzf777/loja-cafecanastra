@@ -69,6 +69,35 @@ export type FormatoEspecial = {
   estoque: number;
 };
 
+/**
+ * Caixa que mistura linhas — o kit não é variante de PDP nenhuma (uma caixa
+ * com um pacote de cada linha não pertence a nenhuma delas), então ganha um
+ * tipo próprio e uma superfície própria na PLP ("Kits e caixas").
+ *
+ * Mesmos nomes de campo comercial da `Variante` (`preco`, `estoque`,
+ * `produtoId`, `skuLoja`) DE PROPÓSITO: é o que deixa o kit passar pelo mesmo
+ * mecanismo de dados ao vivo do repositório sem contrato paralelo.
+ */
+export type Kit = {
+  sku: string;
+  skuLoja: string;
+  produtoId?: string;
+  nome: string;
+  rotuloEmbalagem: string;
+  formato: Formato;
+  /** Linha "dominante" do kit no catálogo — define fita de cor e imagem. */
+  linha: Linha;
+  /** Arte da linha dominante — os kits não têm foto própria no acervo. */
+  imagem: string;
+  /** Em centavos. 0 quando a loja não exibe preço por estar esgotado. */
+  preco: number;
+  estoque: number;
+  /** Quantos pacotes/caixas dentro do kit. */
+  pacotes: number;
+  /** Unidades (sachês, cápsulas) quando o formato conta por unidade. */
+  unidades?: number;
+};
+
 export type Preparo = {
   metodo: Metodo;
   proporcao: string;

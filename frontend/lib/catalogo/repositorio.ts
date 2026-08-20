@@ -1,5 +1,5 @@
-import { LOTES } from "./produtos";
-import type { Filtros, Lote, Ordenacao, Variante } from "./tipos";
+import { KITS_DA_LOJA, LOTES } from "./produtos";
+import type { Filtros, Kit, Lote, Ordenacao, Variante } from "./tipos";
 
 /**
  * Unica porta de entrada do catalogo. Nenhuma pagina conhece a origem do dado.
@@ -52,30 +52,49 @@ async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
   }
 }
 
+/**
+ * Sobrepoe o comercial do banco sobre UM item vendavel (variante, formato
+ * especial ou kit — qualquer coisa com `skuLoja`/`preco`/`estoque`). Extraida
+ * de `aplicarDadosAoVivo` quando os kits ganharam superficie de venda, para os
+ * tres caminhos usarem exatamente a mesma regra de casamento por SKU.
+ */
+function sobreporAoVivo<
+  T extends { skuLoja: string; preco: number; estoque: number },
+>(v: T, aoVivo: Map<string, ProdutoDaApi>): T {
+  const vivo = aoVivo.get(v.skuLoja);
+  if (!vivo) return v;
+  return {
+    ...v,
+    produtoId: vivo.product_id,
+    preco: Math.round(Number(vivo.price) * 100),
+    estoque: Number(vivo.quantity),
+  };
+}
+
 /** Sobrepoe preco e estoque do banco sobre a estrutura editorial. */
 function aplicarDadosAoVivo(lote: Lote, aoVivo: Map<string, ProdutoDaApi>): Lote {
   if (aoVivo.size === 0) return lote;
 
-  const atualizar = <
-    T extends { skuLoja: string; preco: number; estoque: number },
-  >(
-    v: T,
-  ): T => {
-    const vivo = aoVivo.get(v.skuLoja);
-    if (!vivo) return v;
-    return {
-      ...v,
-      produtoId: vivo.product_id,
-      preco: Math.round(Number(vivo.price) * 100),
-      estoque: Number(vivo.quantity),
-    };
-  };
-
   return {
     ...lote,
-    variantes: lote.variantes.map(atualizar),
-    formatosEspeciais: lote.formatosEspeciais.map(atualizar),
+    variantes: lote.variantes.map((v) => sobreporAoVivo(v, aoVivo)),
+    formatosEspeciais: lote.formatosEspeciais.map((f) =>
+      sobreporAoVivo(f, aoVivo),
+    ),
   };
+}
+
+/**
+ * Os kits da loja, com preco/estoque/produtoId ao vivo quando a API responde.
+ *
+ * Mesmo desenho de contingencia de `listarLotes`: API fora → o JSON versionado
+ * segue de pe e o kit sem `produtoId` aparece mas nao vende (o CardKit avisa,
+ * como o PainelCompra). Kit esgotado NAO e filtrado aqui — a PLP o mostra
+ * desabilitado, porque sumir com produto e pior que dizer que acabou.
+ */
+export async function listarKits(): Promise<Kit[]> {
+  const aoVivo = await buscarDadosAoVivo();
+  return KITS_DA_LOJA.map((k) => sobreporAoVivo(k, aoVivo));
 }
 
 export async function listarLotes(

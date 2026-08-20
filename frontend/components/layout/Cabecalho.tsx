@@ -28,6 +28,66 @@ const NAV = [
   { href: "/a-serra", rotulo: "A Serra" },
 ];
 
+/**
+ * Caixa de busca — form GET puro para /cafes?q=…, submit nativo.
+ *
+ * Progressive enhancement de graça: sem JS o navegador monta a querystring e a
+ * PLP (Server Component) filtra no servidor. Nenhum estado, nenhum onChange —
+ * e o Cabecalho continua Server Component. O `id` distingue as duas instâncias
+ * (barra desktop e painel mobile) para o htmlFor não duplicar, e o `rotulo`
+ * distingue os dois landmarks `role="search"` para o leitor de tela — dois
+ * landmarks iguais na mesma página obrigam a visitar ambos para saber qual é.
+ */
+function FormBusca({
+  id,
+  rotulo,
+  className = "",
+}: {
+  id: string;
+  rotulo: string;
+  className?: string;
+}) {
+  return (
+    <form
+      action="/cafes"
+      method="get"
+      role="search"
+      aria-label={rotulo}
+      className={`flex items-stretch ${className}`}
+    >
+      <label htmlFor={id} className="sr-only">
+        Buscar cafés
+      </label>
+      <input
+        id={id}
+        type="search"
+        name="q"
+        placeholder="Buscar café"
+        autoComplete="off"
+        className="h-11 w-full min-w-0 border border-r-0 border-fuligem-20 bg-cal-puro px-3 text-[14px] placeholder:text-fuligem-55 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+      />
+      <button
+        type="submit"
+        aria-label="Buscar"
+        className="flex h-11 w-11 shrink-0 items-center justify-center border border-fuligem-20 text-fuligem-55 transition-colors hover:border-fuligem hover:text-fuligem focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+      >
+        <svg
+          viewBox="0 0 20 20"
+          aria-hidden
+          className="size-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        >
+          <circle cx="9" cy="9" r="6" />
+          <path d="m13.5 13.5 4.5 4.5" />
+        </svg>
+      </button>
+    </form>
+  );
+}
+
 function Logo() {
   return (
     <Link
@@ -82,6 +142,7 @@ export function Cabecalho() {
                 ))}
               </ul>
             </nav>
+            <FormBusca id="busca-desktop" rotulo="Buscar cafés" className="w-56" />
             <AtalhosDoCliente />
           </div>
 
@@ -112,6 +173,11 @@ export function Cabecalho() {
               aria-label="Principal"
               className="absolute inset-x-0 top-full z-50 flex h-[calc(100dvh-72px)] flex-col overflow-y-auto border-t border-fuligem-20 bg-cal"
             >
+              {/* A busca abre o painel: quem toca em "Menu" no celular esta
+                  procurando alguma coisa — o campo vem antes dos links. */}
+              <div className="border-b border-fuligem-20 px-4 py-4">
+                <FormBusca id="busca-mobile" rotulo="Buscar cafés (menu)" />
+              </div>
               <ul className="flex flex-col">
                 {NAV.map((item) => (
                   <li key={item.href} className="border-b border-fuligem-20">

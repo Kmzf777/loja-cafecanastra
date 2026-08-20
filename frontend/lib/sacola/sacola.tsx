@@ -61,6 +61,21 @@ export type ItemDaSacola = {
   /** Moagem escolhida. Não existe no backend legado; viaja só localmente. */
   moagem?: string;
   /**
+   * `skuLoja` do catálogo — a identidade ESTÁVEL do item no funil do GA4.
+   *
+   * Existe porque `add_to_cart` reporta `item_id = skuLoja` (PainelCompra e
+   * CardKit) e o `begin_checkout` da página da sacola precisa reportar o MESMO
+   * id, senão o funil do GA4 quebra a ligação entre os dois eventos. O
+   * `product_id` não serve de identidade de funil: é o id de banco, que muda
+   * entre ambientes e não diz qual variante comercial é.
+   *
+   * OPCIONAL de verdade, com fallback: sacolas antigas no `localStorage` não o
+   * têm, e `limparItens` da fusão (que reconstrói cada item campo a campo) não
+   * o preserva — quem reporta usa `sku ?? product_id`. Nenhuma requisição o
+   * manda: `traduzirParaFusao`, checkout e frete montam o corpo campo a campo.
+   */
+  sku?: string;
+  /**
    * Campo INTERNO da fusão — não é dado de produto e nenhuma tela o lê.
    *
    * Presente, ele diz "este item já está dentro da sacola da conta", e é o que

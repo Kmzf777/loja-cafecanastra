@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   listarLotes,
+  listarKits,
   obterLote,
   listarSlugs,
   precoMinimo,
@@ -126,5 +127,36 @@ describe("repositorio do catalogo", () => {
     expect(embalagensDe(lote!, "grao", 500)).toEqual([1, 4]);
     // 250 g em grao so avulso.
     expect(embalagensDe(lote!, "grao", 250)).toEqual([1]);
+  });
+
+  it("lista os 3 kits da loja com o vocabulario comercial das variantes", async () => {
+    const kits = await listarKits();
+    expect(kits).toHaveLength(3);
+    for (const kit of kits) {
+      expect(kit.sku).toBeTruthy();
+      expect(kit.skuLoja).toBe(kit.sku);
+      expect(typeof kit.preco).toBe("number");
+      expect(typeof kit.estoque).toBe("number");
+      expect(kit.imagem.startsWith("/")).toBe(true);
+      expect(kit.rotuloEmbalagem).toBeTruthy();
+    }
+  });
+
+  it("kit esgotado continua na lista — a PLP o desabilita, nao o esconde", async () => {
+    const kits = await listarKits();
+    // As duas caixas de capsulas estao sem preco e sem estoque na captura.
+    const esgotados = kits.filter((k) => k.estoque === 0);
+    expect(esgotados.length).toBeGreaterThan(0);
+  });
+
+  it("o kit vendavel real traz o preco do catalogo", async () => {
+    const kits = await listarKits();
+    const caixa = kits.find(
+      (k) => k.sku === "kit-canela-classico-suave-moido-3x250",
+    );
+    // Sem API no ambiente de teste, vale o JSON versionado: R$ 109,70.
+    expect(caixa?.preco).toBe(10970);
+    expect(caixa?.linha).toBe("canela");
+    expect(caixa?.imagem).toBe("/cafe-canela.png");
   });
 });

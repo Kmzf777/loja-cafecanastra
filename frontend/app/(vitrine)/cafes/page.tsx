@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { listarLotes } from "@/lib/catalogo/repositorio";
+import { listarKits, listarLotes } from "@/lib/catalogo/repositorio";
+import { filtrarPorTexto } from "@/lib/busca";
+import { CardKit } from "@/components/catalogo/CardKit";
 import { FORMATOS, MOAGENS, ORDENACOES } from "@/lib/catalogo/tipos";
 import type {
   Filtros,
@@ -67,8 +69,9 @@ function lerFiltros(sp: Busca): { filtros: Filtros; ordenacao: Ordenacao } {
 }
 
 /** Chips do que esta ativo — o §7.2 pede "Ativos: (Torra média ×) Limpar tudo". */
-function ativos(f: Filtros, ordenacao: Ordenacao) {
+function ativos(f: Filtros, ordenacao: Ordenacao, q?: string) {
   const out: { chave: string; rotulo: string }[] = [];
+  if (q) out.push({ chave: "q", rotulo: `Busca: “${q}”` });
   if (f.linha) out.push({ chave: "linha", rotulo: LINHAS[f.linha].rotulo });
   if (f.moagem)
     out.push({
@@ -108,8 +111,12 @@ export default async function PaginaCafes({
 }) {
   const sp = await searchParams;
   const { filtros, ordenacao } = lerFiltros(sp);
-  const lotes = await listarLotes(filtros, ordenacao);
-  const chips = ativos(filtros, ordenacao);
+  const q = texto(sp.q)?.trim() || undefined;
+  // A busca por texto e regra de apresentacao, nao de catalogo: aplica-se
+  // DEPOIS das facetas do repositorio — ver o comentario em lib/busca.ts.
+  const lotes = filtrarPorTexto(await listarLotes(filtros, ordenacao), q);
+  const kits = await listarKits();
+  const chips = ativos(filtros, ordenacao, q);
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-10 md:px-10 md:py-16">
@@ -124,6 +131,9 @@ export default async function PaginaCafes({
 
       {/* Submit nativo: funciona sem JS. */}
       <form method="get" className="mt-8 border-y border-fuligem-20 py-6">
+        {/* A busca da caixa do cabeçalho sobrevive ao reenvio dos filtros:
+            sem este hidden, mexer em "Linha" apagaria o `q` da URL. */}
+        {q ? <input type="hidden" name="q" value={q} /> : null}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <div>
             <label htmlFor="f-linha" className={ROTULO}>
@@ -280,13 +290,23 @@ export default async function PaginaCafes({
         // §11: tela vazia e convite, e o erro explica e resolve. Nunca "0 resultados".
         <div className="mt-16 max-w-[52ch]">
           <p className="titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
-            Nenhum café com esses filtros.
+            {q ? `Nenhum café para “${q}”.` : "Nenhum café com esses filtros."}
           </p>
           <p className="mt-4 text-[17px] text-fuligem-80">
-            Tente afrouxar a torra ou o formato — a casa vai da{" "}
-            <span className="font-dado">torra média</span> do Suave à{" "}
-            <span className="font-dado">média-escura</span> do Clássico, em grãos
-            ou moído.
+            {q ? (
+              <>
+                Tente pelo nome da linha — Clássico, Suave, Canela — ou por uma
+                nota, como <span className="font-dado">chocolate</span> ou{" "}
+                <span className="font-dado">frutado</span>.
+              </>
+            ) : (
+              <>
+                Tente afrouxar a torra ou o formato — a casa vai da{" "}
+                <span className="font-dado">torra média</span> do Suave à{" "}
+                <span className="font-dado">média-escura</span> do Clássico, em
+                grãos ou moído.
+              </>
+            )}
           </p>
           <div className="mt-8">
             <BotaoLink href="/cafes" variante="secundario">
@@ -295,6 +315,31 @@ export default async function PaginaCafes({
           </div>
         </div>
       )}
+
+      {/* ── Kits e caixas ────────────────────────────────────────────────────
+          A superfície de venda dos kits do catálogo, que até aqui só existiam
+          no JSON. Fica fora dos filtros de propósito: kit mistura linhas, e um
+          filtro de "linha" ou "torra" não o descreve. Kit esgotado aparece
+          desabilitado no card, nunca some. */}
+      {kits.length ? (
+        <section aria-labelledby="titulo-kits" className="mt-16 border-t border-fuligem-20 pt-10 md:mt-24 md:pt-14">
+          <h2
+            id="titulo-kits"
+            className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight"
+          >
+            Kits e caixas
+          </h2>
+          <p className="mt-3 max-w-[52ch] text-[15px] text-fuligem-80">
+            Mais de uma linha na mesma caixa — para conhecer a casa inteira ou
+            não escolher entre os favoritos.
+          </p>
+          <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
+            {kits.map((kit) => (
+              <CardKit key={kit.sku} kit={kit} />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

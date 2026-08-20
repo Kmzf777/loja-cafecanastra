@@ -20,6 +20,7 @@ import bruto from "../../../data/catalogo-canastra.json";
 import type {
   Formato,
   FormatoEspecial,
+  Kit,
   Linha,
   Lote,
   Moagem,
@@ -174,3 +175,31 @@ export const MARCA = bruto.marca;
 export const KITS = (bruto.produtos as ProdutoBruto[]).filter(
   (p) => "kit" in p && p.kit,
 );
+
+/**
+ * Os mesmos kits, no formato que a vitrine vende.
+ *
+ * Até aqui `KITS` era só o filtro bruto do JSON, sem superfície de venda
+ * nenhuma. Este mapeamento os põe no mesmo vocabulário comercial das
+ * variantes (`preco`/`estoque`/`skuLoja`) para que `listarKits()` no
+ * repositório aplique preço e estoque ao vivo pelo MESMO mecanismo — e para
+ * que o CardKit não precise conhecer o JSON cru.
+ *
+ * A imagem vem da linha dominante do kit: os kits não têm foto própria no
+ * acervo, e inventar uma seria pior do que reusar a arte real do pacote.
+ */
+export const KITS_DA_LOJA: Kit[] = KITS.map((p) => ({
+  sku: p.sku,
+  skuLoja: p.sku,
+  nome: p.nome,
+  rotuloEmbalagem: p.rotuloEmbalagem,
+  formato: p.formato as Formato,
+  linha: p.linha as Linha,
+  imagem:
+    bruto.linhas.find((l) => l.slug === p.linha)?.imagem ??
+    "/logo-canastra.png",
+  preco: p.precoCentavos,
+  estoque: p.estoque,
+  pacotes: p.pacotes,
+  ...("unidades" in p ? { unidades: p.unidades as number } : {}),
+}));

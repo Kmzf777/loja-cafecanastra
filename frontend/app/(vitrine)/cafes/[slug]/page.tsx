@@ -11,6 +11,11 @@ import {
 } from "@/lib/catalogo/repositorio";
 import { MOAGENS } from "@/lib/catalogo/tipos";
 import { rotuloNota } from "@/lib/catalogo/rotulos";
+import {
+  breadcrumbJsonLd,
+  productJsonLd,
+  serializarJsonLd,
+} from "@/lib/seo/jsonld";
 import { SeloSCA } from "@/components/catalogo/SeloSCA";
 import { PontoTorra } from "@/components/catalogo/PontoTorra";
 import { FichaLavoura } from "@/components/catalogo/FichaLavoura";
@@ -74,8 +79,38 @@ export default async function PaginaLote({
     (f): f is NonNullable<typeof f> => Boolean(f),
   );
 
+  // `null` quando NENHUMA variante tem preco (a Canela esgotada da captura):
+  // Product sem oferta e erro de elegibilidade no Search Console, entao a
+  // pagina fica so com o Breadcrumb ate a linha voltar a ter preco.
+  const productLd = productJsonLd(lote);
+
   return (
     <>
+      {/* JSON-LD de Product + Breadcrumb — e por isto que a PDP e estatica:
+          o crawler recebe oferta, preco e disponibilidade sem executar JS.
+          O preco/estoque aqui e o do build (ou do cache de 60 s do
+          repositorio); quem cobra continua sendo o checkout, no servidor. */}
+      {productLd ? (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: serializarJsonLd(productLd),
+          }}
+        />
+      ) : null}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: serializarJsonLd(
+            breadcrumbJsonLd([
+              { nome: "Início", url: "/" },
+              { nome: "Cafés", url: "/cafes" },
+              { nome: lote.nome, url: `/cafes/${lote.slug}` },
+            ]),
+          ),
+        }}
+      />
+
       {/* ── Topo: galeria + compra ──────────────────────────── superfície cal */}
       <div className="mx-auto max-w-[1440px] px-4 py-10 md:px-10 md:py-16">
         <nav aria-label="Trilha" className="mb-8 text-[12px] uppercase tracking-[0.14em] text-fuligem-55">
