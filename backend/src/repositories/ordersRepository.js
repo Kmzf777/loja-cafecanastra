@@ -13,7 +13,19 @@ const { v4: uuidv4 } = require("uuid");
  * verdade. Erro agora sobe, vira 500 no handler e aparece no log.
  */
 
-/** A projeção de um pedido no contrato HTTP. */
+/**
+ * A projeção de um pedido no contrato HTTP.
+ *
+ * `coupon_code`/`discount` (colunas `cupom_codigo`/`desconto`, migração 0010)
+ * entram na projeção porque o `createOrder` abaixo JÁ grava nelas — o módulo
+ * inteiro depende da 0010 aplicada, então não há cenário em que ler as
+ * colunas quebre e gravar funcione. O contrato do plano diz "se houver":
+ * pedido sem cupom sai `coupon_code: null` e `discount: "0.00"` (numeric do
+ * pg vira string), e é assim que painel e vitrine testam a presença
+ * (`if (order.coupon_code)` / `Number(order.discount) > 0`). `discount` está
+ * em REAIS, a mesma unidade de `total_amount` — decisão da 0010, como
+ * `total` e `frete`.
+ */
 const COLUNAS_DO_CONTRATO = `
   pedido_id          AS order_id,
   user_id,
@@ -27,6 +39,8 @@ const COLUNAS_DO_CONTRATO = `
   frete              AS shipping_cost,
   metodo_envio       AS shipping_method,
   codigo_rastreio    AS tracking_code,
+  cupom_codigo       AS coupon_code,
+  desconto           AS discount,
   criado_em          AS created_at,
   atualizado_em      AS updated_at
 `;
@@ -49,12 +63,19 @@ class OrderRepository {
     shippingMethod,
     chaveIdempotencia,
     status = "pendente",
+    // Cupons (0010): a fotografia do cupom no pedido. Os SELECTs do contrato
+    // expõem as duas colunas como coupon_code/discount — ver
+    // COLUNAS_DO_CONTRATO.
+    cupomCodigo = null,
+    desconto = 0,
   }) {
     const { rows } = await pool.query(
       `INSERT INTO canastra.pedidos
          (pedido_id, user_id, total, status, metodo_pagamento, pagamento_id_mp,
-          chave_idempotencia, itens, endereco_json, frete, metodo_envio)
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)
+          chave_idempotencia, itens, endereco_json, frete, metodo_envio,
+          cupom_codigo, desconto)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11,
+               $12, $13)
        RETURNING ${COLUNAS_DO_CONTRATO}`,
       [
         uuidv4(),
@@ -68,6 +89,8 @@ class OrderRepository {
         address_json ? JSON.stringify(address_json) : null,
         shippingCost,
         shippingMethod,
+        cupomCodigo,
+        desconto,
       ],
     );
     return rows[0];
@@ -170,6 +193,8 @@ class OrderRepository {
          p.frete            AS shipping_cost,
          p.metodo_envio     AS shipping_method,
          p.codigo_rastreio  AS tracking_code,
+         p.cupom_codigo     AS coupon_code,
+         p.desconto         AS discount,
          COALESCE(c.nome, 'Cliente removido') AS user_name,
          COALESCE(u.email, '—')               AS user_email,
          c.cpf                                AS user_cpf
@@ -191,6 +216,76 @@ class OrderRepository {
       [orderId],
     );
     return rows[0];
+  }
+
+  /**
+   * O detalhe de UM pedido para `GET /my-orders/:id`: a MESMA projeção da
+   * listagem (`COLUNAS_DO_CONTRATO`, com coupon_code/discount). Quem decide
+   * se o chamador PODE ver este pedido é o controller — aqui só se busca.
+   */
+  async getOrderDetail(orderId, client = pool) {
+    return this.getOrderById(orderId, client);
+  }
+
+  /**
+   * Todos os pedidos do período, SEM paginação, para o CSV do admin.
+   *
+   * `ate` é INCLUSIVO no dia: o gestor que pede "até 2026-08-20" espera os
+   * pedidos daquele dia dentro — por isso `< ate + 1 dia`, e não `<= ate`
+   * (que cortaria tudo depois da meia-noite). A ordem é cronológica
+   * crescente porque é assim que uma planilha de conferência se lê.
+   *
+   * O DIA É O DE SÃO PAULO, não o de UTC — porque é o fuso em que o CSV
+   * imprime a coluna `data` (csvDePedidos.dataBr). Sem o `AT TIME ZONE`,
+   * um pedido de 23h de 20/08 (02h de 21/08 em UTC) apareceria no arquivo
+   * "até 20/08" com data 20/08... ou ficaria de fora dele, dependendo do
+   * fuso do servidor — as duas metades do relatório discordando do próprio
+   * título. A expressão continua sargável: o índice em `criado_em` compara
+   * contra uma constante calculada uma vez.
+   *
+   * O formato de `de`/`ate` (YYYY-MM-DD) é validado no controller; aqui o
+   * cast `::date` é a última linha de defesa.
+   */
+  async getOrdersForExport({ de, ate } = {}) {
+    const filtros = [];
+    const values = [];
+    if (de) {
+      values.push(de);
+      filtros.push(
+        `p.criado_em >= ($${values.length}::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
+      );
+    }
+    if (ate) {
+      values.push(ate);
+      filtros.push(
+        `p.criado_em < ($${values.length}::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
+      );
+    }
+    const where = filtros.length ? `WHERE ${filtros.join(" AND ")}` : "";
+
+    const { rows } = await pool.query(
+      `SELECT
+         p.pedido_id        AS order_id,
+         p.criado_em        AS created_at,
+         p.total            AS total_amount,
+         p.status,
+         p.metodo_pagamento AS payment_method,
+         p.itens            AS items,
+         p.frete            AS shipping_cost,
+         p.codigo_rastreio  AS tracking_code,
+         p.cupom_codigo     AS coupon_code,
+         p.desconto         AS discount,
+         COALESCE(c.nome, 'Cliente removido') AS user_name,
+         COALESCE(u.email, '—')               AS user_email,
+         c.cpf                                AS user_cpf
+       FROM canastra.pedidos p
+       LEFT JOIN canastra.clientes c ON c.user_id = p.user_id
+       LEFT JOIN auth.users u        ON u.id      = p.user_id
+       ${where}
+       ORDER BY p.criado_em ASC`,
+      values,
+    );
+    return rows;
   }
 
   async getOrderByPaymentId(paymentIdMp, client = pool) {

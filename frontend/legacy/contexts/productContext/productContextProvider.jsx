@@ -3,12 +3,30 @@ import productContext from "./createProductContext";
 import PropTypes from "prop-types";
 import fetchDataForm, { API_BASE } from "../../api";
 import { toast } from "react-toastify";
-import debounce from "just-debounce-it";
 import authContext from "../loginContext/createAuthContext";
 
+/**
+ * O CARRINHO AQUI É SÓ localStorage — as rotas `GET /cart` e
+ * `POST /cart/replace` morreram na F2 e as chamadas que este provider fazia
+ * a elas eram dois 404 de ruído em TODO load do painel. Nenhuma tela montada
+ * pela ilha do painel (`PainelApp.jsx`) usa o carrinho; quem usava eram as
+ * páginas da vitrine legada (`main.jsx`), que são código morto fora da
+ * ilha. O estado local fica porque essas páginas ainda compilam.
+ */
+/**
+ * A MESMA árvore de providers serve a vitrine legada (morta, main.jsx) e a
+ * ilha do painel em /dashboard. Dentro do painel, "produtos antigos",
+ * "novidades" e a conferência de estoque da sacola são requisições que
+ * ninguém consome — e os toasts de estoque da sacola apareceriam no ADMIN.
+ * O pathname decide uma vez: a ilha é client-only (ssr: false), então
+ * window sempre existe quando isto roda; o guard de typeof é só cinto.
+ */
+const ehPainel =
+  typeof window !== "undefined" &&
+  window.location.pathname.startsWith("/dashboard");
+
 const ProductProvider = ({ children }) => {
-  const { user, authFetch, initialized, getCsrfToken } =
-    useContext(authContext);
+  const { user, initialized } = useContext(authContext);
 
   const [dataForm, setDataForm] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -40,14 +58,6 @@ const ProductProvider = ({ children }) => {
   const listControllerRef = useRef(null);
   const oldControllerRef = useRef(null);
 
-  const doFetch = useCallback(
-    (url, options = {}) => {
-      if (user && authFetch) return authFetch(url, options);
-      return fetch(url, { ...options, credentials: "include" });
-    },
-    [user, authFetch],
-  );
-
   const cartRef = useRef(cart);
   useEffect(() => {
     cartRef.current = cart;
@@ -58,58 +68,6 @@ const ProductProvider = ({ children }) => {
       localStorage.setItem("cart", JSON.stringify(cart));
     }
   }, [cart]);
-
-  const syncingRef = useRef(false);
-
-  // Função para salvar no servidor
-  const replaceOnServer = useCallback(
-    async (items) => {
-      // Se não tiver user, só salva no localStorage (já feito pelo useEffect acima)
-      if (!user || !authFetch) return;
-
-      if (syncingRef.current) return;
-      syncingRef.current = true;
-
-      try {
-        let csrf = null;
-        try {
-          if (typeof getCsrfToken === "function") {
-            csrf = await getCsrfToken();
-          }
-        } catch (err) {
-          console.warn("replaceOnServer -> getCsrfToken failed:", err);
-        }
-
-        const res = await authFetch(`${API_BASE}/cart/replace`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(csrf ? { "X-CSRF-Token": csrf } : {}),
-          },
-          body: JSON.stringify({
-            items: items.map((it) => ({
-              product_id: it.product_id,
-              quantity: it.quantity,
-            })),
-          }),
-        });
-
-        if (!res.ok) {
-          console.error("Erro ao salvar carrinho no servidor");
-        }
-      } catch (err) {
-        console.error("replaceOnServer error:", err);
-      } finally {
-        syncingRef.current = false;
-      }
-    },
-    [authFetch, getCsrfToken, user],
-  );
-
-  // Debounce para não spammar o servidor
-  const debouncedReplace = useRef(
-    debounce((items) => replaceOnServer(items), 500),
-  ).current;
 
   // Função para validar estoque (chamada ao iniciar)
   const refreshCartStock = useCallback(
@@ -170,53 +128,24 @@ const ProductProvider = ({ children }) => {
             toast.info("O estoque de alguns itens mudou.");
           }
           setCart(validItems);
-          if (user) debouncedReplace(validItems);
         }
       } catch (err) {
         console.error("Erro refreshCartStock", err);
       }
     },
-    [user, debouncedReplace],
+    [],
   );
-
-  // Ao iniciar a sessão, decide se usa o Local ou o Server
-  const fetchCart = useCallback(async () => {
-    if (!user) return;
-
-    try {
-      // 1. Busca versão do servidor
-      const res = await doFetch(`${API_BASE}/cart`);
-      if (!res.ok) throw new Error(`GET /cart ${res.status}`);
-      const data = await res.json();
-      const serverItems = Array.isArray(data.items) ? data.items : [];
-
-      // 2. Busca versão local
-      const localRaw = localStorage.getItem("cart");
-      const localItems = localRaw ? JSON.parse(localRaw) : [];
-
-      if (localItems.length > 0) {
-        setCart(localItems);
-        replaceOnServer(localItems);
-        refreshCartStock(localItems);
-      } else {
-        setCart(serverItems);
-        refreshCartStock(serverItems);
-      }
-    } catch (err) {
-      console.error("fetchCart error:", err);
-    }
-  }, [doFetch, user, replaceOnServer, refreshCartStock]);
 
   useEffect(() => {
     if (!initialized) return;
 
-    if (user) {
-      fetchCart();
-    } else {
-      const local = JSON.parse(localStorage.getItem("cart") || "[]");
-      setCart(local);
-      refreshCartStock(local);
-    }
+    // Logado ou não, a fonte é o localStorage — só o estoque é conferido no
+    // servidor (rotas de catálogo, que existem). NO PAINEL a conferência não
+    // roda: o admin não usa a sacola, e os toasts de "estoque mudou" dela
+    // apareceriam no meio da gestão.
+    const local = JSON.parse(localStorage.getItem("cart") || "[]");
+    setCart(local);
+    if (!ehPainel) refreshCartStock(local);
 
     const onCartMerged = (e) => {
       const mergedItems = (e && e.detail) || [];
@@ -236,7 +165,7 @@ const ProductProvider = ({ children }) => {
       window.removeEventListener("shop:cartMerged", onCartMerged);
       window.removeEventListener("shop:logout", onLogout);
     };
-  }, [user, initialized, fetchCart, refreshCartStock]);
+  }, [user, initialized, refreshCartStock]);
 
   const fetchOld = useCallback(
     async (page = 1) => {
@@ -302,6 +231,10 @@ const ProductProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
+    // "Produtos antigos" e "novidades" são seções da VITRINE legada; nenhuma
+    // tela do painel as lê. Dentro de /dashboard eram duas requisições
+    // inúteis em todo load.
+    if (ehPainel) return;
     fetchOld(oldPage);
     fetchNew();
     return () => {
@@ -339,9 +272,15 @@ const ProductProvider = ({ children }) => {
         setTotalPages(data.totalPages ?? null);
         setTotal(data.total ?? null);
         setDataForm(enriched);
+        return true;
       } catch (err) {
-        if (err.name !== "AbortError")
-          console.error("updateProductList error:", err);
+        // O RESULTADO é devolvido em vez de relançado: quem chama sem catch
+        // (o useEffect deste provider) não pode virar unhandled rejection, e
+        // quem PRECISA saber (a tarja de erro de AddedProducts) lê o retorno.
+        // `undefined` = requisição superada por outra (abort) — não é erro.
+        if (err.name === "AbortError") return undefined;
+        console.error("updateProductList error:", err);
+        return false;
       } finally {
         setIsLoading(false);
         if (listControllerRef.current === controller)
@@ -394,8 +333,6 @@ const ProductProvider = ({ children }) => {
 
           if (newQty > maxStock) {
             toast.info(`Limite de estoque atingido: ${maxStock} unid.`);
-            // Se já tem no carrinho, não muda, mas dispara sync pra garantir
-            if (user) debouncedReplace(prev);
             return prev;
           }
           next[idx] = { ...prev[idx], quantity: newQty, stock: maxStock };
@@ -409,11 +346,10 @@ const ProductProvider = ({ children }) => {
           toast.success("Adicionado ao carrinho!");
         }
 
-        if (user) debouncedReplace(next);
         return next;
       });
     },
-    [debouncedReplace, user],
+    [],
   );
 
   const updateQuantity = useCallback(
@@ -434,24 +370,15 @@ const ProductProvider = ({ children }) => {
           p.product_id === productId ? { ...p, quantity: newQuantity } : p,
         );
 
-        if (user) debouncedReplace(next);
         return next;
       });
     },
-    [debouncedReplace, user],
+    [],
   );
 
-  const removeFromCart = useCallback(
-    (productId) => {
-      setCart((prev) => {
-        const next = prev.filter((p) => p.product_id !== productId);
-        // Salva direto no server sem debounce para garantir remoção
-        if (user) replaceOnServer(next);
-        return next;
-      });
-    },
-    [user, replaceOnServer],
-  );
+  const removeFromCart = useCallback((productId) => {
+    setCart((prev) => prev.filter((p) => p.product_id !== productId));
+  }, []);
 
   return (
     <productContext.Provider

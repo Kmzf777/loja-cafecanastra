@@ -1,7 +1,19 @@
 import { API_BASE } from "../../../api";
 import { toast } from "react-toastify";
-import { useEffect, useState, useContext, useCallback } from "react";
-import { FaChevronLeft, FaChevronRight, FaEye, FaTimes } from "react-icons/fa";
+import {
+  useEffect,
+  useState,
+  useContext,
+  useCallback,
+  useRef,
+} from "react";
+import {
+  FaChevronLeft,
+  FaChevronRight,
+  FaDownload,
+  FaEye,
+  FaTimes,
+} from "react-icons/fa";
 import PropTypes from "prop-types";
 
 import {
@@ -22,55 +34,107 @@ import {
 import authContext from "../../../contexts/loginContext/createAuthContext";
 import Loading from "../../Loading/Loading";
 
-const ModalOverlay = ({ children, onClose }) => (
-  <div
-    style={{
-      position: "fixed",
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: "rgba(0,0,0,0.6)",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
-      zIndex: 10000,
-      padding: "20px",
-    }}
-    onClick={onClose}
-  >
+/**
+ * CÓPIA LOCAL do vocabulário de status — a fonte é
+ * `backend/src/utils/statusDePedido.js` (que espelha o CHECK da migração
+ * 0009). O backend RECUSA com 400 qualquer valor fora desta lista, e recusa
+ * em especial o vocabulário antigo em inglês ("pending", "sent"...): enviar
+ * inglês daqui não é bug silencioso, é erro na cara do gestor. Se a lista
+ * mudar lá, muda aqui.
+ */
+const STATUS_DO_PEDIDO = [
+  { valor: "pendente", rotulo: "Pendente" },
+  { valor: "aprovado", rotulo: "Aprovado" },
+  { valor: "em_processamento", rotulo: "Em processamento" },
+  { valor: "autorizado", rotulo: "Autorizado" },
+  { valor: "enviado", rotulo: "Enviado" },
+  { valor: "entregue", rotulo: "Entregue" },
+  { valor: "cancelado", rotulo: "Cancelado" },
+  { valor: "rejeitado", rotulo: "Rejeitado" },
+  { valor: "reembolsado", rotulo: "Reembolsado" },
+];
+
+const rotuloDeStatus = (status) =>
+  STATUS_DO_PEDIDO.find((s) => s.valor === status)?.rotulo || status;
+
+const ModalOverlay = ({ children, onClose }) => {
+  // O onClose vive num ref para o efeito de teclado/foco rodar UMA vez por
+  // abertura: com onClose na lista de dependências, cada re-render do pai
+  // (que passa arrow function nova) removeria e recolocaria o listener — e o
+  // cleanup devolveria o foco ao gatilho com o modal ainda aberto.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  useEffect(() => {
+    // Quem abriu o modal foi um clique: é para lá que o foco volta quando
+    // ele fechar — sem isso, teclado e leitor de tela ficam perdidos no topo
+    // da página.
+    const gatilho = document.activeElement;
+    const aoTeclar = (e) => {
+      if (e.key === "Escape") onCloseRef.current?.();
+    };
+    document.addEventListener("keydown", aoTeclar);
+    return () => {
+      document.removeEventListener("keydown", aoTeclar);
+      if (gatilho instanceof HTMLElement) gatilho.focus();
+    };
+  }, []);
+
+  return (
     <div
-      onClick={(e) => e.stopPropagation()}
       style={{
-        backgroundColor: "white",
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: "rgba(0,0,0,0.6)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: 10000,
         padding: "20px",
-        borderRadius: "8px",
-        width: "600px",
-        maxWidth: "90%",
-        maxHeight: "85vh",
-        overflowY: "auto",
-        boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
-        position: "relative",
       }}
+      onClick={onClose}
     >
-      <button
-        onClick={onClose}
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
         style={{
-          position: "absolute",
-          top: "10px",
-          right: "10px",
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          fontSize: "1.2rem",
+          backgroundColor: "white",
+          padding: "20px",
+          borderRadius: "8px",
+          width: "600px",
+          maxWidth: "90%",
+          maxHeight: "85vh",
+          overflowY: "auto",
+          boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
+          position: "relative",
         }}
       >
-        <FaTimes />
-      </button>
-      {children}
+        <button
+          onClick={onClose}
+          aria-label="Fechar"
+          style={{
+            position: "absolute",
+            top: "10px",
+            right: "10px",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "1.2rem",
+          }}
+        >
+          <FaTimes />
+        </button>
+        {children}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const formatAddress = (addr) => {
   if (!addr) return "Endereço não informado";
@@ -79,6 +143,12 @@ const formatAddress = (addr) => {
   }, ${addr.city || ""} - ${addr.state || ""} (CEP: ${addr.zip_code || ""})`;
 };
 
+const moeda = (valor) =>
+  Number(valor || 0).toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+
 function Orders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -86,6 +156,22 @@ function Orders() {
   const { authFetch } = useContext(authContext);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  /**
+   * `erro` existe pelo mesmo motivo do HomeDashboard: zero pedidos é um
+   * número plausível. A versão anterior só logava no console e a tela
+   * mostrava "Nenhum pedido encontrado." com o servidor fora do ar — mentira
+   * apresentada com confiança.
+   */
+  const [erro, setErro] = useState(null);
+
+  // Modal de rastreio: substitui o window.prompt. Guarda o pedido alvo e o
+  // texto digitado; null = fechado.
+  const [rastreio, setRastreio] = useState(null);
+
+  // Exportação CSV: período opcional + trava de duplo clique.
+  const [exportDe, setExportDe] = useState("");
+  const [exportAte, setExportAte] = useState("");
+  const [exportando, setExportando] = useState(false);
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -96,9 +182,13 @@ function Orders() {
         const data = await res.json();
         setOrders(data.data || []);
         setTotalPages(data.totalPages || 1);
+        setErro(null);
+      } else {
+        setErro(`Não foi possível carregar os pedidos (erro ${res.status}).`);
       }
     } catch (err) {
       console.error("Erro ao buscar pedidos:", err);
+      setErro("Não foi possível falar com o servidor.");
     } finally {
       setLoading(false);
     }
@@ -143,18 +233,7 @@ function Orders() {
     return rangeWithDots;
   };
 
-  const handleStatusChange = async (orderId, newStatus) => {
-    let trackingCode = null;
-
-    if (newStatus === "sent") {
-      const input = window.prompt(
-        "Digite o Rastreio (ou deixe vazio para local):",
-      );
-
-      if (input === null) return;
-      trackingCode = input;
-    }
-
+  const enviarStatus = async (orderId, newStatus, trackingCode = null) => {
     try {
       const res = await authFetch(
         `${API_BASE}/admin/orders/${orderId}/status`,
@@ -169,28 +248,101 @@ function Orders() {
         toast.success("Status atualizado!");
         fetchOrders();
       } else {
-        toast.error("Erro ao atualizar.");
+        // O backend explica a recusa (status inválido, pedido inexistente);
+        // repassar a frase vale mais que um "Erro ao atualizar." genérico.
+        // Toast de 2s some rápido demais para uma falha de OPERAÇÃO — a
+        // frase vai também para a tarja persistente.
+        const corpo = await res.json().catch(() => ({}));
+        const frase = corpo.error || "Erro ao atualizar o pedido.";
+        toast.error(frase);
+        setErro(`Falha ao atualizar o pedido: ${frase}`);
       }
     } catch (err) {
       console.error("Erro ao atualizar status:", err);
       toast.error("Erro de conexão.");
+      setErro("Falha ao atualizar o pedido: erro de conexão com o servidor.");
     }
   };
 
+  const handleStatusChange = (orderId, newStatus) => {
+    if (newStatus === "enviado") {
+      // Rastreio pede um modal, não um window.prompt: o prompt nativo não
+      // tem rótulo claro, some em alguns navegadores e não segue o visual
+      // do painel. Cancelar fecha sem efeito — o select volta sozinho no
+      // re-render porque o valor vem de order.status.
+      setRastreio({ orderId, codigo: "" });
+      return;
+    }
+    enviarStatus(orderId, newStatus);
+  };
+
+  const confirmarRastreio = () => {
+    if (!rastreio) return;
+    const codigo = rastreio.codigo.trim();
+    setRastreio(null);
+    // Vazio segue vazio de propósito: entrega local não tem código.
+    enviarStatus(rastreio.orderId, "enviado", codigo);
+  };
+
+  const handleExport = async () => {
+    setExportando(true);
+    try {
+      const params = new URLSearchParams();
+      if (exportDe) params.set("de", exportDe);
+      if (exportAte) params.set("ate", exportAte);
+      const query = params.toString();
+      const res = await authFetch(
+        `${API_BASE}/admin/orders/export${query ? `?${query}` : ""}`,
+      );
+
+      if (!res.ok) {
+        const corpo = await res.json().catch(() => ({}));
+        toast.error(corpo.error || `Falha ao exportar (erro ${res.status}).`);
+        return;
+      }
+
+      // Download via blob: a rota exige Authorization, então um <a href>
+      // direto chegaria sem token e voltaria 401.
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const sufixo = [exportDe && `de-${exportDe}`, exportAte && `ate-${exportAte}`]
+        .filter(Boolean)
+        .join("-");
+      a.download = sufixo ? `pedidos-${sufixo}.csv` : "pedidos.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Erro ao exportar pedidos:", err);
+      toast.error("Erro de conexão ao exportar.");
+    } finally {
+      setExportando(false);
+    }
+  };
+
+  // Cores por status, no vocabulário português da 0009.
   const getStatusColor = (status) => {
     switch (status) {
-      case "approved":
+      case "aprovado":
         return "#2e7d32";
-      case "pending":
+      case "pendente":
         return "#f57c00";
-      case "rejected":
-        return "#d32f2f";
-      case "sent":
+      case "em_processamento":
+        return "#7b1fa2";
+      case "autorizado":
+        return "#00838f";
+      case "enviado":
         return "#1976d2";
-      case "delivered":
+      case "entregue":
         return "#00796b";
-      case "cancelled":
+      case "cancelado":
+      case "rejeitado":
         return "#d32f2f";
+      case "reembolsado":
+        return "#5d4037";
       default:
         return "#333";
     }
@@ -213,13 +365,154 @@ function Orders() {
     return path.startsWith("http") ? path : `${API_BASE}${path}`;
   };
 
+  const selectDeStatus = (order, style) => (
+    <select
+      value={order.status}
+      onChange={(e) => handleStatusChange(order.order_id, e.target.value)}
+      style={style}
+    >
+      {STATUS_DO_PEDIDO.map((s) => (
+        <option key={s.valor} value={s.valor}>
+          {s.rotulo}
+        </option>
+      ))}
+    </select>
+  );
+
   if (loading) return <Loading />;
 
   return (
     <div style={{ padding: "2rem", boxSizing: "border-box", width: "100%" }}>
-      <h2 style={{ fontSize: "1.5rem", marginBottom: "2rem", color: "#333" }}>
+      <h2 style={{ fontSize: "1.5rem", marginBottom: "1rem", color: "#333" }}>
         Gestão de Pedidos
       </h2>
+
+      {/* Tarja de erro ANTES da tabela (padrão do HomeDashboard): se algo
+          falhou — carregamento OU uma operação de status/rastreio —, o
+          gestor precisa saber antes de acreditar no que está na tela. Ela é
+          persistente (toast de 2s some rápido demais), tem o retry na mão e
+          é dismissível. */}
+      {erro && (
+        <div
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "10px",
+            margin: "0 0 16px",
+            padding: "10px 14px",
+            borderLeft: "3px solid #b3261e",
+            background: "#fdf2f1",
+            color: "#5c1a14",
+            fontSize: 14,
+          }}
+        >
+          <span style={{ flex: 1, minWidth: "200px" }}>
+            {erro} A lista abaixo pode estar vazia ou desatualizada.
+          </span>
+          <button
+            onClick={() => {
+              setLoading(true);
+              fetchOrders();
+            }}
+            style={{
+              padding: "6px 12px",
+              background: "#b3261e",
+              color: "#fff",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Tentar novamente
+          </button>
+          <button
+            onClick={() => setErro(null)}
+            aria-label="Dispensar aviso"
+            title="Dispensar aviso"
+            style={{
+              background: "none",
+              border: "none",
+              color: "#5c1a14",
+              cursor: "pointer",
+              fontSize: "1rem",
+              padding: "4px",
+            }}
+          >
+            <FaTimes />
+          </button>
+        </div>
+      )}
+
+      {/* Exportação para Excel: período opcional, arquivo baixado na hora. */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+          gap: "10px",
+          marginBottom: "1.5rem",
+          padding: "12px",
+          background: "#fafafa",
+          border: "1px solid #eee",
+          borderRadius: "6px",
+        }}
+      >
+        <label style={{ fontSize: "0.85rem", color: "#555" }}>
+          De
+          <input
+            type="date"
+            value={exportDe}
+            onChange={(e) => setExportDe(e.target.value)}
+            style={{
+              display: "block",
+              marginTop: 4,
+              padding: "6px 8px",
+              border: "1px solid #ccc",
+              borderRadius: 4,
+            }}
+          />
+        </label>
+        <label style={{ fontSize: "0.85rem", color: "#555" }}>
+          Até
+          <input
+            type="date"
+            value={exportAte}
+            onChange={(e) => setExportAte(e.target.value)}
+            style={{
+              display: "block",
+              marginTop: 4,
+              padding: "6px 8px",
+              border: "1px solid #ccc",
+              borderRadius: 4,
+            }}
+          />
+        </label>
+        <button
+          onClick={handleExport}
+          disabled={exportando}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "8px 14px",
+            background: exportando ? "#aaa" : "#2e7d32",
+            color: "#fff",
+            border: "none",
+            borderRadius: 4,
+            cursor: exportando ? "wait" : "pointer",
+            fontWeight: 600,
+          }}
+        >
+          <FaDownload size={13} />
+          {exportando ? "Exportando..." : "Exportar CSV"}
+        </button>
+        <span style={{ fontSize: "0.8rem", color: "#888" }}>
+          Sem datas, exporta todos os pedidos.
+        </span>
+      </div>
 
       <TableWrapper>
         <Table>
@@ -252,19 +545,14 @@ function Orders() {
                   <Td>
                     {new Date(order.created_at).toLocaleDateString("pt-BR")}
                   </Td>
-                  <Td>
-                    {Number(order.total_amount).toLocaleString("pt-BR", {
-                      style: "currency",
-                      currency: "BRL",
-                    })}
-                  </Td>
+                  <Td>{moeda(order.total_amount)}</Td>
                   <Td
                     style={{
                       color: getStatusColor(order.status),
                       fontWeight: "bold",
                     }}
                   >
-                    {order.status.toUpperCase()}
+                    {rotuloDeStatus(order.status)}
                   </Td>
                   <Td style={{ textAlign: "center" }}>
                     <button
@@ -281,19 +569,10 @@ function Orders() {
                     </button>
                   </Td>
                   <Td>
-                    <select
-                      value={order.status}
-                      onChange={(e) =>
-                        handleStatusChange(order.order_id, e.target.value)
-                      }
-                      style={{ padding: "5px", borderRadius: "4px" }}
-                    >
-                      <option value="pending">Pendente</option>
-                      <option value="approved">Aprovado</option>
-                      <option value="sent">Enviado</option>
-                      <option value="delivered">Entregue</option>
-                      <option value="cancelled">Cancelado</option>
-                    </select>
+                    {selectDeStatus(order, {
+                      padding: "5px",
+                      borderRadius: "4px",
+                    })}
                   </Td>
                 </Tr>
               ))
@@ -330,10 +609,7 @@ function Orders() {
               <CardRow>
                 <strong>Total:</strong>
                 <span style={{ color: "#2e7d32", fontWeight: "bold" }}>
-                  {Number(order.total_amount).toLocaleString("pt-BR", {
-                    style: "currency",
-                    currency: "BRL",
-                  })}
+                  {moeda(order.total_amount)}
                 </span>
               </CardRow>
               <CardRow>
@@ -344,7 +620,7 @@ function Orders() {
                     fontWeight: "bold",
                   }}
                 >
-                  {order.status.toUpperCase()}
+                  {rotuloDeStatus(order.status)}
                 </span>
               </CardRow>
 
@@ -376,24 +652,12 @@ function Orders() {
                   <FaEye /> Detalhes
                 </button>
 
-                <select
-                  value={order.status}
-                  onChange={(e) =>
-                    handleStatusChange(order.order_id, e.target.value)
-                  }
-                  style={{
-                    flex: 1,
-                    padding: "5px",
-                    borderRadius: "4px",
-                    border: "1px solid #ddd",
-                  }}
-                >
-                  <option value="pending">Pendente</option>
-                  <option value="approved">Aprovado</option>
-                  <option value="sent">Enviado</option>
-                  <option value="delivered">Entregue</option>
-                  <option value="cancelled">Cancelado</option>
-                </select>
+                {selectDeStatus(order, {
+                  flex: 1,
+                  padding: "5px",
+                  borderRadius: "4px",
+                  border: "1px solid #ddd",
+                })}
               </div>
             </Card>
           ))
@@ -430,6 +694,73 @@ function Orders() {
             <FaChevronRight size={12} />
           </PaginationButton>
         </PaginationContainer>
+      )}
+
+      {/* Modal de rastreio: o fim do window.prompt. */}
+      {rastreio && (
+        <ModalOverlay onClose={() => setRastreio(null)}>
+          <h3 style={{ borderBottom: "1px solid #eee", paddingBottom: "10px" }}>
+            Marcar como enviado
+          </h3>
+          <p style={{ margin: "12px 0 6px", fontSize: "0.9rem", color: "#555" }}>
+            Código de rastreio (deixe vazio para entrega local):
+          </p>
+          <input
+            autoFocus
+            value={rastreio.codigo}
+            onChange={(e) =>
+              setRastreio((r) => ({ ...r, codigo: e.target.value }))
+            }
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirmarRastreio();
+            }}
+            placeholder="Ex: AA123456789BR"
+            style={{
+              width: "100%",
+              padding: "10px",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              boxSizing: "border-box",
+              fontSize: "1rem",
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "10px",
+              marginTop: "16px",
+            }}
+          >
+            <button
+              onClick={() => setRastreio(null)}
+              style={{
+                padding: "8px 16px",
+                background: "#eee",
+                color: "#333",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={confirmarRastreio}
+              style={{
+                padding: "8px 16px",
+                background: "#1976d2",
+                color: "#fff",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontWeight: 600,
+              }}
+            >
+              Confirmar envio
+            </button>
+          </div>
+        </ModalOverlay>
       )}
 
       {selectedOrder && (
@@ -477,15 +808,29 @@ function Orders() {
                 <strong>Método:</strong>{" "}
                 {selectedOrder.shipping_method || "Não informado"} <br />
                 <strong>Custo Frete:</strong>{" "}
-                {Number(selectedOrder.shipping_cost || 0).toLocaleString(
-                  "pt-BR",
-                  { style: "currency", currency: "BRL" },
-                )}
+                {moeda(selectedOrder.shipping_cost)}
               </p>
+              {selectedOrder.tracking_code && (
+                <p style={{ marginTop: 5 }}>
+                  <strong>Rastreio:</strong> {selectedOrder.tracking_code}
+                </p>
+              )}
               <p style={{ marginTop: 5 }}>
                 <strong>Pagamento:</strong>{" "}
                 {selectedOrder.payment_method?.toUpperCase()}
               </p>
+              {/* Cupom só aparece quando o pedido teve um (contrato da Onda
+                  2: coupon_code/discount vêm do backend "se houver"). */}
+              {selectedOrder.coupon_code && (
+                <p style={{ marginTop: 5 }}>
+                  <strong>Cupom:</strong> {selectedOrder.coupon_code}
+                </p>
+              )}
+              {Number(selectedOrder.discount) > 0 && (
+                <p style={{ marginTop: 5, color: "#2e7d32" }}>
+                  <strong>Desconto:</strong> −{moeda(selectedOrder.discount)}
+                </p>
+              )}
             </div>
           </div>
 
@@ -538,15 +883,10 @@ function Orders() {
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: "bold" }}>{item.name}</div>
                   <div style={{ fontSize: "0.9rem", color: "#666" }}>
-                    Tamanho: {item.size || "N/A"} | Qtd: {item.quantity}
+                    Embalagem: {item.size || "N/A"} | Qtd: {item.quantity}
                   </div>
                 </div>
-                <div style={{ fontWeight: "bold" }}>
-                  {Number(item.price).toLocaleString("pt-BR", {
-                    style: "currency",
-                    currency: "BRL",
-                  })}
-                </div>
+                <div style={{ fontWeight: "bold" }}>{moeda(item.price)}</div>
               </div>
             ))}
           </div>
@@ -559,11 +899,7 @@ function Orders() {
               fontSize: "1.2rem",
             }}
           >
-            Total:{" "}
-            {Number(selectedOrder.total_amount).toLocaleString("pt-BR", {
-              style: "currency",
-              currency: "BRL",
-            })}
+            Total: {moeda(selectedOrder.total_amount)}
           </div>
         </ModalOverlay>
       )}

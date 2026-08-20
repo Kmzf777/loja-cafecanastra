@@ -1,4 +1,4 @@
-import { useEffect, useState, useContext } from "react";
+import { useEffect, useState, useContext, useRef } from "react";
 import styled from "styled-components";
 import { Link } from "react-router-dom";
 import {
@@ -123,16 +123,20 @@ const StatusBadge = styled.span`
 
   ${(props) => {
     switch (props.status) {
-      case "approved":
+      case "aprovado":
         return `background: #e8f5e9; color: #2e7d32;`;
-      case "pending":
+      case "pendente":
         return `background: #fff3e0; color: #ef6c00;`;
-      case "sent":
+      case "em_processamento":
+      case "autorizado":
+        return `background: #f3e5f5; color: #6a1b9a;`;
+      case "enviado":
         return `background: #e3f2fd; color: #1565c0;`;
-      case "delivered":
+      case "entregue":
         return `background: #e0f2f1; color: #00695c;`;
-      case "cancelled":
-      case "rejected":
+      case "cancelado":
+      case "rejeitado":
+      case "reembolsado":
         return `background: #ffebee; color: #c62828;`;
       default:
         return `background: #f5f5f5; color: #616161;`;
@@ -170,66 +174,96 @@ const EmptyState = styled.div`
 `;
 
 // --- MODAL STYLE ---
-const ModalOverlay = ({ children, onClose }) => (
-  <div
-    style={{
-      position: "fixed",
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: "rgba(0,0,0,0.6)",
-      display: "flex",
-      justifyContent: "center",
-      alignItems: "center",
-      zIndex: 10000,
-      padding: "20px",
-    }}
-    onClick={onClose}
-  >
+const ModalOverlay = ({ children, onClose }) => {
+  // Ref para o efeito rodar UMA vez por abertura: com onClose (arrow nova a
+  // cada render do pai) nas dependências, o cleanup devolveria o foco ao
+  // gatilho com o modal ainda aberto.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  useEffect(() => {
+    const gatilho = document.activeElement;
+    const aoTeclar = (e) => {
+      if (e.key === "Escape") onCloseRef.current?.();
+    };
+    document.addEventListener("keydown", aoTeclar);
+    return () => {
+      document.removeEventListener("keydown", aoTeclar);
+      // O foco volta a quem abriu — teclado e leitor de tela não ficam
+      // perdidos no topo da página.
+      if (gatilho instanceof HTMLElement) gatilho.focus();
+    };
+  }, []);
+
+  return (
     <div
-      onClick={(e) => e.stopPropagation()}
       style={{
-        backgroundColor: "white",
-        padding: "25px",
-        borderRadius: "12px",
-        width: "600px",
-        maxWidth: "100%",
-        maxHeight: "85vh",
-        boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-        position: "relative",
-        overflowY: "auto",
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: "rgba(0,0,0,0.6)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: 10000,
+        padding: "20px",
       }}
+      onClick={onClose}
     >
-      <button
-        onClick={onClose}
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
         style={{
-          position: "absolute",
-          top: "15px",
-          right: "15px",
-          background: "none",
-          border: "none",
-          cursor: "pointer",
-          fontSize: "1.2rem",
-          color: "#666",
+          backgroundColor: "white",
+          padding: "25px",
+          borderRadius: "12px",
+          width: "600px",
+          maxWidth: "100%",
+          maxHeight: "85vh",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+          position: "relative",
+          overflowY: "auto",
         }}
       >
-        <FaTimes />
-      </button>
-      {children}
+        <button
+          onClick={onClose}
+          aria-label="Fechar"
+          style={{
+            position: "absolute",
+            top: "15px",
+            right: "15px",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "1.2rem",
+            color: "#666",
+          }}
+        >
+          <FaTimes />
+        </button>
+        {children}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
+// Vocabulário português da migração 0009 (backend/src/utils/statusDePedido.js).
 const translateStatus = (status) => {
   const map = {
-    pending: "Pendente",
-    approved: "Aprovado",
-    in_process: "Em Análise",
-    rejected: "Recusado",
-    cancelled: "Cancelado",
-    sent: "Enviado",
-    delivered: "Entregue",
+    pendente: "Pendente",
+    aprovado: "Aprovado",
+    em_processamento: "Em análise",
+    autorizado: "Autorizado",
+    enviado: "Enviado",
+    entregue: "Entregue",
+    cancelado: "Cancelado",
+    rejeitado: "Recusado",
+    reembolsado: "Reembolsado",
   };
   return map[status] || status;
 };
@@ -285,6 +319,9 @@ function MyOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  // Falha de carregamento NÃO pode virar "Você ainda não fez nenhum pedido"
+  // — zero pedidos é plausível, e a mentira passaria por verdade.
+  const [erro, setErro] = useState(null);
   const { authFetch, user } = useContext(authContext);
 
   useEffect(() => {
@@ -296,11 +333,14 @@ function MyOrders() {
         if (res.ok) {
           const data = await res.json();
           setOrders(data);
+          setErro(null);
         } else {
           console.error("Erro ao buscar pedidos");
+          setErro(`Não foi possível carregar seus pedidos (erro ${res.status}).`);
         }
       } catch (err) {
         console.error(err);
+        setErro("Não foi possível falar com o servidor.");
       } finally {
         setLoading(false);
       }
@@ -341,12 +381,33 @@ function MyOrders() {
           </BackButton>
         </TitleSection>
 
+        {erro && (
+          <p
+            role="alert"
+            style={{
+              margin: "0 0 16px",
+              padding: "10px 14px",
+              borderLeft: "3px solid #b3261e",
+              background: "#fdf2f1",
+              color: "#5c1a14",
+              fontSize: 14,
+            }}
+          >
+            {erro} Recarregue a página para tentar de novo.
+          </p>
+        )}
+
         {orders.length === 0 ? (
-          <EmptyState>
-            <FaBoxOpen />
-            <p>Você ainda não fez nenhum pedido.</p>
-            <Link to="/site">Começar a comprar</Link>
-          </EmptyState>
+          // Com erro, a lista vazia é DESCONHECIDO, não "nenhum pedido" —
+          // o convite a "começar a comprar" seria mentira apresentada com
+          // confiança.
+          erro ? null : (
+            <EmptyState>
+              <FaBoxOpen />
+              <p>Você ainda não fez nenhum pedido.</p>
+              <Link to="/site">Começar a comprar</Link>
+            </EmptyState>
+          )
         ) : (
           <OrdersList>
             {orders.map((order) => (
@@ -461,7 +522,7 @@ function MyOrders() {
                 <strong
                   style={{
                     color:
-                      selectedOrder.status === "approved" ? "green" : "orange",
+                      selectedOrder.status === "aprovado" ? "green" : "orange",
                   }}
                 >
                   {translateStatus(selectedOrder.status)}
@@ -583,7 +644,7 @@ function MyOrders() {
                     {item.name}
                   </div>
                   <div style={{ fontSize: "0.85rem", color: "#666" }}>
-                    Tam: {item.size} | Qtd: {item.quantity}
+                    Embalagem: {item.size} | Qtd: {item.quantity}
                   </div>
                 </div>
                 <div style={{ fontWeight: "600" }}>
@@ -603,6 +664,33 @@ function MyOrders() {
               textAlign: "right",
             }}
           >
+            {/* Desconto só quando houve (contrato: discount > 0 = teve
+                cupom); o código junto explica DE ONDE veio o abatimento. */}
+            {Number(selectedOrder.discount) > 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  marginBottom: "5px",
+                  color: "#2e7d32",
+                }}
+              >
+                <span>
+                  Desconto
+                  {selectedOrder.coupon_code
+                    ? ` (cupom ${selectedOrder.coupon_code})`
+                    : ""}
+                  :
+                </span>
+                <span>
+                  −
+                  {Number(selectedOrder.discount).toLocaleString("pt-BR", {
+                    style: "currency",
+                    currency: "BRL",
+                  })}
+                </span>
+              </div>
+            )}
             <div
               style={{
                 display: "flex",

@@ -25,14 +25,22 @@ import { API_BASE } from "../../../api";
 
 const COLORS = ["#f57c00", "#00C49F", "#FF8042", "#FFBB28", "#d62728"];
 
+/**
+ * Os 9 status em PORTUGUÊS da migração 0009 — cópia local de
+ * `backend/src/utils/statusDePedido.js` (mesma nota de Orders.jsx). O mapa
+ * aqui só embeleza o rótulo do gráfico; valor desconhecido cai no fallback
+ * `|| item.status` logo abaixo.
+ */
 const STATUS_TRANSLATION = {
-  pending: "Pendente",
-  approved: "Aprovado",
-  in_process: "Processando",
-  rejected: "Rejeitado",
-  cancelled: "Cancelado",
-  shipped: "Enviado",
-  delivered: "Entregue",
+  pendente: "Pendente",
+  aprovado: "Aprovado",
+  em_processamento: "Em processamento",
+  autorizado: "Autorizado",
+  enviado: "Enviado",
+  entregue: "Entregue",
+  cancelado: "Cancelado",
+  rejeitado: "Rejeitado",
+  reembolsado: "Reembolsado",
 };
 
 function Home() {
@@ -61,7 +69,9 @@ function Home() {
 
     const fetchDashboard = async () => {
       try {
-        const res = await authFetch(`${API_BASE}/dashboard/summary`, "GET");
+        // Segundo argumento é o objeto de options do fetch — a string "GET"
+        // que ficava aqui era silenciosamente ignorada.
+        const res = await authFetch(`${API_BASE}/dashboard/summary`);
 
         if (!res.ok) {
           setErro("Não foi possível carregar os números agora.");

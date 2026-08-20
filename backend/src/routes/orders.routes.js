@@ -13,12 +13,29 @@ paymentRoutes.post(
 
 paymentRoutes.get("/my-orders", isAuthenticated, OrderController.getUserOrders);
 
-// Rotas ADMIN (Em produção, você criaria um middleware 'isAdmin', mas o isAuthenticated serve por enquanto)
+// Detalhe de UM pedido: dono OU admin; o resto recebe 404 (nunca 403 — ver
+// o comentário em OrderController.getOrderDetail).
+paymentRoutes.get(
+  "/my-orders/:id",
+  isAuthenticated,
+  OrderController.getOrderDetail
+);
+
+// Rotas ADMIN
 paymentRoutes.get(
   "/admin/orders",
   isAuthenticated,
   isAdmin,
   OrderController.getAllOrdersAdmin
+);
+
+// ANTES de qualquer futura "/admin/orders/:id": o Express casa na ordem de
+// registro, e "export" cairia como id.
+paymentRoutes.get(
+  "/admin/orders/export",
+  isAuthenticated,
+  isAdmin,
+  OrderController.exportOrdersCsv
 );
 paymentRoutes.put(
   "/admin/orders/:id/status",

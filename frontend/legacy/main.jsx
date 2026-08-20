@@ -38,9 +38,9 @@ const HomeDashboard = lazy(
 const Form = lazy(
   () => import("./components/DashboardSection/GProducts/form/Form.jsx"),
 );
-const AddedShirts = lazy(
+const AddedProducts = lazy(
   () =>
-    import("./components/DashboardSection/GProducts/addedShirts/AddedShirts.jsx"),
+    import("./components/DashboardSection/GProducts/addedProducts/AddedProducts.jsx"),
 );
 const Orders = lazy(
   () => import("./components/DashboardSection/Orders/Orders.jsx"),
@@ -152,7 +152,7 @@ const router = createBrowserRouter([
           },
           {
             path: "/dashboard/products/addedProducts",
-            element: Load(AddedShirts),
+            element: Load(AddedProducts),
           },
           {
             path: "/dashboard/orders",

@@ -77,7 +77,7 @@ function pesoKg(produto) {
  * URL absoluta da imagem do produto.
  *
  * O painel monta o `src` com `imagePath.startsWith("http") ? imagePath :
- * API_BASE + imagePath` (AddedShirts.jsx). Ou seja: caminho relativo e
+ * API_BASE + imagePath` (AddedProducts.jsx). Ou seja: caminho relativo e
  * resolvido contra o BACKEND, que so serve /uploads — e as artes das
  * embalagens vivem em frontend/public, servidas pelo Next. Gravar
  * "/cafe-classico.png" fazia o painel pedir

@@ -9,6 +9,7 @@ import {
   Settings,
   Settings2,
   BadgeDollarSign,
+  TicketPercent,
 } from "lucide-react";
 import PropTypes from "prop-types";
 import { useEffect } from "react";
@@ -39,7 +40,7 @@ function MenuAside({ isOpen }) {
         {/*--------------------------*/}
 
         <DivMenu>
-          <span>Gestão de protudos</span>
+          <span>Gestão de produtos</span>
           <Link className="link" to={"/dashboard/products/addProduct"}>
             <SquarePlus size={18} />
             <li>Cadastrar produto</li>
@@ -88,6 +89,11 @@ function MenuAside({ isOpen }) {
           <Link className="link" to={"/dashboard/settings/offers"}>
             <BadgeDollarSign size={18} />
             <li>Promoções</li>
+          </Link>
+
+          <Link className="link" to={"/dashboard/settings/cupons"}>
+            <TicketPercent size={18} />
+            <li>Cupons de desconto</li>
           </Link>
         </DivMenu>
       </ContainerSection>

@@ -95,6 +95,10 @@ const RegisteredClients = () => {
   };
 
   const handleDeleteUser = async (userId, userName) => {
+    // `window.confirm` fica DE PROPÓSITO: o painel não tem um componente de
+    // modal compartilhado (o ModalOverlay de Orders.jsx é local daquela
+    // tela), e inventar um só para esta confirmação seria um terceiro modal
+    // divergente. Quando o painel ganhar um modal padrão, este confirm migra.
     const confirm = window.confirm(
       `Tem certeza que deseja excluir o usuário "${userName}"? Isso apagará todos os dados dele.`,
     );
@@ -135,12 +139,15 @@ const RegisteredClients = () => {
               <Th>Email</Th>
               <Th>Telefone</Th>
               <Th>Compras</Th>
+              {/* A coluna sempre existiu nas linhas (botão de excluir), só o
+                  cabeçalho faltava — a tabela renderizava desalinhada. */}
+              <Th>Ações</Th>
             </Tr>
           </Thead>
           <Tbody>
             {!hasClients ? (
               <Tr>
-                <Td colSpan="4">Nenhum cliente cadastrado.</Td>
+                <Td colSpan="5">Nenhum cliente cadastrado.</Td>
               </Tr>
             ) : (
               dataUsers.map((client) => (

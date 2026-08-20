@@ -22,11 +22,13 @@ import {
   PaginationContainer,
   PaginationButton,
   Dots,
-} from "./AddedShirts.style";
+} from "./AddedProducts.style";
 import authContext from "../../../../contexts/loginContext/createAuthContext";
 import Loading from "../../../Loading/Loading";
 
-function AddedShirts() {
+// Era "AddedShirts": o painel veio de uma loja de camisetas (Shopnaw) e este
+// arquivo era o último a dizer isso na cara do gestor.
+function AddedProducts() {
   const { authFetch } = useContext(authContext);
   const navigate = useNavigate();
   const {
@@ -40,11 +42,21 @@ function AddedShirts() {
   const [zoomImage, setZoomImage] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Lista vazia com erro de rede NÃO é "nenhum café cadastrado": o provider
+  // devolve false quando o fetch falhou de verdade, e a tarja conta isso.
+  const [erro, setErro] = useState(null);
 
   useEffect(() => {
     setLoading(true);
     updateProductList()
-      .catch((e) => console.warn("updateProductList failed:", e))
+      .then((ok) => {
+        // `undefined` = requisição superada por outra — nem sucesso nem erro.
+        if (ok === false) {
+          setErro("Não foi possível carregar os produtos do servidor.");
+        } else if (ok === true) {
+          setErro(null);
+        }
+      })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
@@ -134,21 +146,45 @@ function AddedShirts() {
     return imagePath.startsWith("http") ? imagePath : `${API_BASE}${imagePath}`;
   };
 
+  // Loading PRIMEIRO: com a ordem invertida, o primeiro render (lista ainda
+  // vazia) mostrava "nenhum café cadastrado" por um instante antes do
+  // spinner — e, num load com erro, para sempre.
+  if (loading) return <Loading />;
+
+  const tarjaDeErro = erro && (
+    <p
+      role="alert"
+      style={{
+        margin: "0 0 16px",
+        padding: "10px 14px",
+        borderLeft: "3px solid #b3261e",
+        background: "#fdf2f1",
+        color: "#5c1a14",
+        fontSize: 14,
+      }}
+    >
+      {erro} A lista abaixo pode estar vazia ou desatualizada — recarregue a
+      página.
+    </p>
+  );
+
   if (!Array.isArray(dataForm) || dataForm.length === 0) {
     return (
       <Container>
         <h2>Produtos cadastrados</h2>
-        <EmptyState>Nenhuma T-shirt adicionada ainda</EmptyState>
+        {tarjaDeErro}
+        {/* Com erro, vazio é DESCONHECIDO — afirmar "nenhum café" mentiria. */}
+        {!erro && <EmptyState>Nenhum café cadastrado ainda</EmptyState>}
       </Container>
     );
   }
-
-  if (loading) return <Loading />;
 
   return (
     <>
       <Container>
         <h2>Produtos cadastrados</h2>
+
+        {tarjaDeErro}
 
         <Controls>
           <div>
@@ -164,7 +200,7 @@ function AddedShirts() {
                 <th>Imagem</th>
                 <th>Nome</th>
                 <th>Preço</th>
-                <th>Tamanho</th>
+                <th>Embalagem</th>
                 <th>Qtd</th>
                 <th>Categoria</th>
                 <th>Ações</th>
@@ -260,7 +296,7 @@ function AddedShirts() {
                   </CardRow>
 
                   <CardRow>
-                    <div>Tamanho: {product.size}</div>
+                    <div>Embalagem: {product.size}</div>
                     <div>Qtd: {product.quantity}</div>
                   </CardRow>
 
@@ -339,4 +375,4 @@ function AddedShirts() {
   );
 }
 
-export default AddedShirts;
+export default AddedProducts;

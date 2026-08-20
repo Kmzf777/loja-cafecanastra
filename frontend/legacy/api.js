@@ -22,9 +22,9 @@
  *    em `Authorization: Bearer`.
  *
  * O TOKEN VEM DO CLIENTE SUPABASE, NUNCA DO ESTADO DO REACT. Este módulo é
- * importado por `hooks/useProducts.jsx`, `contexts/searchProduct` e outros que
- * rodam FORA da árvore do `AuthProvider` — não há contexto para ler ali. Ler do
- * supabase-js também é o que mantém uma fonte de verdade só.
+ * importado por `contexts/searchProduct` e outros que rodam FORA da árvore do
+ * `AuthProvider` — não há contexto para ler ali. Ler do supabase-js também é
+ * o que mantém uma fonte de verdade só.
  */
 import { clienteNavegador } from "../lib/supabase/cliente";
 

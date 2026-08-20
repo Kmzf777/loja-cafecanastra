@@ -59,7 +59,9 @@ function ManageCategories() {
     if (res.ok) {
       toast.success(
         `${
-          type === "category" ? "Categoria adicionada!" : "Tamanho adicionado!"
+          type === "category"
+            ? "Categoria adicionada!"
+            : "Embalagem adicionada!"
         }`,
       );
       fetchOptions();
@@ -124,8 +126,12 @@ function ManageCategories() {
         </InputGroup>
       </Section>
 
+      {/* "Embalagens" (250g, 500g, 1kg, 3x250g...) é só o RÓTULO: no
+          contrato da API o type continua sendo `size` (/options?type=size),
+          igual ao que o formulário de produto e a vitrine consomem. Renomear
+          o type quebraria os dois lados sem ganhar nada. */}
       <Section>
-        <SectionHeader>📏 Tamanhos</SectionHeader>
+        <SectionHeader>📦 Embalagens</SectionHeader>
         <List>
           {sizes.map((size) => (
             <ListItem key={size.id}>
@@ -141,7 +147,7 @@ function ManageCategories() {
           <Input
             value={newSize}
             onChange={(e) => setNewSize(e.target.value)}
-            placeholder="Novo tamanho"
+            placeholder="Nova embalagem (ex: 250g moído)"
           />
           <Button onClick={() => handleAdd("size", newSize)}>Adicionar</Button>
         </InputGroup>

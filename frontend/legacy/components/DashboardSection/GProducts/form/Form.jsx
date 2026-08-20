@@ -35,6 +35,7 @@ function Form() {
     "width",
     "height",
     "length",
+    "sku",
   ]);
 
   const {
@@ -76,6 +77,7 @@ function Form() {
           width: found.width,
           height: found.height,
           length: found.length,
+          sku: found.sku || "",
         });
 
         // Configura estados auxiliares
@@ -100,6 +102,7 @@ function Form() {
           width: found.width,
           height: found.height,
           length: found.length,
+          sku: found.sku || "",
         });
       } else {
         // Se for NOVO produto, limpa tudo
@@ -113,6 +116,7 @@ function Form() {
           width: "",
           height: "",
           length: "",
+          sku: "",
         });
         setValue(0);
         setImagePreview(null);
@@ -141,6 +145,7 @@ function Form() {
       String(watchedFields[6]) !== String(originalProduct.width) ||
       String(watchedFields[7]) !== String(originalProduct.height) ||
       String(watchedFields[8]) !== String(originalProduct.length) ||
+      (watchedFields[9] || "") !== (originalProduct.sku || "") ||
       value !== originalProduct.quantity ||
       imageFile !== null);
 
@@ -158,6 +163,10 @@ function Form() {
     formData.append("price", data.price);
     formData.append("quantity", value);
     formData.append("description", data.description || "");
+    // SKU: a costura entre o painel e o catálogo (índice único parcial em
+    // canastra.produtos). Duplicado, o backend recusa com a mensagem que o
+    // catch abaixo repassa.
+    formData.append("sku", (data.sku || "").trim());
 
     // Peso e as TRES dimensoes.
     // Antes so `length` era enviado, embora o formulario tenha campo para os
@@ -190,7 +199,13 @@ function Form() {
         body: formData,
       });
 
-      if (!res.ok) throw new Error("Erro na requisição");
+      if (!res.ok) {
+        // O backend fala frases ("Já existe um produto com este SKU.", os
+        // erros de validação) — mostrar a frase vale mais que "Erro ao
+        // salvar produto." genérico.
+        const corpo = await res.json().catch(() => ({}));
+        throw new Error(corpo.message || corpo.error || "Erro na requisição");
+      }
       if (productId) {
         toast.info("Produto atualizado com sucesso!");
       } else {
@@ -203,7 +218,7 @@ function Form() {
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       console.error(err);
-      toast.error("Erro ao salvar produto.");
+      toast.error(err.message || "Erro ao salvar produto.");
       setLoading(false);
     }
   };
@@ -216,9 +231,22 @@ function Form() {
         <label>Nome do produto</label>
         <input placeholder="Digite o nome..." {...register("name")} required />
 
-        <label>Tamanho</label>
+        <label>SKU (código único do produto)</label>
+        {/* Obrigatório para produto NOVO: o SKU é a chave que costura o
+            catálogo da vitrine com o banco. Na edição continua editável —
+            duplicado, o backend recusa e a mensagem aparece no toast. */}
+        <input
+          placeholder="Ex: CAN-CLASSICO-250G-MOIDO"
+          {...register("sku")}
+          required={!productId}
+        />
+
+        {/* "Embalagem" é o rótulo; o contrato da API continua sendo o type
+            `size` de /options — só o texto visível mudou de camiseta para
+            café. */}
+        <label>Embalagem</label>
         <select {...register("size")} required>
-          <option value="">Selecione um tamanho</option>
+          <option value="">Selecione a embalagem</option>
           {sizes.map((size) => (
             <option key={size.id} value={size.value}>
               {size.value}
@@ -247,7 +275,7 @@ function Form() {
           required
         />
 
-        <label>Quantidade de peças disponíveis</label>
+        <label>Quantidade em estoque</label>
         <div className="inputIncrementoOrDecremento">
           <button
             type="button"

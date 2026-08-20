@@ -27,6 +27,19 @@ function UpdateInfo() {
         setValue("whatsapp_number", data.whatsapp_number);
         setValue("announcement_bar", data.announcement_bar);
 
+        // O banco fala em CENTAVOS (config_loja.frete_gratis_minimo_centavos,
+        // migração 0009); o gestor fala em reais. A conversão vive nas duas
+        // bordas desta tela e em nenhum outro lugar.
+        if (
+          data.frete_gratis_minimo_centavos !== undefined &&
+          data.frete_gratis_minimo_centavos !== null
+        ) {
+          setValue(
+            "frete_gratis_reais",
+            (Number(data.frete_gratis_minimo_centavos) / 100).toFixed(2),
+          );
+        }
+
         if (data.banner_desktop) {
           const url = data.banner_desktop.startsWith("http")
             ? data.banner_desktop
@@ -55,6 +68,21 @@ function UpdateInfo() {
     formData.append("whatsapp_number", data.whatsapp_number);
     formData.append("announcement_bar", data.announcement_bar);
 
+    // Reais -> centavos. Campo vazio NÃO é enviado: o PUT do backend é
+    // parcial, e mandar vazio zeraria o piso sem o gestor ter pedido.
+    const reais = String(data.frete_gratis_reais ?? "")
+      .replace(",", ".")
+      .trim();
+    if (reais !== "") {
+      const centavos = Math.round(Number(reais) * 100);
+      if (!Number.isInteger(centavos) || centavos < 0) {
+        return toast.error(
+          "Valor de frete grátis inválido — use reais, ex: 149,00.",
+        );
+      }
+      formData.append("frete_gratis_minimo_centavos", String(centavos));
+    }
+
     if (newBannerFile) formData.append("banner_desktop", newBannerFile);
     if (newBannerFileMobile)
       formData.append("banner_mobile", newBannerFileMobile);
@@ -67,10 +95,13 @@ function UpdateInfo() {
       if (res.ok) {
         toast.success("Loja atualizada com sucesso!");
       } else {
-        toast.error("Erro ao atualizar.");
+        const corpo = await res.json().catch(() => ({}));
+        toast.error(corpo.error || corpo.message || "Erro ao atualizar.");
       }
     } catch (error) {
       console.error(error);
+      // Falha de rede sem toast deixava o gestor achando que salvou.
+      toast.error("Erro de conexão ao salvar.");
     }
   };
 
@@ -96,7 +127,20 @@ function UpdateInfo() {
         <label>Barra de Anúncios (Topo do site)</label>
         <input
           {...register("announcement_bar")}
-          placeholder="Ex: Frete Grátis para todo Brasil"
+          placeholder="Ex: Café fresco torrado na Serra da Canastra"
+        />
+
+        <label>Frete grátis a partir de (R$)</label>
+        {/* Regra de SERVIDOR: o valor gravado aqui é o que o
+            ShippingController usa para zerar o frete — a vitrine só exibe.
+            Zero desliga o frete grátis. */}
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          onWheel={(e) => e.target.blur()}
+          placeholder="Ex: 149,00 (0 desliga o frete grátis)"
+          {...register("frete_gratis_reais")}
         />
 
         <label>Banner Desktop (Recomendado: 1920x600)</label>

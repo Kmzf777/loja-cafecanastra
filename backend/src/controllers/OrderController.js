@@ -7,6 +7,7 @@ const {
   GRUPO_CANCELADO,
 } = require("../utils/statusDePedido");
 const { ordenarPorProduto } = require("../utils/estoque");
+const { gerarCsvDePedidos } = require("../utils/csvDePedidos");
 
 /**
  * Os status validos vem do modulo unico (`utils/statusDePedido`), que e o
@@ -16,6 +17,17 @@ const { ordenarPorProduto } = require("../utils/estoque");
  * o comportamento honesto (gravar traduzindo em silencio esconderia que o
  * painel esta desatualizado).
  */
+
+/**
+ * O :id da rota é validado ANTES do cast `::uuid` do Postgres: um id
+ * malformado responderia 500 com 22P02, e a resposta certa para "isso não é
+ * nem um id de pedido" é o mesmo 404 de "não existe".
+ */
+const FORMATO_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `de`/`ate` do export: ou ausente, ou exatamente YYYY-MM-DD. */
+const FORMATO_DATA = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Le page/limit da query com piso, teto e valor padrao. */
 function paginacao(query) {
@@ -38,6 +50,72 @@ class OrderController {
       return res
         .status(500)
         .json({ error: "Erro ao buscar histórico de pedidos." });
+    }
+  }
+
+  /**
+   * `GET /my-orders/:id` — o detalhe de UM pedido, para a página de
+   * confirmação do checkout e para a conta do cliente.
+   *
+   * DONO OU ADMIN, E O RESTO RECEBE 404 — NUNCA 403. Um 403 para pedido de
+   * terceiro confirmaria que aquele UUID existe, e ids de pedido circulam em
+   * e-mail e URL: enumerá-los não pode render nem um bit de informação.
+   * "Não é seu" e "não existe" respondem idêntico.
+   */
+  async getOrderDetail(req, res) {
+    try {
+      const { id } = req.params;
+      if (!FORMATO_UUID.test(String(id || ""))) {
+        return res.status(404).json({ error: "Pedido não encontrado." });
+      }
+
+      const order = await OrderRepository.getOrderDetail(id);
+      const ehDono = order && order.user_id === req.user.userId;
+      if (!order || (!ehDono && req.user.ehAdmin !== true)) {
+        return res.status(404).json({ error: "Pedido não encontrado." });
+      }
+
+      return res.json({ order });
+    } catch (error) {
+      console.error("Erro ao buscar detalhe do pedido:", error);
+      return res.status(500).json({ error: "Erro ao buscar o pedido." });
+    }
+  }
+
+  /**
+   * `GET /admin/orders/export?de=YYYY-MM-DD&ate=YYYY-MM-DD` — o CSV que o
+   * gestor abre no Excel. Filtro opcional dos dois lados; formato inválido é
+   * 400 com frase, não um filtro silenciosamente ignorado (que exportaria a
+   * base inteira achando que filtrou).
+   */
+  async exportOrdersCsv(req, res) {
+    try {
+      const { de, ate } = req.query;
+      for (const [nome, valor] of [["de", de], ["ate", ate]]) {
+        if (valor !== undefined && !FORMATO_DATA.test(String(valor))) {
+          return res.status(400).json({
+            error: `Parâmetro "${nome}" inválido: use o formato YYYY-MM-DD.`,
+          });
+        }
+      }
+
+      const pedidos = await OrderRepository.getOrdersForExport({ de, ate });
+      const csv = gerarCsvDePedidos(pedidos);
+
+      const sufixo = [de ? `de-${de}` : null, ate ? `ate-${ate}` : null]
+        .filter(Boolean)
+        .join("-");
+      const nomeDoArquivo = sufixo ? `pedidos-${sufixo}.csv` : "pedidos.csv";
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${nomeDoArquivo}"`,
+      );
+      return res.send(csv);
+    } catch (error) {
+      console.error("Erro ao exportar pedidos:", error);
+      return res.status(500).json({ error: "Erro ao exportar pedidos." });
     }
   }
 

@@ -38,6 +38,40 @@ function OffersAndCupons() {
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  /**
+   * O catálogo para o select de produto. Antes o campo era um input de TEXTO
+   * onde o gestor colava um UUID à mão — um caractere errado e a promoção
+   * apontava para produto nenhum, sem erro em lugar algum. 200 é o teto do
+   * backend e cobre o catálogo inteiro da loja; busca uma vez por visita.
+   */
+  const [produtos, setProdutos] = useState([]);
+  const [produtosErro, setProdutosErro] = useState(null);
+
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const res = await fetchDataForm("/dashboard?page=1&limit=200", "GET");
+        if (!res.ok) throw new Error(`Erro ${res.status}`);
+        const data = await res.json();
+        if (ativo) {
+          setProdutos(data.products || []);
+          setProdutosErro(null);
+        }
+      } catch (err) {
+        console.error("Erro ao carregar produtos para o select", err);
+        if (ativo) {
+          setProdutosErro(
+            "Não foi possível carregar a lista de produtos — recarregue a página.",
+          );
+        }
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
+
   const formatForInput = (dateString) => {
     if (!dateString) return "";
     const date = new Date(dateString);
@@ -232,11 +266,27 @@ function OffersAndCupons() {
           {form.applies_to === "product" && (
             <>
               <Label>Produto</Label>
-              <Input
+              {produtosErro && (
+                <p role="alert" style={{ color: "#b3261e", fontSize: 13 }}>
+                  {produtosErro}
+                </p>
+              )}
+              {/* O value continua sendo o product_id (UUID) — o contrato de
+                  /promotions não mudou; mudou só QUEM digita o UUID. */}
+              <Select
                 name="product_id"
                 value={form.product_id}
                 onChange={handleChange}
-              />
+                required
+              >
+                <option value="">Selecione um produto</option>
+                {produtos.map((p) => (
+                  <option key={p.product_id} value={p.product_id}>
+                    {p.name}
+                    {p.sku ? ` — ${p.sku}` : ""}
+                  </option>
+                ))}
+              </Select>
             </>
           )}
 

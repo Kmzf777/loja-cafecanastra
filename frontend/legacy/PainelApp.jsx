@@ -20,9 +20,9 @@ const HomeDashboard = lazy(
 const Form = lazy(
   () => import("./components/DashboardSection/GProducts/form/Form.jsx"),
 );
-const AddedShirts = lazy(
+const AddedProducts = lazy(
   () =>
-    import("./components/DashboardSection/GProducts/addedShirts/AddedShirts.jsx"),
+    import("./components/DashboardSection/GProducts/addedProducts/AddedProducts.jsx"),
 );
 const Orders = lazy(
   () => import("./components/DashboardSection/Orders/Orders.jsx"),
@@ -42,6 +42,10 @@ const ManageCategories = lazy(
 const PromotionsManager = lazy(
   () =>
     import("./components/DashboardSection/Settings/OffersAndCupons/PromotionsManager.jsx"),
+);
+const CuponsManager = lazy(
+  () =>
+    import("./components/DashboardSection/Settings/Cupons/CuponsManager.jsx"),
 );
 
 // NAO usar `basename: "/dashboard"`. O painel legado navega por links
@@ -63,7 +67,7 @@ const router = createBrowserRouter([
           { path: "/dashboard/products/addProduct", element: Load(Form) },
           {
             path: "/dashboard/products/addedProducts",
-            element: Load(AddedShirts),
+            element: Load(AddedProducts),
           },
           { path: "/dashboard/orders", element: Load(Orders) },
           {
@@ -81,6 +85,10 @@ const router = createBrowserRouter([
           {
             path: "/dashboard/settings/offers",
             element: Load(PromotionsManager),
+          },
+          {
+            path: "/dashboard/settings/cupons",
+            element: Load(CuponsManager),
           },
         ],
       },
