@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSacola } from "@/lib/sacola/sacola";
 import { formatarPreco } from "@/lib/catalogo/repositorio";
 import { BotaoLink } from "@/components/ui/Botao";
+import { BarraFreteGratis } from "@/components/layout/BarraFreteGratis";
 import { eventoBeginCheckout } from "@/lib/analytics";
 
 /**
@@ -140,6 +141,11 @@ export default function PaginaSacola() {
                 {formatarPreco(totalCentavos)}
               </span>
             </div>
+
+            {/* O empurrão de ticket médio: quanto falta para o frete grátis.
+                O piso vem do servidor (GET /config) — a barra some sozinha se
+                o admin desligar a regra. */}
+            <BarraFreteGratis className="mt-4" />
 
             <p className="mt-4 text-[13px] text-fuligem-55">
               O frete é calculado no checkout, a partir do seu CEP.

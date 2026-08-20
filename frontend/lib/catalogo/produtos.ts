@@ -104,10 +104,16 @@ function variantesDa(linha: LinhaBruta): Variante[] {
 }
 
 function especiaisDa(linha: LinhaBruta): FormatoEspecial[] {
+  // `!p.kit` pela MESMA razão de variantesDa: kit não é formato de linha
+  // nenhuma. Sem o filtro, os kits de cápsula (kit: true, formato: capsula,
+  // linha classico) apareciam DUPLICADOS na PDP do Clássico — uma vez como
+  // formato especial, outra como card na seção "Kits e caixas" da PLP.
   return (bruto.produtos as ProdutoBruto[])
     .filter(
       (p) =>
-        p.linha === linha.slug && (p.formato === "drip" || p.formato === "capsula"),
+        p.linha === linha.slug &&
+        !("kit" in p && p.kit) &&
+        (p.formato === "drip" || p.formato === "capsula"),
     )
     .map((p) => ({
       sku: p.sku,

@@ -30,9 +30,23 @@ import { eventoAddToCart } from "@/lib/analytics";
  */
 
 export function CardKit({ kit }: { kit: Kit }) {
-  const { adicionar } = useSacola();
+  const { adicionar, itens } = useSacola();
   const [adicionado, setAdicionado] = useState(false);
   const [erroDaSacola, setErroDaSacola] = useState<string | null>(null);
+  const [noTeto, setNoTeto] = useState(false);
+
+  /**
+   * Teto por estoque — a versão sem stepper da regra do PainelCompra: o card
+   * adiciona 1 por clique, então o teto vale para o ACUMULADO na sacola.
+   * `min(20, estoque)` quando o estoque ao vivo é conhecido (`produtoId`
+   * presente = o banco respondeu); sem API, os 20 de sempre — o servidor
+   * reconfere na cobrança.
+   */
+  const jaNaSacola = Number(
+    itens.find((i) => i.product_id === kit.produtoId)?.quantity ?? 0,
+  );
+  const teto =
+    kit.produtoId && kit.estoque > 0 ? Math.min(20, kit.estoque) : 20;
 
   // O timeout do "Na sacola" vive numa ref para ser cancelável: sem o clear no
   // unmount, sair da PLP dentro dos 2,5 s faria o setAdicionado disparar num
@@ -53,6 +67,12 @@ export function CardKit({ kit }: { kit: Kit }) {
 
   async function aoAdicionar() {
     setErroDaSacola(null);
+
+    if (jaNaSacola >= teto) {
+      setNoTeto(true);
+      return;
+    }
+    setNoTeto(false);
 
     if (!kit.produtoId) {
       setErroDaSacola(
@@ -158,6 +178,13 @@ export function CardKit({ kit }: { kit: Kit }) {
           {erroDaSacola ? (
             <p role="alert" className="mt-3 text-[14px] text-vermelho">
               {erroDaSacola}
+            </p>
+          ) : null}
+
+          {/* Discreto: bater no teto não é erro, é o estoque real. */}
+          {noTeto ? (
+            <p role="status" className="mt-3 text-[13px] text-fuligem-55">
+              Sua sacola já tem o máximo disponível deste kit.
             </p>
           ) : null}
 

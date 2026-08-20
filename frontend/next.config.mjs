@@ -82,7 +82,14 @@ const csp = [
   "object-src 'none'",
   "frame-ancestors 'none'",
   "form-action 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sdk.mercadopago.com https://www.mercadopago.com",
+  // sdk.mercadopago.com: o SDK v2 que tokeniza o cartao no navegador (o
+  // checkout o injeta por script tag — lib/sacola/cartao.ts). O numero do
+  // cartao nunca toca nosso servidor; sem esta origem o script nem carrega e o
+  // pagamento por cartao morre em silencio no console do cliente.
+  // googletagmanager.com: o gtag.js do GA4, que ScriptsAnalytics.tsx so injeta
+  // com NEXT_PUBLIC_GA4_ID definida E consentimento aceito no banner — o CSP
+  // precisa liberar a origem para o dia em que as duas condicoes valem.
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sdk.mercadopago.com https://www.mercadopago.com https://www.googletagmanager.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   // O backend serve /uploads (imagem enviada pelo painel quando o Cloudinary
@@ -100,9 +107,20 @@ const csp = [
   // sintoma: esta linha (`${SUPABASE}`) e o `images.remotePatterns` mais abaixo,
   // que precisa do host do projeto para o <Image> do Next aceitar otimizar.
   `img-src ${origens("'self'", "data:", "blob:", API_CSP, "https://res.cloudinary.com", "https://cdn-icons-png.flaticon.com", "https://*.mlstatic.com")}`,
-  `connect-src ${origens("'self'", API_CSP, SUPABASE, "https://api.mercadopago.com", "https://api.mercadolibre.com")}`,
-  // O checkout transparente do Mercado Pago roda os campos de cartao num iframe.
-  "frame-src https://www.mercadopago.com https://sdk.mercadopago.com",
+  // api.mercadopago.com: e para onde o SDK manda o numero tokenizar (e de onde
+  // vem bandeira, emissor e parcelas). viacep.com.br: o CEP preenche o
+  // endereco do checkout (lib/cep.ts) — sem a origem, a consulta falha em
+  // silencio e vira digitacao manual, que e o fallback mas nao o desenho.
+  // *.google-analytics.com e googletagmanager.com: os eventos do GA4 saem por
+  // beacon para region1.google-analytics.com e afins; liberar so o script sem
+  // o beacon mediria zero sem erro nenhum.
+  `connect-src ${origens("'self'", API_CSP, SUPABASE, "https://api.mercadopago.com", "https://api.mercadolibre.com", "https://viacep.com.br", "https://*.google-analytics.com", "https://www.googletagmanager.com")}`,
+  // Os SECURE FIELDS do CardForm: numero, validade e CVV do cartao viram
+  // iframes servidos de subdominios do Mercado Pago (api-secure-fields e
+  // afins, que mudam sem aviso) — por isso o curinga *.mercadopago.com, que
+  // cobre tambem o www e o sdk. E o que faz o dado sensivel nunca existir no
+  // nosso DOM.
+  "frame-src https://*.mercadopago.com",
   "upgrade-insecure-requests",
 ].join("; ");
 

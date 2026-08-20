@@ -1,3 +1,4 @@
+import { API_BASE } from "../api-base";
 import { KITS_DA_LOJA, LOTES } from "./produtos";
 import type { Filtros, Kit, Lote, Ordenacao, Variante } from "./tipos";
 
@@ -20,8 +21,6 @@ import type { Filtros, Kit, Lote, Ordenacao, Variante } from "./tipos";
  * loja que nao abre e pior que uma loja com preco de ontem, e o checkout
  * reconfere tudo no servidor antes de cobrar.
  */
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
 
 /** Quanto tempo o Next guarda a resposta da API antes de perguntar de novo. */
 const SEGUNDOS_DE_CACHE = 60;

@@ -148,6 +148,21 @@ describe("catalogo montado", () => {
     }
   });
 
+  it("nao poe kit nos formatos especiais de linha nenhuma", () => {
+    // Os kits de capsula tem `kit: true` E `formato: "capsula"` E uma linha
+    // dominante — sem o filtro `!p.kit` em especiaisDa eles apareciam na PDP
+    // do Classico como formato especial, duplicando o card da secao de kits.
+    const skusDeKit = new Set(
+      bruto.produtos.filter((p) => "kit" in p && p.kit).map((p) => p.sku),
+    );
+    expect(skusDeKit.size).toBeGreaterThan(0);
+    for (const lote of LOTES) {
+      for (const f of lote.formatosEspeciais) {
+        expect(skusDeKit.has(f.sku), `${lote.slug} expõe o kit ${f.sku}`).toBe(false);
+      }
+    }
+  });
+
   it("nao expoe mais campos de lavoura inventados", () => {
     // Guarda de regressao: altitude, produtor e safra por lote foram removidos
     // do contrato porque eram ficcao. Se voltarem, alguem os reintroduziu.

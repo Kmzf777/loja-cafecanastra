@@ -34,21 +34,15 @@ import { ErroDeVinculo, garantirCliente, nomeParaCadastro } from "./cadastro";
 /**
  * Origem da API.
  *
- * O serviço Node NÃO morre nesta fase: pedidos, carrinho e catálogo ainda
- * passam por ele. `API_BASE` continua exportado e continua sendo importado por
- * `lib/sacola/sacola.tsx`, `lib/sacola/checkout.ts` e `app/(vitrine)/account`.
- *
- * `NEXT_PUBLIC_*` e resolvido em tempo de BUILD e vai embutido no bundle. Se a
- * variavel faltar no build de producao, o fallback de desenvolvimento e assado
- * no JavaScript que o cliente baixa, e a loja publica tenta falar com a maquina
- * de quem visita. Nao ha erro no servidor, nada no log: simplesmente nada
- * funciona, para todo mundo.
- *
- * `conferirApiBase()`, logo abaixo, detecta exatamente esse estado em runtime.
+ * A definição MUDOU DE CASA na Onda 2-D: vive em `lib/api-base.ts`, porque
+ * quatro módulos a copiavam com normalizações divergentes. O re-export fica —
+ * `lib/sacola/sacola.tsx`, `lib/sacola/checkout.ts` e as páginas de conta já
+ * importam daqui, e mudar quatro imports para economizar uma linha é troca
+ * ruim. `conferirApiBase()`, logo abaixo, segue detectando o build que apontou
+ * a loja pública para localhost.
  */
-export const API_BASE = (
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333"
-).replace(/\/$/, "");
+export { API_BASE } from "../api-base";
+import { API_BASE } from "../api-base";
 
 /**
  * Detecta a combinação que quebra tudo em silêncio: página servida de um

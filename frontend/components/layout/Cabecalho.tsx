@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Serra } from "@/components/marca/Serra";
 import { AtalhosDoCliente } from "./AtalhosDoCliente";
+import { AvisoFreteGratis } from "./AvisoFreteGratis";
 
 /**
  * estetica.md §5.8 e §10.
@@ -115,10 +116,10 @@ export function Cabecalho() {
       <div className="bg-fuligem text-cal">
         <p className="mx-auto flex min-h-9 max-w-[1440px] flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 py-2 text-center font-dado text-[10px] leading-tight tracking-[0.04em] sm:text-[11px] md:px-10">
           <span>Torrado sob demanda</span>
-          <span aria-hidden className="text-fuligem-55">
-            ·
-          </span>
-          <span>Frete grátis acima de R$ 149</span>
+          {/* O piso do frete grátis vem de GET /config e pode mudar sem
+              deploy — só este trecho é ilha client; o separador vai junto
+              porque a promessa inteira some quando o admin a desliga. */}
+          <AvisoFreteGratis />
         </p>
       </div>
 
@@ -151,64 +152,66 @@ export function Cabecalho() {
           <div className="flex items-center gap-2 md:hidden">
             <AtalhosDoCliente />
 
-          {/* Acordeao de mobile — sem JS */}
-          <details className="group md:hidden [&[open]_.rotulo-abrir]:hidden [&[open]_.rotulo-fechar]:inline">
-            <summary
-              className="flex h-11 min-w-11 cursor-pointer list-none items-center gap-2 border border-fuligem-20 px-3 text-[12px] font-semibold uppercase tracking-[0.12em] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
-              aria-label="Abrir menu"
-            >
-              <span aria-hidden className="flex w-4 flex-col gap-[3px]">
-                <span className="h-px w-full bg-fuligem" />
-                <span className="h-px w-full bg-fuligem" />
-                <span className="h-px w-full bg-fuligem" />
-              </span>
-              <span className="rotulo-abrir">Menu</span>
-              <span className="rotulo-fechar hidden">Fechar</span>
-            </summary>
+            {/* Acordeao de mobile — sem JS. O `md:hidden` mora só no <div>
+                pai, que já esconde tudo isto no desktop. */}
+            <details className="group [&[open]_.rotulo-abrir]:hidden [&[open]_.rotulo-fechar]:inline">
+              <summary
+                className="flex h-11 min-w-11 cursor-pointer list-none items-center gap-2 border border-fuligem-20 px-3 text-[12px] font-semibold uppercase tracking-[0.12em] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+                aria-label="Abrir menu"
+              >
+                <span aria-hidden className="flex w-4 flex-col gap-[3px]">
+                  <span className="h-px w-full bg-fuligem" />
+                  <span className="h-px w-full bg-fuligem" />
+                  <span className="h-px w-full bg-fuligem" />
+                </span>
+                <span className="rotulo-abrir">Menu</span>
+                <span className="rotulo-fechar hidden">Fechar</span>
+              </summary>
 
-            {/* Painel ancorado ao proprio header (`top-full`), e nao a
-                viewport: a barra de aviso muda de altura quando o texto quebra
-                em telas estreitas, entao qualquer deslocamento fixo erraria. */}
-            <nav
-              aria-label="Principal"
-              className="absolute inset-x-0 top-full z-50 flex h-[calc(100dvh-72px)] flex-col overflow-y-auto border-t border-fuligem-20 bg-cal"
-            >
-              {/* A busca abre o painel: quem toca em "Menu" no celular esta
-                  procurando alguma coisa — o campo vem antes dos links. */}
-              <div className="border-b border-fuligem-20 px-4 py-4">
-                <FormBusca id="busca-mobile" rotulo="Buscar cafés (menu)" />
-              </div>
-              <ul className="flex flex-col">
-                {NAV.map((item) => (
-                  <li key={item.href} className="border-b border-fuligem-20">
-                    <Link
-                      href={item.href}
-                      className="flex min-h-[64px] items-center justify-between px-5 text-[20px] font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-vermelho"
-                    >
-                      {item.rotulo}
-                      <span aria-hidden className="font-dado text-fuligem-55">
-                        →
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+              {/* Painel ancorado ao proprio header (`top-full`), e nao a
+                  viewport: a barra de aviso muda de altura quando o texto
+                  quebra em telas estreitas, entao qualquer deslocamento fixo
+                  erraria. */}
+              <nav
+                aria-label="Principal"
+                className="absolute inset-x-0 top-full z-50 flex h-[calc(100dvh-72px)] flex-col overflow-y-auto border-t border-fuligem-20 bg-cal"
+              >
+                {/* A busca abre o painel: quem toca em "Menu" no celular esta
+                    procurando alguma coisa — o campo vem antes dos links. */}
+                <div className="border-b border-fuligem-20 px-4 py-4">
+                  <FormBusca id="busca-mobile" rotulo="Buscar cafés (menu)" />
+                </div>
+                <ul className="flex flex-col">
+                  {NAV.map((item) => (
+                    <li key={item.href} className="border-b border-fuligem-20">
+                      <Link
+                        href={item.href}
+                        className="flex min-h-[64px] items-center justify-between px-5 text-[20px] font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-vermelho"
+                      >
+                        {item.rotulo}
+                        <span aria-hidden className="font-dado text-fuligem-55">
+                          →
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
 
-              {/* mt-auto empurra a assinatura para o rodape do painel: o menu
-                  ocupa a tela inteira, entao o espaco vazio fica no meio e nao
-                  entre o ultimo link e a serra. */}
-              <div className="mt-auto px-4 pb-10 pt-8">
-                <Serra
-                  aria-hidden
-                  className="h-10 w-full text-fuligem-20"
-                  strokeWidth={1.5}
-                />
-                <p className="mt-6 font-dado text-[11px] uppercase tracking-[0.1em] text-fuligem-55">
-                  Serra da Canastra · Minas Gerais
-                </p>
-              </div>
-            </nav>
-          </details>
+                {/* mt-auto empurra a assinatura para o rodape do painel: o
+                    menu ocupa a tela inteira, entao o espaco vazio fica no
+                    meio e nao entre o ultimo link e a serra. */}
+                <div className="mt-auto px-4 pb-10 pt-8">
+                  <Serra
+                    aria-hidden
+                    className="h-10 w-full text-fuligem-20"
+                    strokeWidth={1.5}
+                  />
+                  <p className="mt-6 font-dado text-[11px] uppercase tracking-[0.1em] text-fuligem-55">
+                    Serra da Canastra · Minas Gerais
+                  </p>
+                </div>
+              </nav>
+            </details>
           </div>
         </div>
 

@@ -142,12 +142,20 @@ export function eventoBeginCheckout(itens: ItemAnalytics[]): void {
 }
 
 /**
- * Pagamento confirmado.
+ * Compra fechada.
  *
- * AINDA SEM PONTO DE DISPARO: a página de confirmação com URL própria
- * (`/pedido/[id]`) chega na Onda 2-D do plano mestre — é lá que este evento
- * deve ser chamado, com o id real do pedido. Fica pronto e testado desde já
- * para o contrato não mudar depois.
+ * PONTO DE DISPARO (Onda 2-D): a confirmação do checkout —
+ * `concluir()` em app/(vitrine)/checkout/page.tsx, UMA vez por pedido (uma
+ * ref barra StrictMode e re-render), com `transaction_id` = orderId real e
+ * itens identificados pelo skuLoja (o mesmo id do add_to_cart e do
+ * begin_checkout, senão o funil não fecha).
+ *
+ * PIX PENDENTE CONTA COMO PURCHASE, e isso é DELIBERADO: o pedido existe, o
+ * estoque está reservado e a convenção do GA4 é medir na confirmação — não há
+ * outra visita garantida (o QR se paga no app do banco, sem retorno ao site).
+ * O custo é contar um Pix que expira sem pagamento; o inverso (esperar o
+ * webhook) exigiria disparo server-side via Measurement Protocol, que não
+ * existe nesta loja. Recusas de cartão NÃO disparam: `concluir()` sai antes.
  */
 export function eventoPurchase(pedido: {
   idTransacao: string;

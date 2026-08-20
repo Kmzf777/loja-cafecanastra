@@ -82,6 +82,23 @@ export function PainelCompra({ lote }: { lote: Lote }) {
   const variante = acharVariante(lote, moagem, peso, pacotes);
   const indisponivel = !variante || variante.estoque === 0;
 
+  /**
+   * Teto do stepper: min(20, estoque) quando o estoque AO VIVO é conhecido —
+   * `produtoId` presente significa que preço e estoque vieram do banco
+   * (repositorio.ts). Sem API (modo contingência do JSON), o teto fica nos 20
+   * de sempre: o número do JSON pode estar velho, e quem confere de verdade é
+   * o servidor na hora de cobrar. Deixar pedir 20 de um estoque de 3 só para o
+   * checkout recusar depois é atrito que dá para evitar aqui.
+   */
+  const estoqueConhecido = Boolean(variante?.produtoId) && (variante?.estoque ?? 0) > 0;
+  const teto = estoqueConhecido ? Math.min(20, variante!.estoque) : 20;
+
+  // Trocar de combinação pode encolher o teto para baixo da quantidade já
+  // escolhida — puxa de volta, senão o pedido nasce maior que a prateleira.
+  useEffect(() => {
+    setQuantidade((q) => Math.min(q, teto));
+  }, [teto]);
+
   /** Embalagens (avulso, caixa com 3, caixa com 4) da combinação escolhida. */
   const embalagens = useMemo(
     () => embalagensDe(lote, moagem, peso),
@@ -338,9 +355,10 @@ export function PainelCompra({ lote }: { lote: Lote }) {
             {quantidade}
           </span>
           <button
-            onClick={() => setQuantidade((q) => Math.min(20, q + 1))}
+            onClick={() => setQuantidade((q) => Math.min(teto, q + 1))}
+            disabled={quantidade >= teto}
             aria-label="Aumentar quantidade"
-            className="h-12 w-12 text-[18px] leading-none hover:bg-fuligem-20/40"
+            className="h-12 w-12 text-[18px] leading-none hover:bg-fuligem-20/40 disabled:cursor-not-allowed disabled:text-fuligem-20 disabled:hover:bg-transparent"
           >
             +
           </button>
@@ -369,6 +387,14 @@ export function PainelCompra({ lote }: { lote: Lote }) {
       {erroDaSacola ? (
         <p role="alert" className="mt-3 text-[14px] text-vermelho">
           {erroDaSacola}
+        </p>
+      ) : null}
+
+      {/* Discreto de propósito: bater no teto não é erro, é o estoque real.
+          Só aparece quando o teto veio do estoque (não dos 20 arbitrários). */}
+      {!indisponivel && estoqueConhecido && teto < 20 && quantidade >= teto ? (
+        <p role="status" className="mt-3 text-[13px] text-fuligem-55">
+          Este é o máximo disponível em estoque agora.
         </p>
       ) : null}
 

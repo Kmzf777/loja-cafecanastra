@@ -162,20 +162,30 @@ export default function PaginaConta() {
           </div>
         ) : (
           <ul className="mt-6 border-t border-fuligem-20">
+            {/* Cada pedido é um link para a página dele (/pedido/[id]) — é lá
+                que vivem a linha do tempo, os itens e o rastreio. A linha
+                inteira é clicável: um "ver detalhes" minúsculo no canto seria
+                alvo de toque ruim. */}
             {pedidos.map((p) => (
-              <li
-                key={p.order_id}
-                className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-fuligem-20 py-4"
-              >
-                <span className="font-dado text-[13px] text-fuligem-55">
-                  {new Date(p.created_at).toLocaleDateString("pt-BR")}
-                </span>
-                <span className="text-[14px]">
-                  {STATUS[p.status] ?? p.status}
-                </span>
-                <span className="font-dado text-[15px]">
-                  {formatarPreco(Math.round(Number(p.total_amount) * 100))}
-                </span>
+              <li key={p.order_id} className="border-b border-fuligem-20">
+                <Link
+                  href={`/pedido/${p.order_id}`}
+                  className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-4 transition-colors hover:bg-cal-puro focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-vermelho"
+                  aria-label={`Pedido de ${new Date(p.created_at).toLocaleDateString("pt-BR")}, ${STATUS[p.status] ?? p.status}`}
+                >
+                  <span className="font-dado text-[13px] text-fuligem-55">
+                    {new Date(p.created_at).toLocaleDateString("pt-BR")}
+                  </span>
+                  <span className="text-[14px]">
+                    {STATUS[p.status] ?? p.status}
+                  </span>
+                  <span className="flex items-baseline gap-3 font-dado text-[15px]">
+                    {formatarPreco(Math.round(Number(p.total_amount) * 100))}
+                    <span aria-hidden className="text-fuligem-55">
+                      →
+                    </span>
+                  </span>
+                </Link>
               </li>
             ))}
           </ul>

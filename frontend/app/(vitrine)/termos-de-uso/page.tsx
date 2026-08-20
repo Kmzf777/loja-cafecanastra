@@ -19,10 +19,20 @@ export default function TermosDeUso() {
       </p>
 
       <h2>Pedidos e pagamento</h2>
+      {/* A lista de meios é CONDICIONADA à mesma env que liga o cartão no
+          checkout (NEXT_PUBLIC_MP_PUBLIC_KEY). Funciona porque os dois são
+          resolvidos em tempo de BUILD: a página é estática e a env é assada
+          no bundle — o build que mostra o rádio "Cartão" é o mesmo que
+          promete cartão aqui, e o build sem a chave promete só Pix. Escolhido
+          em vez de "cartão quando disponível" porque termos de uso com
+          condicional vago não dizem nada. */}
       <p>
         O pedido é confirmado apenas após a aprovação do pagamento. Trabalhamos
-        com Pix e cartão de crédito. Preços podem mudar sem aviso, mas nunca
-        depois de um pedido confirmado.
+        com {process.env.NEXT_PUBLIC_MP_PUBLIC_KEY?.trim()
+          ? "Pix e cartão de crédito"
+          : "Pix"}
+        . Preços podem mudar sem aviso, mas nunca depois de um pedido
+        confirmado.
       </p>
 
       <h2>Torra e envio</h2>
@@ -48,11 +58,17 @@ export default function TermosDeUso() {
         </li>
       </ul>
 
+      {/* Honestidade primeiro: o Clube de assinatura ainda não foi lançado
+          (é onda futura do projeto). Prometer regras de cancelamento de um
+          serviço que não existe seria o mesmo defeito do botão que não faz
+          nada. Quando o Clube abrir, esta seção volta com as regras reais. */}
       <h2>Assinatura</h2>
       <p>
-        A assinatura pode ser cancelada a qualquer momento, sem multa e sem
-        carência. O cancelamento vale para os envios seguintes; envios já
-        torrados e despachados não são estornados.
+        Hoje toda compra no site é <strong>compra única</strong> — o Clube de
+        assinatura ainda não está disponível. Quando abrir, estes termos serão
+        atualizados com as regras de cobrança recorrente e cancelamento, e a
+        assinatura poderá ser cancelada a qualquer momento, sem multa e sem
+        carência.
       </p>
 
       <h2>Contato</h2>
