@@ -1,0 +1,32 @@
+# Contexto de build do frontend/Dockerfile (contexto = RAIZ do repositorio).
+#
+# O contexto do frontend e a raiz — e nao frontend/ — por um unico motivo:
+# frontend/lib/catalogo/produtos.ts importa ../../../data/catalogo-canastra.json,
+# que vive em data/ na raiz. O webpack embute o JSON no bundle em build-time,
+# mas o arquivo precisa EXISTIR no contexto na hora do build.
+#
+# Este arquivo entao deixa passar apenas frontend/ e data/, e mesmo dentro de
+# frontend/ corta o que o build recria (node_modules, .next) e o que nunca pode
+# entrar em imagem (.env.local — as NEXT_PUBLIC_* de producao chegam por ARG,
+# nunca pelo arquivo de desenvolvimento).
+#
+# O backend tem contexto e .dockerignore proprios (backend/.dockerignore).
+
+# Corta tudo...
+*
+# ...e reabre so o que o build do frontend precisa.
+!frontend
+!data
+
+# Dentro do que reabriu:
+frontend/node_modules
+frontend/.next
+frontend/tsconfig.tsbuildinfo
+frontend/.verificacao
+
+# Ambiente de desenvolvimento fica fora da imagem; o .env.example e documentacao.
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+.DS_Store

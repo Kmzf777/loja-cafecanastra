@@ -1,0 +1,26 @@
+# Contexto de build do backend/Dockerfile (contexto = backend/).
+#
+# O que NAO entra no contexto nao entra na imagem nem invalida cache de layer.
+# A regra mais importante e a dos .env: o backend/src/.env de producao carrega
+# a service_role key e os tokens de MP/Resend — ele chega ao container por
+# env_file no docker-compose, NUNCA copiado para dentro da imagem (imagem vaza
+# facil: registry, docker save, docker history).
+
+node_modules
+uploads
+
+# Segredos e variantes de ambiente. O .env.example fica: e documentacao.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Testes e utilitarios de verificacao nao rodam dentro da imagem.
+test
+scripts
+
+# O proprio empacotamento e metadados.
+Dockerfile
+.dockerignore
+.gitignore
+*.md
+.DS_Store

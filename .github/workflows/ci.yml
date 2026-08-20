@@ -1,0 +1,75 @@
+# CI da loja: as duas suítes + o build de produção do frontend.
+#
+# Um job só, de propósito: os três passos caros compartilham o checkout e o
+# cache de npm, e o tempo total é menor que dois jobs com setup duplicado.
+#
+# O teste do backend sobe um Postgres EMBARCADO (devDependency
+# embedded-postgres): o `npm ci` em Linux baixa o binário via optional
+# dependency (@embedded-postgres/linux-x64) e o initdb roda como o usuário
+# `runner` do ubuntu-latest — initdb recusa rodar como root, e aqui não é.
+# Se um dia este passo falhar baixando binário, é rede/registro do npm, não o
+# código: reexecute antes de investigar.
+
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+  pull_request:
+    branches:
+      - main
+      - "feat/**"
+
+# Push em cima de push no mesmo branch: o run velho já não interessa — cancela
+# e roda só o mais novo (economiza minutos e fila).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    # O job inteiro (2 npm ci + 2 suítes + next build) fecha em ~8 min; 15 é
+    # folga honesta. Sem teto, um teste travado segura o runner por 6 HORAS.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          # Os dois lados têm lockfile próprio; o cache considera os dois.
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      # `npm ci` (e não install): instala EXATAMENTE o lockfile e falha se o
+      # package.json divergir dele — que é o erro que se quer pegar aqui.
+      # (Conferido em 2026-08-20: os dois lockfiles estão sincronizados.)
+      - name: dependências do backend
+        run: npm --prefix backend ci
+
+      - name: dependências do frontend
+        run: npm --prefix frontend ci
+
+      - name: testes do backend (node:test + Postgres embarcado)
+        run: npm --prefix backend test
+
+      - name: testes do frontend (vitest)
+        run: npm --prefix frontend run test
+
+      # Prova que o build de produção (output: standalone) compila — inclusive
+      # o type-check do `next build`. As NEXT_PUBLIC_* são dummies de CI:
+      # lib/supabase/ambiente.ts só exige que existam (o valor real é assunto
+      # do build de deploy, frontend/Dockerfile). NEXT_PUBLIC_API_URL fica de
+      # fora de propósito: o código tem fallback de desenvolvimento.
+      - name: build de produção do frontend
+        run: npm --prefix frontend run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://localhost:8000
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: chave-anonima-dummy-de-ci
+          NEXT_PUBLIC_SITE_URL: http://localhost:3000
+          NEXT_TELEMETRY_DISABLED: "1"

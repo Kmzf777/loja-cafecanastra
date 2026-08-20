@@ -1,0 +1,133 @@
+# Produção do Café Canastra numa VPS Linux — caminho COM Docker.
+# (A alternativa sem Docker é deploy/ecosystem.config.cjs + nginx do sistema.)
+#
+# Subir, a partir da raiz do repo:
+#   cd deploy
+#   # crie deploy/.env com as NEXT_PUBLIC_* (modelo em docs/deploy.md §7.1)
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# O QUE NÃO ESTÁ AQUI, DE PROPÓSITO: o banco. O Postgres é o da instância
+# Supabase self-hosted que JÁ RODA nesta VPS (fora do escopo deste compose —
+# não suba um segundo stack). Este compose só precisa ALCANÇÁ-LA, e há duas
+# formas; escolha UMA e ajuste backend/src/.env:
+#
+#   OPÇÃO A — via host (é a configurada abaixo, em extra_hosts):
+#     O container fala com o que a VPS publica em localhost. No backend/src/.env:
+#       DATABASE_URL=postgres://postgres:SENHA@host.docker.internal:5432/postgres
+#       SUPABASE_URL=http://host.docker.internal:8000
+#     Exige que o Postgres/Kong escutem na interface do host (o stack padrão do
+#     Supabase publica as portas; se só publicar em 127.0.0.1 continua valendo,
+#     porque host-gateway alcança o host de verdade).
+#
+#   OPÇÃO B — na rede do compose do Supabase (sem passar pelo host):
+#     Descomente o bloco `supabase` em `networks:` no fim do arquivo e a linha
+#     `- supabase` nos networks do serviço `api`, com o nome REAL da rede
+#     (descubra com `docker network ls`; o stack padrão cria `supabase_default`).
+#     No backend/src/.env os hosts viram os nomes dos serviços de lá:
+#       DATABASE_URL=postgres://postgres:SENHA@db:5432/postgres
+#       SUPABASE_URL=http://kong:8000
+#
+# Segredos: ficam em backend/src/.env (env_file abaixo), que NUNCA entra em
+# imagem — o backend/.dockerignore garante. As NEXT_PUBLIC_* do build do `web`
+# não são segredo (vão no bundle do navegador de qualquer jeito) e vêm do
+# deploy/.env pelo mecanismo de substituição de variáveis do próprio compose.
+
+name: canastra
+
+services:
+  api:
+    build:
+      # Relativo a ESTE arquivo (deploy/), não ao cwd de quem roda.
+      context: ../backend
+    restart: unless-stopped
+    # As variáveis de produção do Express — copie backend/src/.env.example para
+    # backend/src/.env e preencha (docs/deploy.md passo 4).
+    env_file:
+      - ../backend/src/.env
+    environment:
+      # `environment` VENCE `env_file`: mesmo que o .env tenha ficado com
+      # NODE_ENV=development (o valor do example), aqui dentro é produção — e
+      # com isso valem as recusas de subida de backend/src/config/ambiente.js.
+      NODE_ENV: production
+      PORT: "3333"
+    # `expose`, não `ports`: só o nginx fala com a API, pela rede interna.
+    # Publicar 3333 na VPS seria uma porta a mais para fechar no firewall.
+    expose:
+      - "3333"
+    volumes:
+      # Fallback local de upload de imagem (sem Cloudinary configurado). Sai na
+      # F3; até lá, um restart de container não pode apagar imagem de produto.
+      - uploads:/app/uploads
+    extra_hosts:
+      # OPÇÃO A acima: host.docker.internal resolve para o gateway do host.
+      - "host.docker.internal:host-gateway"
+    networks:
+      - interna
+      # - supabase   # OPÇÃO B: descomente junto com o bloco no fim do arquivo.
+
+  web:
+    build:
+      # Raiz do repo, e não frontend/: o build importa data/catalogo-canastra.json
+      # (a explicação completa está no cabeçalho de frontend/Dockerfile).
+      context: ..
+      dockerfile: frontend/Dockerfile
+      # NEXT_PUBLIC_* é assada no bundle em BUILD-time. Estes valores vêm do
+      # arquivo deploy/.env (substituição do compose). Mudou algum? É `build`
+      # de novo, não `restart`. A forma ${VAR:?...} é de propósito: faltou a
+      # variável, o compose ABORTA com a mensagem — em vez de assar um bundle
+      # sem Supabase que só falharia no navegador do cliente.
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:?defina em deploy/.env — ver docs/deploy.md §7.1}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:?defina em deploy/.env — ver docs/deploy.md §7.1}
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?defina em deploy/.env — ver docs/deploy.md §7.1}
+        # Mesma origem, API sob /api/* (docs/producao.md §2). Não parametriza:
+        # é decisão de topologia, não de ambiente.
+        NEXT_PUBLIC_API_URL: /api
+        # Ondas futuras (cartão MP, GA4, WhatsApp) — vazias desligam a feature.
+        NEXT_PUBLIC_MP_PUBLIC_KEY: ${NEXT_PUBLIC_MP_PUBLIC_KEY:-}
+        NEXT_PUBLIC_GA4_ID: ${NEXT_PUBLIC_GA4_ID:-}
+        NEXT_PUBLIC_WHATSAPP: ${NEXT_PUBLIC_WHATSAPP:-}
+    restart: unless-stopped
+    expose:
+      - "3000"
+    networks:
+      - interna
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    # service_healthy, não só "started": o nginx resolve os nomes `api` e `web`
+    # ao carregar a config — upstream que ainda não existe derruba o nginx na
+    # largada com "host not found in upstream". Esperar o healthcheck dos dois
+    # (definido nos Dockerfiles) elimina a corrida.
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Os server blocks da loja (e, opcionalmente, do domínio do Supabase).
+      - ./nginx:/etc/nginx/conf.d:ro
+      # Certificados. Com certbot no HOST (o caminho descrito em
+      # deploy/nginx/loja.conf), /etc/letsencrypt é a pasta real da VPS.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Webroot do desafio HTTP-01 do certbot (http://.../.well-known/acme-challenge/).
+      - certbot-webroot:/var/www/certbot
+    networks:
+      - interna
+
+volumes:
+  uploads:
+  certbot-webroot:
+
+networks:
+  interna:
+    driver: bridge
+  # OPÇÃO B — a rede que o compose do Supabase já criou nesta VPS:
+  # supabase:
+  #   external: true
+  #   name: supabase_default

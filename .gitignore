@@ -18,3 +18,6 @@ estrutura.sql
 # casa so o nome exato, e um .env.local com credencial iria para o repositorio.
 .env*
 !.env.example
+
+# Logs do PM2 na VPS (deploy/ecosystem.config.cjs escreve aqui).
+deploy/logs/

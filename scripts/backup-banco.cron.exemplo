@@ -1,0 +1,25 @@
+# Agendamento do backup do banco — diário, 03h (horário da VPS).
+#
+# Instalar (como o usuário que opera a loja):
+#   crontab -e            # e cole a linha ativa lá do fim, ajustada
+#
+# A DATABASE_URL não fica na linha do cron (crontab -l vaza para qualquer um
+# com o mesmo usuário; process list, idem). Fica num arquivo só do dono, que o
+# PRÓPRIO backup-banco.sh carrega ao iniciar (com `set -a`, então funciona com
+# ou sem `export` na linha — o export fica pelo hábito):
+#
+#   sudo mkdir -p /etc/canastra
+#   sudo install -m 600 -o "$USER" /dev/null /etc/canastra/backup.env
+#   echo 'export DATABASE_URL="postgres://postgres:SENHA@localhost:5432/postgres"' \
+#     | sudo tee /etc/canastra/backup.env > /dev/null
+#
+# (Opcional, no mesmo arquivo: BACKUP_DIR=... e RETENCAO_DIAS=...)
+#
+# O log importa: o modo clássico de backup falhar é em silêncio, meses antes de
+# alguém precisar dele. Confira /var/log/canastra-backup.log de vez em quando —
+# e ensaie uma restauração de verdade pelo menos uma vez (instruções no topo de
+# scripts/backup-banco.sh).
+#
+# Troque /opt/canastra pelo caminho real do clone:
+
+0 3 * * * /opt/canastra/scripts/backup-banco.sh >> /var/log/canastra-backup.log 2>&1

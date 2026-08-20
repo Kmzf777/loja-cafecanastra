@@ -33,6 +33,15 @@
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3333";
 
 /**
+ * A API só entra no CSP quando for origem ABSOLUTA (o caso do dev,
+ * http://localhost:3333). Em produção NEXT_PUBLIC_API_URL é "/api" — mesma
+ * origem atrás do nginx — e um caminho não é source expression válida em CSP:
+ * o navegador ignoraria a diretiva inteira ou o valor, a depender do parser.
+ * Nem faz falta: sendo mesma origem, o 'self' que já está em cada lista cobre.
+ */
+const API_CSP = /^https?:\/\//.test(API) ? API : "";
+
+/**
  * Origem do projeto Supabase.
  *
  * O navegador passa a falar direto com o Supabase (PostgREST em /rest/v1, auth
@@ -90,8 +99,8 @@ const csp = [
   // Sao DOIS lugares a mudar naquele dia, e esquecer o segundo da o mesmo
   // sintoma: esta linha (`${SUPABASE}`) e o `images.remotePatterns` mais abaixo,
   // que precisa do host do projeto para o <Image> do Next aceitar otimizar.
-  `img-src 'self' data: blob: ${API} https://res.cloudinary.com https://cdn-icons-png.flaticon.com https://*.mlstatic.com`,
-  `connect-src ${origens("'self'", API, SUPABASE, "https://api.mercadopago.com", "https://api.mercadolibre.com")}`,
+  `img-src ${origens("'self'", "data:", "blob:", API_CSP, "https://res.cloudinary.com", "https://cdn-icons-png.flaticon.com", "https://*.mlstatic.com")}`,
+  `connect-src ${origens("'self'", API_CSP, SUPABASE, "https://api.mercadopago.com", "https://api.mercadolibre.com")}`,
   // O checkout transparente do Mercado Pago roda os campos de cartao num iframe.
   "frame-src https://www.mercadopago.com https://sdk.mercadopago.com",
   "upgrade-insecure-requests",
@@ -115,6 +124,12 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Build de produção autocontido (F7): `next build` passa a emitir
+  // .next/standalone/server.js com só o node_modules que o tracing provou
+  // necessário — é o que a imagem Docker e o PM2 executam, sem instalar
+  // devDependencies na VPS. Como `outputFileTracingRoot` logo abaixo aponta
+  // para frontend/, o server.js sai direto em frontend/.next/standalone/.
+  output: "standalone",
   // Ha package-lock.json na raiz do repositorio e em frontend/. Sem isto o Next
   // infere a raiz errada e o tracing de deploy pode empacotar do lugar errado.
   outputFileTracingRoot: import.meta.dirname,
