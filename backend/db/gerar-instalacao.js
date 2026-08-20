@@ -5,7 +5,8 @@
  * SQL do Supabase para levantar a loja inteira de uma vez.
  *
  * POR QUE UM GERADOR, E NAO UM ARQUIVO ESCRITO A MAO
- * O arquivo colavel precisa conter as mesmas oito migracoes e o mesmo catalogo
+ * O arquivo colavel precisa conter as mesmas migracoes (todas as que estiverem
+ * em `db/migrations/`) e o mesmo catalogo
  * que `db:migrar` e `db:seed` aplicam. Mantido a mao, ele diverge na primeira
  * migracao nova — e a divergencia nao levanta erro: leva a um banco instalado
  * pelo SQL diferente do instalado pelo runner, e isso so aparece quando alguem

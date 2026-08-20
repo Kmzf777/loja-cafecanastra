@@ -1,27 +1,21 @@
 const OrderRepository = require("../repositories/ordersRepository");
 const pool = require("../pgPool");
 const { sendStatusEmail } = require("../utils/emailSender");
+const {
+  STATUS_VALIDOS,
+  GRUPO_ATIVO,
+  GRUPO_CANCELADO,
+} = require("../utils/statusDePedido");
+const { ordenarPorProduto } = require("../utils/estoque");
 
 /**
- * Status que um pedido pode assumir.
- *
- * `updateStatus` gravava a string crua do corpo da requisicao. Um erro de
- * digitacao no painel ("aprovado" em vez de "approved") gravava um status que
- * NENHUM dos grupos abaixo reconhece — e a partir dali o pedido nunca mais
- * devolvia estoque nem aparecia nos relatorios de venda, que filtram por
- * status conhecido. Sem lista fechada, o dado apodrece em silencio.
+ * Os status validos vem do modulo unico (`utils/statusDePedido`), que e o
+ * mesmo que o CHECK da migracao 0009 fixa — em portugues, decisao 1 do plano
+ * mestre. O painel legado ainda envia o vocabulario antigo do MP ate a Onda
+ * 2E; ate la, um `pending` responde 400 com a lista certa na mensagem, que e
+ * o comportamento honesto (gravar traduzindo em silencio esconderia que o
+ * painel esta desatualizado).
  */
-const STATUS_VALIDOS = [
-  "pending",
-  "in_process",
-  "authorized",
-  "approved",
-  "sent",
-  "delivered",
-  "cancelled",
-  "rejected",
-  "refunded",
-];
 
 /** Le page/limit da query com piso, teto e valor padrao. */
 function paginacao(query) {
@@ -53,6 +47,7 @@ class OrderController {
       const orders = await OrderRepository.getAllOrders(page, limit);
       return res.json(orders);
     } catch (error) {
+      console.error("Erro ao buscar pedidos do admin:", error);
       return res
         .status(500)
         .json({ error: "Erro ao buscar pedidos do admin." });
@@ -71,38 +66,35 @@ class OrderController {
         });
       }
 
-      const order = await OrderRepository.getOrderById(id);
-      if (!order) {
-        return res.status(404).json({ error: "Pedido não encontrado" });
-      }
-
-      // Devolver/retirar estoque e mudar o status precisam ser atomicos: sem
-      // transacao, uma falha no meio deixava o estoque movimentado com o pedido
-      // ainda no status antigo — e a proxima tentativa movimentava DE NOVO.
+      /**
+       * Devolver/retirar estoque e mudar o status precisam ser atomicos, e
+       * agora SAO: a leitura do pedido entra na mesma transacao, com FOR
+       * UPDATE (a versao anterior lia fora e atualizava o status por OUTRA
+       * conexao — a transacao de estoque nao cobria o proprio UPDATE de
+       * status, e uma falha no meio movimentava estoque DE NOVO na proxima
+       * tentativa).
+       */
       await client.query("BEGIN");
 
-      const currentStatus = order.status;
-      /**
-       * Grupos de status para o ajuste de estoque.
-       *
-       * `activeGroup` nao incluia "in_process" nem "authorized" — os dois
-       * estados em que o Mercado Pago deixa um pagamento em analise. Como o
-       * estoque e reservado no momento do checkout, cancelar um pedido que
-       * estivesse num desses estados NAO devolvia nada: a unidade ficava
-       * debitada para sempre, e o produto sumia do catalogo sem ter sido
-       * vendido. Os dois estados agora contam como ativos, que e o que sao.
-       *
-       * A lista sai de STATUS_VALIDOS menos os cancelados, para as duas nao
-       * poderem divergir de novo quando alguem acrescentar um status.
-       */
-      const cancelledGroup = ["cancelled", "rejected", "refunded"];
-      const activeGroup = STATUS_VALIDOS.filter(
-        (st) => !cancelledGroup.includes(st),
+      const { rows } = await client.query(
+        `SELECT pedido_id AS order_id, status, itens AS items, user_id,
+                total AS total_amount
+           FROM canastra.pedidos
+          WHERE pedido_id = $1::uuid
+            FOR UPDATE`,
+        [id],
       );
-      const isNowCancelled = cancelledGroup.includes(newStatus);
-      const wasCancelled = cancelledGroup.includes(currentStatus);
-      const isNowActive = activeGroup.includes(newStatus);
-      const wasActive = activeGroup.includes(currentStatus);
+      if (!rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Pedido não encontrado" });
+      }
+      const order = rows[0];
+      const currentStatus = order.status;
+
+      const isNowCancelled = GRUPO_CANCELADO.includes(newStatus);
+      const wasCancelled = GRUPO_CANCELADO.includes(currentStatus);
+      const isNowActive = GRUPO_ATIVO.includes(newStatus);
+      const wasActive = GRUPO_ATIVO.includes(currentStatus);
 
       let items = order.items;
       if (typeof items === "string") {
@@ -113,24 +105,29 @@ class OrderController {
         }
       }
 
+      // Ordem canonica nas travas de estoque (ver utils/estoque.js): o painel
+      // mudando um pedido enquanto um checkout reserva os mesmos produtos em
+      // ordem oposta seria deadlock 40P01.
       if (wasActive && isNowCancelled) {
         if (Array.isArray(items)) {
-          for (const item of items) {
+          for (const item of ordenarPorProduto(items)) {
             await client.query(
-              `UPDATE products 
-               SET quantity = quantity::integer + $1 
-               WHERE product_id = $2`,
+              `UPDATE canastra.produtos
+                  SET quantidade = quantidade + $1
+                WHERE produto_id = $2`,
               [Number(item.quantity), item.product_id],
             );
           }
         }
       } else if (wasCancelled && isNowActive) {
         if (Array.isArray(items)) {
-          for (const item of items) {
+          for (const item of ordenarPorProduto(items)) {
+            // GREATEST(0, ...): a unidade devolvida pode ja ter sido vendida;
+            // estoque negativo mentiria pior que zero.
             await client.query(
-              `UPDATE products 
-               SET quantity = GREATEST(0, quantity::integer - $1) 
-               WHERE product_id = $2`,
+              `UPDATE canastra.produtos
+                  SET quantidade = GREATEST(0, quantidade - $1)
+                WHERE produto_id = $2`,
               [Number(item.quantity), item.product_id],
             );
           }
@@ -141,6 +138,7 @@ class OrderController {
         id,
         newStatus,
         trackingCode,
+        client,
       );
 
       await client.query("COMMIT");

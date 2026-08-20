@@ -1,9 +1,16 @@
 const crypto = require("node:crypto");
+const { v4: uuidv4 } = require("uuid");
 const { payment } = require("../config/mercadopago");
 const OrderRepository = require("../repositories/ordersRepository");
 const pool = require("../pgPool");
 const PromotionsRepository = require("../repositories/promotionsRepository");
 const { calcularOpcoesDeFrete } = require("./ShippingController");
+const {
+  GRUPO_ATIVO,
+  GRUPO_CANCELADO,
+  traduzirStatusMp,
+} = require("../utils/statusDePedido");
+const { ordenarPorProduto } = require("../utils/estoque");
 const promotionsRepo = new PromotionsRepository();
 const {
   sendStatusEmail,
@@ -12,6 +19,9 @@ const {
 
 /** Tolerancia de centavo ao comparar o frete recalculado com o enviado. */
 const TOLERANCIA_FRETE = 0.01;
+
+const FORMATO_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Confere o frete que o navegador mandou contra o que o servidor calcula.
@@ -23,6 +33,12 @@ const TOLERANCIA_FRETE = 0.01;
  * Aqui o servidor recalcula as opcoes para o CEP do pedido, usando peso e
  * dimensoes vindos do BANCO, e so aceita um valor que corresponda a alguma
  * opcao real. Retirada na loja (frete 0) continua valendo.
+ *
+ * O FRETE GRATIS DE SERVIDOR (0009) passa por aqui SEM mudar esta funcao: a
+ * recotacao chama o mesmo `calcularOpcoesDeFrete`, que ja zera as opcoes
+ * quando o subtotal atinge o piso — entao o `shippingCost: 0` do navegador
+ * casa com uma opcao real de preco 0. Abaixo do piso, o zero nao casa com
+ * nada e cai no 409 de sempre.
  */
 async function conferirFrete({ address, itens, shippingCost, shippingMethod }) {
   const valor = Number(shippingCost || 0);
@@ -142,12 +158,93 @@ function validarAssinaturaWebhook(req) {
   return crypto.timingSafeEqual(a, b);
 }
 
-/** Compensacao: devolve ao estoque o que uma reserva ja tinha tirado. */
-async function devolverEstoque(client, itens) {
+/**
+ * O menor preco do produto dadas as promocoes ativas, arredondado a centavo.
+ *
+ * Fatorado porque roda DUAS vezes por checkout: na cotacao de frete (leitura
+ * sem trava, antes da transacao) e no calculo do valor cobrado (releitura com
+ * FOR UPDATE). Duas copias desta logica divergindo fariam o frete gratis e a
+ * cobranca discordarem sobre o mesmo carrinho.
+ *
+ * O arredondamento nao e cosmetico: 10% sobre 49.90 em float da
+ * 44.910000000000004, e esse numero iria para o JSON IMUTAVEL do pedido
+ * (`itens`, regra de 0005) e para a soma cobrada no gateway.
+ */
+function precoComPromocao(productDb, activePromotions) {
+  const precoOriginal = Number(productDb.price);
+  let bestPrice = precoOriginal;
+
+  activePromotions.forEach((p) => {
+    let match = false;
+
+    const promoCategory = p.category
+      ? String(p.category).trim().toLowerCase()
+      : "";
+    const prodCategory = productDb.category
+      ? String(productDb.category).trim().toLowerCase()
+      : "";
+
+    if (p.applies_to === "all") {
+      match = true;
+    } else if (p.applies_to === "category") {
+      if (promoCategory && promoCategory === prodCategory) {
+        match = true;
+      }
+    } else if (p.applies_to === "product") {
+      if (String(p.product_id) === String(productDb.product_id)) {
+        match = true;
+      }
+    }
+
+    if (match) {
+      const value = Number(p.value);
+      const discounted =
+        p.type === "percent"
+          ? precoOriginal * (1 - value / 100)
+          : Math.max(0, precoOriginal - value);
+
+      if (discounted < bestPrice) bestPrice = discounted;
+    }
+  });
+
+  return Math.round(bestPrice * 100) / 100;
+}
+
+/**
+ * Rele a URL de pagamento (QR do Pix, boleto) de um pagamento ja criado no MP.
+ *
+ * E a peca que faltava no REPLAY de idempotencia: a retentativa do mesmo
+ * clique recebia o pedido existente mas SEM `ticketUrl` — no Pix isso e um
+ * pedido morto, porque o cliente fica sem QR para pagar. A URL nao esta
+ * gravada no pedido (e nao vamos criar coluna para um dado que o MP ja
+ * guarda), entao ela e relida da API. Falha aqui nao derruba o replay:
+ * responde sem ticketUrl, com o motivo no log.
+ */
+async function ticketUrlDoPagamento(paymentIdMp) {
+  if (!paymentIdMp) return undefined;
+  try {
+    const pagamento = await payment.get({ id: paymentIdMp });
+    return pagamento?.point_of_interaction?.transaction_data?.ticket_url;
+  } catch (erro) {
+    console.warn(
+      `Replay: não consegui reler o ticket do pagamento ${paymentIdMp}:`,
+      erro.message,
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Compensacao: devolve ao estoque o que uma reserva ja tinha tirado. Recebe a
+ * conexao (em geral o proprio pool: sao UPDATEs soltos, cada um commita
+ * sozinho — compensacao nao pode depender de uma transacao que talvez ja
+ * tenha morrido).
+ */
+async function devolverEstoque(conexao, itens) {
   for (const item of itens) {
     try {
-      await client.query(
-        "UPDATE products SET quantity = quantity + $1 WHERE product_id = $2",
+      await conexao.query(
+        "UPDATE canastra.produtos SET quantidade = quantidade + $1 WHERE produto_id = $2",
         [Number(item.quantity), item.product_id],
       );
     } catch (err) {
@@ -161,10 +258,56 @@ async function devolverEstoque(client, itens) {
   }
 }
 
+/**
+ * Grava o CPF do corpo em `canastra.clientes` e devolve o CPF vigente.
+ *
+ * A Onda 2D vai coletar o CPF no checkout; o backend ja aceita: se
+ * `formData.payer.identification` trouxer um CPF de 11 digitos, ele e
+ * persistido ANTES da conferencia — e a partir dai a conta tem CPF para
+ * sempre. Sem CPF de nenhuma fonte, o checkout recusa com CPF_MISSING, como
+ * sempre recusou.
+ */
+async function garantirCpf(userId, identification) {
+  const tipo = String(identification?.type || "CPF").toUpperCase();
+  const digitos = String(identification?.number || "").replace(/\D/g, "");
+
+  if (tipo === "CPF" && digitos.length === 11) {
+    try {
+      await pool.query(
+        "UPDATE canastra.clientes SET cpf = $1 WHERE user_id = $2::uuid",
+        [digitos, userId],
+      );
+    } catch (err) {
+      if (err.code === "23505") {
+        // O UNIQUE de `clientes.cpf` (0002): este numero ja pertence a outra
+        // conta. Recusar com frase e melhor que um 500 sem explicacao.
+        const erro = new Error("Este CPF já está cadastrado em outra conta.");
+        erro.status = 400;
+        erro.codigoPublico = "CPF_EM_USO";
+        throw erro;
+      }
+      throw err;
+    }
+  }
+
+  const { rows } = await pool.query(
+    "SELECT cpf FROM canastra.clientes WHERE user_id = $1::uuid",
+    [userId],
+  );
+  return rows.length ? rows[0].cpf : null;
+}
+
 class PaymentController {
   async createPayment(req, res) {
-    const client = await pool.connect();
     // Fora do try: o bloco de erro precisa saber em que ponto do fluxo parou.
+    //
+    // `client` NULO ate a hora do BEGIN, de proposito: tudo antes da transacao
+    // (idempotencia, CPF, promocoes, cotacao de frete) fala com o banco pelo
+    // pool. Adquirir a conexao dedicada na primeira linha — como estava —
+    // fazia cada checkout segurar DUAS conexoes durante as idas preliminares
+    // (uma delas com rede no meio), cortando o teto util do pool pela metade
+    // numa rajada.
+    let client = null;
     let estoqueReservado = false;
     let pedidoCriado = null;
     let validatedItems = [];
@@ -190,13 +333,41 @@ class PaymentController {
        */
       const userId = req.user?.userId;
 
-      if (userId) {
-        const userCheck = await client.query(
-          "SELECT cpf FROM users WHERE user_id = $1",
-          [userId],
-        );
+      /**
+       * IDEMPOTENCIA DO CHECKOUT (indice parcial de 0005).
+       *
+       * O navegador PODE mandar `Idempotency-Key`; duas tentativas do mesmo
+       * clique chegam com a mesma chave e a segunda recebe o pedido que a
+       * primeira criou, SEM segunda cobranca. Sem o cabecalho, o servidor
+       * gera uma chave propria — o pedido nunca grava sem chave, entao o
+       * indice unico continua armado para todo caminho futuro.
+       */
+      const chaveDoCliente = String(
+        req.headers["idempotency-key"] || req.headers["x-idempotency-key"] || "",
+      ).trim();
+      const chaveIdempotencia =
+        chaveDoCliente && chaveDoCliente.length <= 128
+          ? `${userId}:${chaveDoCliente}`
+          : uuidv4();
 
-        if (userCheck.rowCount === 0 || !userCheck.rows[0].cpf) {
+      if (chaveDoCliente) {
+        const existente =
+          await OrderRepository.getOrderByIdempotencyKey(chaveIdempotencia);
+        if (existente) {
+          // O QR do Pix vai junto: replay sem ticketUrl era um pedido morto —
+          // o cliente recebia "já processado" e ficava sem o que pagar.
+          return res.status(200).json({
+            message: "Este pedido já tinha sido processado.",
+            status: existente.status,
+            orderId: existente.order_id,
+            ticketUrl: await ticketUrlDoPagamento(existente.payment_id_mp),
+          });
+        }
+      }
+
+      if (userId) {
+        const cpf = await garantirCpf(userId, formData?.payer?.identification);
+        if (!cpf) {
           return res.status(400).json({
             error: "CPF_MISSING",
             message:
@@ -212,6 +383,8 @@ class PaymentController {
       /**
        * Quantidade tambem e entrada de usuario. Sem este piso, `quantity: -5`
        * fazia a soma do pedido DIMINUIR e ainda devolvia estoque na baixa.
+       * O formato do id tambem: um `product_id` que nao e UUID estourava
+       * 22P02 dentro da transacao e virava 500 sem explicacao.
        */
       for (const item of items) {
         const q = Number(item.quantity);
@@ -220,83 +393,135 @@ class PaymentController {
             .status(400)
             .json({ error: "Quantidade inválida em um dos itens." });
         }
+        if (!FORMATO_UUID.test(String(item.product_id || ""))) {
+          return res
+            .status(400)
+            .json({ error: "Identificador de produto inválido." });
+        }
       }
 
       const activePromotions =
         await promotionsRepo.findActivePromotionsForCheckout();
 
+      /**
+       * Ordem canonica ANTES de qualquer trava: dois pedidos com os mesmos
+       * produtos em ordens opostas se matariam em deadlock 40P01 (ver
+       * utils/estoque.js). Tudo daqui para baixo itera nesta ordem.
+       */
+      const itensOrdenados = ordenarPorProduto(items);
+
+      /**
+       * PRIMEIRA PASSADA, SEM TRAVA: le peso, dimensoes e preco so para
+       * conferir o frete ANTES de abrir a transacao. A conferencia pode
+       * chamar a Melhor Envio (ate 12s de timeout), e segurar o FOR UPDATE de
+       * todos os produtos do carrinho durante uma chamada de rede bloquearia
+       * qualquer outro checkout com um item em comum — o mesmo motivo pelo
+       * qual o COMMIT acontece antes da ida ao Mercado Pago.
+       *
+       * O que se le aqui vale para a COTACAO; o dinheiro cobrado sai da
+       * releitura com FOR UPDATE logo abaixo. Se um preco mudar exatamente
+       * entre as duas leituras, o pior caso e a decisao de frete gratis ter
+       * usado o subtotal de milissegundos atras — e frete, e uma janela que
+       * nao justifica prender a prateleira inteira.
+       */
+      const { rows: leituraPrevia } = await pool.query(
+        `SELECT produto_id  AS product_id,
+                preco       AS price,
+                categoria   AS category,
+                nome        AS name,
+                peso        AS weight,
+                largura     AS width,
+                altura      AS height,
+                comprimento AS length
+           FROM canastra.produtos
+          WHERE produto_id = ANY($1::uuid[])`,
+        [itensOrdenados.map((i) => i.product_id)],
+      );
+      const previaPorId = new Map(leituraPrevia.map((p) => [p.product_id, p]));
+
+      const itensParaCotacao = [];
+      for (const item of itensOrdenados) {
+        const previa = previaPorId.get(item.product_id);
+        if (!previa) {
+          const erro = new Error(`O produto "${item.name}" não existe mais.`);
+          erro.status = 400;
+          throw erro;
+        }
+        itensParaCotacao.push({
+          product_id: previa.product_id,
+          quantity: Number(item.quantity),
+          price: precoComPromocao(previa, activePromotions),
+          // Peso e dimensoes reais, para o frete ser reconferido com o pacote
+          // de verdade e nao com o que o cliente disser que e.
+          weight: previa.weight,
+          width: previa.width,
+          height: previa.height,
+          length: previa.length,
+        });
+      }
+
+      const freteConferido = await conferirFrete({
+        address,
+        itens: itensParaCotacao,
+        shippingCost,
+        shippingMethod,
+      });
+
       let validatedTotalAmount = 0;
 
       /**
-       * Tudo que le e reserva estoque roda numa transacao so.
+       * Agora sim a transacao — enxuta: so leitura travada e reserva, nenhuma
+       * chamada de rede dentro dela.
        *
-       * Antes a checagem de estoque e a baixa eram duas consultas soltas,
-       * separadas por uma chamada de rede ao Mercado Pago. Duas compras
-       * simultanea do ultimo pacote passavam as duas pela checagem, e o
-       * `GREATEST(0, ...)` da baixa escondia o rombo zerando em vez de falhar.
-       * `FOR UPDATE` serializa os concorrentes na linha do produto.
+       * Antes da F4 a checagem de estoque e a baixa eram duas consultas
+       * soltas, separadas por uma chamada de rede ao Mercado Pago. Duas
+       * compras simultaneas do ultimo pacote passavam as duas pela checagem,
+       * e o `GREATEST(0, ...)` da baixa escondia o rombo zerando em vez de
+       * falhar. `FOR UPDATE` serializa os concorrentes na linha do produto.
        */
+      client = await pool.connect();
       await client.query("BEGIN");
 
-      for (const item of items) {
+      for (const item of itensOrdenados) {
         const { rows } = await client.query(
-          `SELECT quantity, price, name, category, product_id, image, size,
-                  weight, width, height, length
-             FROM products
-            WHERE product_id = $1
+          `SELECT quantidade  AS quantity,
+                  preco       AS price,
+                  nome        AS name,
+                  categoria   AS category,
+                  produto_id  AS product_id,
+                  imagem      AS image,
+                  tamanho     AS size,
+                  peso        AS weight,
+                  largura     AS width,
+                  altura      AS height,
+                  comprimento AS length
+             FROM canastra.produtos
+            WHERE produto_id = $1
               FOR UPDATE`,
           [item.product_id],
         );
 
         if (rows.length === 0) {
-          throw new Error(`O produto "${item.name}" não existe mais.`);
+          const erro = new Error(`O produto "${item.name}" não existe mais.`);
+          erro.status = 400;
+          throw erro;
         }
 
         const productDb = rows[0];
         const stockAtual = Number(productDb.quantity);
         const qtdSolicitada = Number(item.quantity);
-        const precoOriginal = Number(productDb.price);
 
         if (stockAtual < qtdSolicitada) {
-          throw new Error(
+          // O texto "Estoque insuficiente" e CONTRATO: o checkout legado o
+          // procura em `details` para recarregar o carrinho.
+          const erro = new Error(
             `Estoque insuficiente para "${productDb.name}". Restam ${stockAtual} unidades.`,
           );
+          erro.status = 400;
+          throw erro;
         }
 
-        let bestPrice = precoOriginal;
-        activePromotions.forEach((p) => {
-          let match = false;
-
-          const promoCategory = p.category
-            ? String(p.category).trim().toLowerCase()
-            : "";
-          const prodCategory = productDb.category
-            ? String(productDb.category).trim().toLowerCase()
-            : "";
-
-          if (p.applies_to === "all") {
-            match = true;
-          } else if (p.applies_to === "category") {
-            if (promoCategory && promoCategory === prodCategory) {
-              match = true;
-            }
-          } else if (p.applies_to === "product") {
-            if (String(p.product_id) === String(productDb.product_id)) {
-              match = true;
-            }
-          }
-
-          if (match) {
-            const value = Number(p.value);
-            const discounted =
-              p.type === "percent"
-                ? precoOriginal * (1 - value / 100)
-                : Math.max(0, precoOriginal - value);
-
-            if (discounted < bestPrice) bestPrice = discounted;
-          }
-        });
-
+        const bestPrice = precoComPromocao(productDb, activePromotions);
         validatedTotalAmount += bestPrice * qtdSolicitada;
 
         validatedItems.push({
@@ -306,8 +531,6 @@ class PaymentController {
           price: bestPrice,
           quantity: qtdSolicitada,
           size: productDb.size,
-          // Peso e dimensoes reais, para o frete ser reconferido com o pacote
-          // de verdade e nao com o que o cliente disser que e.
           weight: productDb.weight,
           width: productDb.width,
           height: productDb.height,
@@ -324,28 +547,23 @@ class PaymentController {
        * inverte o risco para o lado seguro — se o pagamento nao sair, o
        * ROLLBACK devolve tudo.
        *
-       * O `WHERE quantity >= $1` e a rede de seguranca final: se ainda assim
+       * O `WHERE quantidade >= $1` e a rede de seguranca final: se ainda assim
        * a linha nao casar, rowCount = 0 e o pedido inteiro e desfeito, em vez
        * de gravar estoque negativo.
        */
       for (const item of validatedItems) {
         const baixa = await client.query(
-          `UPDATE products
-              SET quantity = quantity - $1
-            WHERE product_id = $2 AND quantity >= $1`,
+          `UPDATE canastra.produtos
+              SET quantidade = quantidade - $1
+            WHERE produto_id = $2 AND quantidade >= $1`,
           [item.quantity, item.product_id],
         );
         if (baixa.rowCount === 0) {
-          throw new Error(`Estoque insuficiente para "${item.name}".`);
+          const erro = new Error(`Estoque insuficiente para "${item.name}".`);
+          erro.status = 400;
+          throw erro;
         }
       }
-
-      const freteConferido = await conferirFrete({
-        address,
-        itens: validatedItems,
-        shippingCost,
-        shippingMethod,
-      });
 
       const finalAmountToCharge = Number(
         (validatedTotalAmount + freteConferido).toFixed(2),
@@ -358,15 +576,15 @@ class PaymentController {
       }
 
       /**
-       * Fecha a transacao com o estoque JA reservado.
-       *
-       * A chamada ao Mercado Pago e rede: segurar as travas de `FOR UPDATE`
-       * durante ela bloquearia todo mundo que quisesse comprar o mesmo produto
-       * pelo tempo da resposta do gateway. Commit aqui, e se a cobranca falhar
-       * o bloco de compensacao logo abaixo devolve o estoque.
+       * Fecha a transacao com o estoque JA reservado, e devolve a conexao ao
+       * pool ANTES da ida ao Mercado Pago: dali em diante tudo e pool.query, e
+       * uma conexao parada durante uma chamada de rede e uma conexao roubada
+       * de outro checkout.
        */
       await client.query("COMMIT");
       estoqueReservado = true;
+      client.release();
+      client = null;
 
       const paymentMethodIdRaw =
         formData.paymentMethodId ||
@@ -414,56 +632,148 @@ class PaymentController {
       } catch (falhaNoGateway) {
         // Cobranca nao saiu: devolve o que foi reservado, senao o produto some
         // do estoque sem ninguem ter comprado.
-        await devolverEstoque(client, validatedItems);
+        await devolverEstoque(pool, validatedItems);
         estoqueReservado = false;
         throw falhaNoGateway;
       }
 
+      // A partir daqui a API fala portugues: o status do MP e traduzido UMA
+      // vez e e o vocabulario da loja que vai para o banco, para o e-mail e
+      // para a resposta (decisao 1 do plano mestre).
       const mpStatus = mpResponse.status;
+      const statusPt = traduzirStatusMp(mpStatus);
       const mpId = mpResponse.id;
 
-      // Cria o pedido
-      const newOrder = await OrderRepository.createOrder({
-        userId: userId,
-        totalAmount: finalAmountToCharge,
-        items: validatedItems,
-        paymentMethod: finalPaymentMethodId,
-        paymentIdMp: mpId.toString(),
-        address_json: address,
-        // O frete gravado no pedido e o CONFERIDO, nao o que o cliente mandou.
-        shippingCost: freteConferido,
-        shippingMethod: shippingMethod || "Retirada",
-      });
+      let newOrder;
+      try {
+        // Nasce 'pendente' — o status inicial fixado — e ja recebe o status
+        // real do MP logo abaixo, quando houver.
+        newOrder = await OrderRepository.createOrder({
+          userId: userId,
+          totalAmount: finalAmountToCharge,
+          items: validatedItems,
+          paymentMethod: finalPaymentMethodId,
+          paymentIdMp: mpId.toString(),
+          address_json: address,
+          // O frete gravado no pedido e o CONFERIDO, nao o que o cliente mandou.
+          shippingCost: freteConferido,
+          shippingMethod: shippingMethod || "Retirada",
+          chaveIdempotencia,
+          status: "pendente",
+        });
+      } catch (erroDeInsert) {
+        if (erroDeInsert.code === "23505") {
+          /**
+           * Corrida real de duplo clique: as DUAS requisicoes passaram pela
+           * conferencia inicial antes de qualquer uma gravar, e o indice
+           * unico barrou a segunda — que ja cobrou o MP. A reserva desta
+           * requisicao volta e o cliente recebe o pedido que valeu; o
+           * pagamento duplicado fica GRITADO no log para estorno manual
+           * (estornar automaticamente exigiria a API de refunds, fora desta
+           * onda).
+           */
+          await devolverEstoque(pool, validatedItems);
+          estoqueReservado = false;
+          console.error(
+            `PAGAMENTO DUPLICADO: chave ${chaveIdempotencia} ja tinha pedido; ` +
+              `pagamento MP ${mpId} precisa de estorno manual.`,
+          );
+          const existente =
+            await OrderRepository.getOrderByIdempotencyKey(chaveIdempotencia);
+          if (existente) {
+            return res.status(200).json({
+              message: "Este pedido já tinha sido processado.",
+              status: existente.status,
+              orderId: existente.order_id,
+              ticketUrl: await ticketUrlDoPagamento(existente.payment_id_mp),
+            });
+          }
+        } else {
+          /**
+           * O outro jeito de nascer uma cobranca orfa: o MP cobrou e o INSERT
+           * falhou por qualquer motivo que nao a idempotencia (banco caiu,
+           * por exemplo). O estoque volta pelo catch externo; o dinheiro so
+           * volta se alguem estornar — por isso a linha propria, gritada, com
+           * tudo que o estorno manual precisa.
+           */
+          console.error(
+            `COBRANÇA ÓRFÃ: o MP cobrou o pagamento ${mpId} mas o pedido não ` +
+              `foi gravado (user ${userId}, chave ${chaveIdempotencia}). ` +
+              `Estorne manualmente no painel do MP. Causa: ${erroDeInsert.message}`,
+          );
+        }
+        throw erroDeInsert;
+      }
 
       pedidoCriado = newOrder;
 
-      if (mpStatus) {
-        await OrderRepository.updateOrderStatus(newOrder.order_id, mpStatus);
+      /**
+       * Avanca do 'pendente' para o status da resposta sincrona do MP — mas so
+       * se o pedido AINDA esta 'pendente'. O webhook pode chegar entre o
+       * INSERT e esta linha (Pix notifica em segundos), e um UPDATE cego
+       * atropelaria o status que ele gravou e, pior, o bloco de estoque
+       * abaixo devolveria unidades que o webhook JA devolveu. Se o webhook
+       * venceu (`avancado` vazio), este caminho nao produz mais efeito:
+       * nem estoque, nem e-mail de status.
+       */
+      let statusAplicado = "pendente";
+      if (statusPt && statusPt !== "pendente") {
+        const avancado = await OrderRepository.avancarStatusInicial(
+          newOrder.order_id,
+          statusPt,
+        );
+        if (avancado) {
+          statusAplicado = statusPt;
+        } else {
+          statusAplicado = null;
+          console.log(
+            `Checkout: o webhook chegou antes no pedido ${newOrder.order_id}; efeitos ja aplicados la.`,
+          );
+        }
+      } else if (!statusPt && mpStatus) {
+        console.warn(
+          `Status do MP sem tradução no checkout: "${mpStatus}" — pedido ${newOrder.order_id} segue 'pendente'.`,
+        );
       }
 
-      // Se o pagamento ja nasceu recusado, a reserva nao se justifica.
-      if (["rejected", "cancelled"].includes(mpStatus)) {
-        await devolverEstoque(client, validatedItems);
-        estoqueReservado = false;
-      } else if (userId) {
-        // Carrinho so esvazia com o pedido de pe. Falhar aqui nao pode derrubar
-        // uma compra que ja foi cobrada — no pior caso o carrinho fica sujo.
+      // Carrinho so esvazia com o pedido de pe. Falhar aqui nao pode derrubar
+      // uma compra que ja foi cobrada — no pior caso o carrinho fica sujo.
+      const limparCarrinho = async () => {
         try {
-          await client.query(
-            `DELETE FROM cart_items
-              WHERE cart_id IN (SELECT cart_id FROM carts WHERE user_id = $1::uuid)`,
+          await pool.query(
+            `DELETE FROM canastra.carrinho_itens
+              WHERE carrinho_id IN (
+                SELECT carrinho_id FROM canastra.carrinhos WHERE user_id = $1::uuid
+              )`,
             [userId],
           );
         } catch (err) {
           console.error("Falha ao limpar o carrinho após a compra:", err.message);
         }
+      };
+
+      if (statusAplicado === null) {
+        // O webhook decidiu primeiro; estoque e e-mail sao dele. So espelha a
+        // limpeza do carrinho se o pedido seguiu vivo.
+        const atual = await OrderRepository.getOrderById(
+          newOrder.order_id,
+        ).catch(() => null);
+        if (userId && atual && GRUPO_ATIVO.includes(atual.status)) {
+          await limparCarrinho();
+        }
+      } else if (GRUPO_CANCELADO.includes(statusAplicado)) {
+        // O pagamento ja nasceu recusado: a reserva nao se justifica.
+        await devolverEstoque(pool, validatedItems);
+        estoqueReservado = false;
+      } else if (userId) {
+        await limparCarrinho();
       }
 
       // E-mail e efeito colateral: se o provedor estiver fora, o pedido esta
       // pago e gravado do mesmo jeito e a resposta nao pode virar erro.
       Promise.allSettled([
         sendAdminNewOrderEmail(newOrder),
-        mpStatus ? sendStatusEmail(newOrder, mpStatus) : null,
+        statusAplicado ? sendStatusEmail(newOrder, statusAplicado) : null,
       ]).then((r) => {
         r.filter((x) => x.status === "rejected").forEach((x) =>
           console.error("Falha ao enviar e-mail do pedido:", x.reason?.message),
@@ -472,7 +782,7 @@ class PaymentController {
 
       return res.status(201).json({
         message: "Pagamento processado!",
-        status: mpStatus,
+        status: statusPt || mpStatus,
         orderId: newOrder.order_id,
         ticketUrl:
           mpResponse.point_of_interaction?.transaction_data?.ticket_url,
@@ -480,20 +790,19 @@ class PaymentController {
     } catch (error) {
       // Se a transacao ainda estiver aberta, desfaz. Se ja tinha commitado a
       // reserva e o pedido nao chegou a existir, devolve o estoque na mao.
-      try {
-        await client.query("ROLLBACK");
-      } catch {
-        /* nao havia transacao aberta */
+      if (client) {
+        await client.query("ROLLBACK").catch(() => {});
       }
       if (estoqueReservado && !pedidoCriado) {
-        await devolverEstoque(client, validatedItems);
+        await devolverEstoque(pool, validatedItems);
       }
 
       console.error("Erro ao processar pagamento:", error);
 
-      const statusCode =
-        error.status ||
-        (String(error.message).includes("Estoque insuficiente") ? 400 : 500);
+      // Quem lanca com intencao carrega `erro.status`; o resto e 500. (Os
+      // erros de estoque levam 400 no proprio throw — nada de farejar
+      // substring de mensagem para adivinhar a classe do erro.)
+      const statusCode = error.status || 500;
 
       // Detalhe de erro so vaza quando NOS o escrevemos. Mensagem de excecao
       // crua pode carregar SQL, nome de coluna ou resposta do gateway.
@@ -503,27 +812,24 @@ class PaymentController {
           : "Não foi possível concluir o pagamento. Tente novamente.";
 
       return res.status(statusCode).json({
-        error: "Falha no pagamento",
+        error: error.codigoPublico || "Falha no pagamento",
         details: publico,
       });
     } finally {
-      client.release();
+      if (client) client.release();
     }
   }
 
   async receiveWebhook(req, res) {
     /**
-     * O webhook e publico por natureza: fica ANTES do middleware de CSRF em
-     * index.js e nao tem sessao. A unica coisa que separa uma notificacao do
-     * Mercado Pago de um POST de qualquer pessoa na internet e a assinatura.
+     * O webhook e publico por natureza e a unica coisa que separa uma
+     * notificacao do Mercado Pago de um POST de qualquer pessoa na internet e
+     * a assinatura HMAC (formato: `x-signature: ts=<epoch>,v1=<hmac>` sobre o
+     * manifesto `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`).
      *
-     * Sem esta conferencia, um terceiro conseguia disparar o handler para
-     * qualquer id de pagamento e provocar devolucao de estoque e disparo de
-     * e-mail de status em pedidos que nao sao dele. (O status em si nunca foi
-     * forjavel: ele e relido da API do MP logo abaixo, nao do corpo.)
-     *
-     * Formato: header `x-signature: ts=<epoch>,v1=<hmac>`, sobre o manifesto
-     * `id:<data.id>;request-id:<x-request-id>;ts:<ts>;` com HMAC-SHA256.
+     * O status NUNCA vem do corpo: ele e relido da API do MP logo abaixo —
+     * por isso um terceiro nao consegue forjar transicao nem com o webhook
+     * aberto em desenvolvimento.
      */
     if (!validarAssinaturaWebhook(req)) {
       console.warn("Webhook recusado: assinatura inválida.", {
@@ -535,90 +841,141 @@ class PaymentController {
       return res.sendStatus(401);
     }
 
-    const client = await pool.connect();
+    const { type, data } = req.body;
+    if (type !== "payment") return res.sendStatus(200);
+
+    const paymentId = data?.id;
+
+    // A ida ao MP fica FORA da transacao: e rede, e segurar trava de linha
+    // durante ela bloquearia o proprio pedido (e o checkout) pelo tempo da
+    // resposta. Falhou? 500, e o MP reenvia.
+    let statusPt;
+    let mpStatus;
     try {
-      const { type, data } = req.body;
+      const mpPayment = await payment.get({ id: paymentId });
+      mpStatus = mpPayment.status;
+      statusPt = traduzirStatusMp(mpStatus);
+    } catch (erro) {
+      console.error(`Webhook: falha ao reler o pagamento ${paymentId} no MP:`, erro);
+      return res.sendStatus(500);
+    }
 
-      if (type === "payment") {
-        const paymentId = data.id;
-        const mpPayment = await payment.get({ id: paymentId });
-        const currentStatus = mpPayment.status;
+    console.log(`🔔 Webhook: pagamento ${paymentId} está ${mpStatus} (${statusPt}).`);
 
-        console.log(
-          `🔔 Webhook recebido: Pagamento ${paymentId} está ${currentStatus}`,
-        );
+    if (!statusPt) {
+      // Um status que o vocabulario da loja nao representa (o mapa ja cobre
+      // in_mediation e charged_back). Gravar a string crua esbarraria no CHECK
+      // de 0009; responder 500 poria o MP em retry infinito de uma notificacao
+      // que nunca vamos aplicar. Warn + 200 e a unica saida honesta.
+      console.warn(
+        `Webhook: status "${mpStatus}" sem tradução — notificação reconhecida e ignorada.`,
+      );
+      return res.sendStatus(200);
+    }
 
-        const order = await OrderRepository.getOrderByPaymentId(paymentId);
+    /**
+     * DAQUI PARA BAIXO E UMA TRANSACAO SO, E ERRO DE BANCO E 500 DE VERDADE.
+     *
+     * A versao anterior devolvia estoque fora de transacao e respondia 200 ate
+     * quando o UPDATE falhava — o MP dava a notificacao por entregue e a loja
+     * ficava com pedido em status velho para sempre. Agora:
+     *
+     *   FOR UPDATE  -> duas notificacoes do mesmo pagamento serializam;
+     *   status igual -> 200 sem efeito (o reenvio do MP e por desenho);
+     *   ativo <-> cancelado -> estoque movimenta UMA vez, na MESMA transacao
+     *                          que muda o status;
+     *   qualquer erro -> ROLLBACK + 500, para o MP reenviar.
+     */
+    const client = await pool.connect();
+    let pedido;
+    let mudou = false;
+    try {
+      await client.query("BEGIN");
 
-        if (order) {
-          if (order.status !== currentStatus) {
-            // Mesmos grupos do painel (OrderController). "refunded" tambem
-            // devolve estoque: um estorno e um cancelamento depois do pago.
-            const cancelledGroup = ["cancelled", "rejected", "refunded"];
-            const activeGroup = [
-              "pending",
-              "approved",
-              "in_process",
-              "authorized",
-              "sent",
-              "delivered",
-            ];
-            const isNowCancelled = cancelledGroup.includes(currentStatus);
-            const wasActive = activeGroup.includes(order.status);
+      pedido = await OrderRepository.lockOrderByPaymentId(paymentId, client);
 
-            if (wasActive && isNowCancelled) {
-              console.log(
-                `🔄 Devolvendo estoque para o pedido ${order.order_id}...`,
-              );
-
-              let items = order.items;
-              if (typeof items === "string") {
-                try {
-                  items = JSON.parse(items);
-                } catch (e) {
-                  console.error("Erro ao parsear itens:", e);
-                  items = [];
-                }
-              }
-
-              if (Array.isArray(items)) {
-                for (const item of items) {
-                  await client.query(
-                    `UPDATE products 
-                             SET quantity = quantity::integer + $1 
-                             WHERE product_id = $2`,
-                    [Number(item.quantity), item.product_id],
-                  );
-                }
-                console.log("✅ Estoque devolvido com sucesso.");
-              }
-            }
-
-            await OrderRepository.updateOrderStatus(
-              order.order_id,
-              currentStatus,
-            );
-
-            await sendStatusEmail(order, currentStatus);
-
-            console.log(
-              `✅ Pedido ${order.order_id} atualizado para: ${currentStatus}`,
-            );
-          }
-        } else {
-          console.warn(
-            `⚠️ Pedido não encontrado para o pagamento MP: ${paymentId}`,
-          );
-        }
+      if (!pedido) {
+        await client.query("ROLLBACK");
+        // 404 de verdade, logado: ou a notificacao e de um pagamento que nao e
+        // desta loja, ou o pedido sumiu — os dois merecem aparecer no painel
+        // do MP como falha, nao como entrega.
+        console.warn(`⚠️ Webhook: nenhum pedido para o pagamento MP ${paymentId}.`);
+        return res.sendStatus(404);
       }
 
-      return res.sendStatus(200);
+      if (pedido.status !== statusPt) {
+        const eraAtivo = GRUPO_ATIVO.includes(pedido.status);
+        const ficouCancelado = GRUPO_CANCELADO.includes(statusPt);
+        const eraCancelado = GRUPO_CANCELADO.includes(pedido.status);
+        const ficouAtivo = GRUPO_ATIVO.includes(statusPt);
+
+        let items = pedido.items;
+        if (typeof items === "string") {
+          try {
+            items = JSON.parse(items);
+          } catch (e) {
+            console.error("Webhook: itens do pedido ilegíveis:", e);
+            items = [];
+          }
+        }
+
+        // Ordem canonica nas travas de estoque (ver utils/estoque.js): um
+        // webhook e um checkout tocando os mesmos produtos em ordens opostas
+        // seria deadlock 40P01.
+        if (eraAtivo && ficouCancelado && Array.isArray(items)) {
+          console.log(`🔄 Devolvendo estoque do pedido ${pedido.order_id}...`);
+          for (const item of ordenarPorProduto(items)) {
+            await client.query(
+              `UPDATE canastra.produtos
+                  SET quantidade = quantidade + $1
+                WHERE produto_id = $2`,
+              [Number(item.quantity), item.product_id],
+            );
+          }
+        } else if (eraCancelado && ficouAtivo && Array.isArray(items)) {
+          // O caminho de volta (um rejeitado que o MP reprocessa e aprova):
+          // o estoque que a devolucao repos sai de novo. GREATEST(0, ...)
+          // porque a prateleira pode ja ter vendido a unidade nesse meio
+          // tempo — estoque negativo mentiria pior que zero.
+          console.log(`🔄 Rebaixando estoque do pedido ${pedido.order_id}...`);
+          for (const item of ordenarPorProduto(items)) {
+            await client.query(
+              `UPDATE canastra.produtos
+                  SET quantidade = GREATEST(0, quantidade - $1)
+                WHERE produto_id = $2`,
+              [Number(item.quantity), item.product_id],
+            );
+          }
+        }
+
+        await OrderRepository.updateOrderStatus(
+          pedido.order_id,
+          statusPt,
+          null,
+          client,
+        );
+        mudou = true;
+      }
+
+      await client.query("COMMIT");
     } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
       console.error("Erro no Webhook:", error);
       return res.sendStatus(500);
     } finally {
       client.release();
     }
+
+    if (mudou) {
+      // E-mail DEPOIS do commit e sem prender a resposta: o provedor fora do
+      // ar nao pode fazer o MP reenviar uma transicao ja aplicada.
+      sendStatusEmail(pedido, statusPt).catch((e) =>
+        console.error("Falha ao enviar e-mail de status:", e.message),
+      );
+      console.log(`✅ Pedido ${pedido.order_id} atualizado para: ${statusPt}`);
+    }
+
+    return res.sendStatus(200);
   }
 }
 
@@ -628,4 +985,3 @@ module.exports = new PaymentController();
 // cliente paga de frete, e quem pode dizer que um pagamento mudou de status.
 module.exports.conferirFrete = conferirFrete;
 module.exports.validarAssinaturaWebhook = validarAssinaturaWebhook;
-

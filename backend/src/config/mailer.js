@@ -1,12 +1,11 @@
-//const nodemailer = require("nodemailer");
 const { Resend } = require("resend");
 
 /**
  * Cliente de email.
  *
  * `new Resend(undefined)` LANCA na construcao ("Missing API key"), e este modulo
- * e carregado na cadeia de require do index.js via loginRepository. Ou seja: sem
- * EMAIL_PASS2 no ambiente, o processo inteiro morria antes de abrir a porta —
+ * e carregado na cadeia de require do index.js (via utils/emailSender). Ou seja:
+ * sem EMAIL_PASS2 no ambiente, o processo inteiro morria antes de abrir a porta —
  * nao dava para nem subir o backend, quanto mais logar.
  *
  * Como email e acessorio no fluxo de desenvolvimento (o que importa e login,
@@ -31,20 +30,5 @@ const dubleDeEmail = {
 };
 
 const resend = chave ? new Resend(chave) : dubleDeEmail;
-
-/*  const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  tls: {
-    ciphers: "SSLv3",
-    rejectUnauthorized: false,
-  },
-  connectionTimeout: 10000,
-}); */
 
 module.exports = resend;

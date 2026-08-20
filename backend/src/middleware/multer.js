@@ -18,8 +18,12 @@ const storage = new CloudinaryStorage({
     const uniqueId = `${originalName}_${uuidv4()}`;
 
     return {
-      folder: "shopnaw_products",
-      allowed_formats: ["jpg", "png", "jpeg", "webp"],
+      // Era "shopnaw_products" — a pasta da loja de camisetas de onde este
+      // codigo veio. As imagens do Canastra ficam na pasta do Canastra.
+      folder: "canastra_produtos",
+      // Mesma lista do fileFilter (TIPOS_ACEITOS) — as duas cercas divergindo
+      // significava AVIF passando pelo filtro e morrendo na Cloudinary.
+      allowed_formats: ["jpg", "png", "jpeg", "webp", "avif"],
       public_id: uniqueId,
     };
   },

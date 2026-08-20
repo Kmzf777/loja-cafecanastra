@@ -16,9 +16,12 @@
 const DOMINIO = process.env.EMAIL_DOMINIO || "cafecanastra.com";
 const NOME_LOJA = process.env.LOJA_NOME || "Café Canastra";
 
-/** Remetente por finalidade. */
+/**
+ * Remetente por finalidade. `seguranca` saiu: os e-mails de conta (confirmação,
+ * senha) são do GoTrue desde a F2 e nada neste serviço o usava — um remetente
+ * declarado que ninguém envia só confunde quem procura de onde saiu um e-mail.
+ */
 const REMETENTE = {
-  seguranca: `${NOME_LOJA} <${process.env.EMAIL_SEGURANCA || `nao-responda@${DOMINIO}`}>`,
   pedidos: `${NOME_LOJA} <${process.env.EMAIL_PEDIDOS || `pedidos@${DOMINIO}`}>`,
   sistema: `${NOME_LOJA} <${process.env.EMAIL_PEDIDOS || `pedidos@${DOMINIO}`}>`,
 };

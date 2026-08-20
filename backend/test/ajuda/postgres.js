@@ -14,6 +14,39 @@
  * schema ja esta la, criado pelo Supabase.
  */
 
+/**
+ * DESVIO DE stdout SOB `node --test` — mitigacao de bug do runner, com causa
+ * medida antes de mexer (2026-08-20, Node v22.16.0):
+ *
+ * O filho que o `node --test` cria por arquivo escreve os EVENTOS de teste
+ * serializados (V8) no proprio stdout, e o pai os localiza procurando o
+ * cabecalho binario no meio do fluxo (`#processRawBuffer` em
+ * lib/internal/test_runner/runner.js). Quando ha bastante saida "crua" de
+ * console.log entre frames, o parser do 22.16 dessincroniza de vez em quando
+ * (nodejs/node#64061): o arquivo INTEIRO morre com "Unable to deserialize
+ * cloned data due to invalid or unsupported version", os subtestes seguintes
+ * somem do relatorio e o filho cai SEM rodar teardown — vazando datadir em
+ * %TEMP% e postgres orfao segurando porta (os canastra-pg-* orfaos daquele
+ * dia eram exatamente isso).
+ *
+ * Medicao que separou as hipoteses: o mesmo arquivo rodado SEM o wrapper
+ * (`node test/arquivo.test.js`, in-process, sem IPC) passou 6/6; sob `--test`
+ * corrompia ~1/3. O filho e saudavel; o defeito e so do canal.
+ *
+ * stderr nao carrega frame nenhum — o pai o repassa como texto — entao os
+ * logs de aplicacao migram TODOS para la enquanto um teste roda. Nada e
+ * silenciado: as linhas continuam no relatorio, so mudam de fd. Quando o
+ * runner corrigir o parser, este bloco sai sem dor.
+ *
+ * `NODE_TEST_CONTEXT` so existe nos filhos do `--test`; rodando o arquivo
+ * direto (in-process) nada muda, porque la o stdout nao carrega frames.
+ */
+if (process.env.NODE_TEST_CONTEXT) {
+  console.log = (...args) => console.error(...args);
+  console.info = (...args) => console.error(...args);
+  console.debug = (...args) => console.error(...args);
+}
+
 // `embedded-postgres` e um pacote ESM puro e o construtor e o export default.
 // Sob require() o Node devolve o namespace do modulo, nao a classe — sem o
 // `.default` o `new` abaixo estoura com "is not a constructor".
@@ -181,6 +214,43 @@ function portaLivre() {
 }
 
 /**
+ * Solta os pipes de stdio do cluster para eles nao prenderem a saida do node.
+ *
+ * O MODO DE FALHA, medido em 2026-08-20 (duas suites penduradas, arquivos
+ * diferentes): o teardown do pacote mata o postmaster com `taskkill /f /t`,
+ * mas o postmaster do Windows vive criando filhos `--forkaux`, e um filho
+ * nascido NA JANELA do kill escapa da arvore. O fugitivo herda as pontas de
+ * ESCRITA dos pipes de stdout/stderr do postmaster — os mesmos cujas pontas
+ * de leitura estao neste processo node, alimentando o onLog. Sem EOF nesses
+ * pipes, o event loop nunca esvazia e o filho do `node --test` fica vivo PARA
+ * SEMPRE com todos os testes verdes e o datadir ja removido; o pai, sem
+ * timeout por arquivo, espera junto. A prova foi direta: matar SO o forkaux
+ * zumbi fez o filho travado sair sozinho no mesmo segundo.
+ *
+ * Dois pontos de defesa, porque cobrem caminhos diferentes:
+ *   - unref() logo apos o boot: mesmo que NENHUM teardown rode (before()
+ *     estourando com `bd` ainda undefined pula o derrubar), os pipes nao
+ *     seguram a saida. unref nao para o fluxo de dados — o onLog continua.
+ *   - destroy() no proprio neutralizar(): fecha a ponta de leitura de vez
+ *     quando o cluster ja era, zumbi ou nao.
+ *
+ * O QUE ISTO NAO FAZ: o forkaux fugitivo em si continua vivo como orfao
+ * inerte (sem porta, sem segurar o datadir — a remocao do diretorio passa).
+ * Caca-lo exigiria varrer processos por linha de comando a cada teardown;
+ * residuo aceito, e se um postgres.exe orfao aparecer no Gerenciador de
+ * Tarefas depois de uma suite, e isto — pode matar sem medo.
+ */
+function soltarPipes(pg) {
+  for (const fluxo of [
+    pg.process?.stdout,
+    pg.process?.stderr,
+    pg.process?.stdin,
+  ]) {
+    fluxo?.unref?.();
+  }
+}
+
+/**
  * Zera o handle interno do processo do pacote.
  *
  * O pacote guarda TODA instancia criada num Set global e, num AsyncExitHook,
@@ -190,8 +260,18 @@ function portaLivre() {
  * e trava a saida do `node --test`. O Set nao e exportado, entao a unica
  * alavanca e apagar o handle: com `process` undefined o `stop()` do pacote
  * retorna de imediato no proprio guard.
+ *
+ * O destroy() dos pipes vem antes de apagar o handle (ver soltarPipes): depois
+ * de `pg.process = undefined` nao ha mais por onde alcanca-los.
  */
 function neutralizar(pg) {
+  for (const fluxo of [
+    pg.process?.stdout,
+    pg.process?.stderr,
+    pg.process?.stdin,
+  ]) {
+    fluxo?.destroy?.();
+  }
   pg.process = undefined;
 }
 
@@ -294,6 +374,10 @@ async function tentarSubir() {
   try {
     await pg.initialise();
     await pg.start();
+    // Boot ok: os pipes do cluster ja podem deixar de segurar o event loop
+    // (ver soltarPipes — e a primeira das duas defesas contra o forkaux
+    // fugitivo do taskkill).
+    soltarPipes(pg);
   } catch (causa) {
     // `start()` rejeita com `undefined` literal, entao nao ha mensagem alguma
     // para propagar: e preciso fabricar uma que ao menos nomeie a porta.

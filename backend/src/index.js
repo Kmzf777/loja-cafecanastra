@@ -95,8 +95,9 @@ app.options("*", (req, res) => res.sendStatus(200));
 app.use(express.json({ limit: "256kb" }));
 app.use(express.urlencoded({ limit: "256kb", extended: true }));
 
-// Pasta pública de uploads
-app.use("/uploads", express.static("uploads"));
+// NAO ha mais `/uploads`: nenhuma rota grava arquivo em disco local — imagem
+// de produto e banner sobem para a Cloudinary pelo multer e o banco guarda a
+// URL absoluta. O static que ficava aqui servia uma pasta que nao existe.
 
 /**
  * As duas rotas sem autenticacao alguma, por natureza:

@@ -26,6 +26,8 @@ class AddressController {
 
       return res.status(201).json(newAddress);
     } catch (error) {
+      // O motivo fica no log; ao navegador vai só a frase.
+      console.error("Erro ao salvar endereço:", error);
       return res.status(500).json({ error: "Erro ao salvar endereço." });
     }
   }
@@ -36,6 +38,9 @@ class AddressController {
       const address = await AddressRepository.getAddressByUserId(userId);
       return res.json(address || {});
     } catch (error) {
+      // O repositório não engole mais erro (F4): banco fora do ar aqui vira
+      // 500 logado, e não um `{}` que o checkout leria como "sem endereço".
+      console.error("Erro ao buscar endereço:", error);
       return res.status(500).json({ error: "Erro ao buscar endereço." });
     }
   }

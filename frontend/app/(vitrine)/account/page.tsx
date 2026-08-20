@@ -30,8 +30,22 @@ type Pedido = {
   shipping_method?: string;
 };
 
-/** Rótulos em português para os status que o Mercado Pago devolve. */
+/**
+ * Rótulos de exibição por status. Desde a F4 a API fala português
+ * (`pendente`, `aprovado`... — o CHECK da migração 0009 é a lista); as chaves
+ * em inglês ficam por tolerância a qualquer resposta antiga em cache, porque
+ * custam zero e um status sem rótulo apareceria cru na tela.
+ */
 const STATUS: Record<string, string> = {
+  pendente: "Aguardando pagamento",
+  em_processamento: "Em análise",
+  aprovado: "Pago",
+  autorizado: "Autorizado",
+  enviado: "Enviado",
+  entregue: "Entregue",
+  rejeitado: "Recusado",
+  cancelado: "Cancelado",
+  reembolsado: "Estornado",
   pending: "Aguardando pagamento",
   in_process: "Em análise",
   approved: "Pago",

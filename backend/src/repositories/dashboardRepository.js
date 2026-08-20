@@ -1,14 +1,39 @@
 const pool = require("../pgPool");
 const { v4 } = require("uuid");
+const { GRUPO_ATIVO } = require("../utils/statusDePedido");
 
 /**
- * Numero positivo com valor padrao.
+ * Catálogo do painel, contra `canastra.produtos`.
  *
- * O codigo anterior fazia `weight ? Number(weight) : 0.3`. Duas falhas nisso:
- * `Number("abc")` e NaN — e NaN passa no `?`, entao ia para o banco e virava
- * erro de tipo ou coluna nula; e nada impedia valor NEGATIVO, que num preco
- * significa produto que paga o cliente para levar, e num peso quebra o calculo
- * de frete.
+ * O CONTRATO HTTP NÃO MUDA DE FORMA (decisão 2 do plano mestre): o painel
+ * legado e a vitrine (`frontend/lib/catalogo/repositorio.ts`) continuam
+ * recebendo `product_id`, `name`, `price`, `quantity`, `timestamp`... O que
+ * muda é o SQL, que agora aponta para as colunas em português criadas em
+ * 0003. `timestamp` sai de `destacado_em` — o eixo "novidades" do painel,
+ * exatamente o papel que a coluna antiga cumpria.
+ */
+
+const COLUNAS_DO_CONTRATO = `
+  produto_id   AS product_id,
+  sku,
+  nome         AS name,
+  tamanho      AS size,
+  categoria    AS category,
+  preco        AS price,
+  imagem       AS image,
+  destacado_em AS "timestamp",
+  quantidade   AS quantity,
+  descricao    AS description,
+  peso         AS weight,
+  largura      AS width,
+  altura       AS height,
+  comprimento  AS length
+`;
+
+/**
+ * Número positivo com valor padrão. `Number("abc")` é NaN — e NaN passa num
+ * `?`, então ia para o banco; e nada impedia valor NEGATIVO, que num preço
+ * significa produto que paga o cliente para levar.
  */
 function numeroPositivo(valor, padrao) {
   const n = Number(valor);
@@ -28,8 +53,8 @@ function validarProduto(corpo) {
   if (!Number.isFinite(preco) || preco < 0) {
     erros.push("Preço inválido.");
   } else if (preco > 1_000_000) {
-    // Teto contra erro de digitacao: um zero a mais no painel vira um produto
-    // de um milhao de reais na vitrine.
+    // Teto contra erro de digitação: um zero a mais no painel vira um produto
+    // de um milhão de reais na vitrine.
     erros.push("Preço acima do limite permitido.");
   }
 
@@ -51,6 +76,9 @@ function validarProduto(corpo) {
       width: numeroPositivo(corpo.width, 20),
       height: numeroPositivo(corpo.height, 5),
       length: numeroPositivo(corpo.length, 20),
+      // O SKU é a chave que costura vitrine e banco (0003). O formulário do
+      // painel ainda não o envia (Onda 2E), mas o contrato já o aceita.
+      sku: corpo.sku ? String(corpo.sku).trim() : null,
     },
   };
 }
@@ -63,13 +91,13 @@ class DashboardRepository {
     }
 
     const image = request.file ? request.file.path : null;
-    const client = await pool.connect();
 
     try {
-      await client.query(
-        `INSERT INTO products (product_id, name, size, category, price, image, timestamp, quantity,
-        description, weight, width, height, length)
-        VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10, $11, $12)`,
+      await pool.query(
+        `INSERT INTO canastra.produtos
+           (produto_id, nome, tamanho, categoria, preco, imagem, destacado_em,
+            quantidade, descricao, peso, largura, altura, comprimento, sku)
+         VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10, $11, $12, $13)`,
         [
           v4(),
           valores.name,
@@ -83,26 +111,31 @@ class DashboardRepository {
           valores.width,
           valores.height,
           valores.length,
+          valores.sku,
         ],
       );
 
       response.status(201).json({ message: "Produto criado com sucesso!" });
     } catch (err) {
-      // O objeto de erro do `pg` traz a query e o nome das colunas; devolve-lo
+      // `produtos_sku_idx` é único: SKU repetido é conflito do pedido, não
+      // erro do servidor.
+      if (err.code === "23505") {
+        return response
+          .status(409)
+          .json({ message: "Já existe um produto com este SKU." });
+      }
+      // O objeto de erro do `pg` traz a query e o nome das colunas; devolvê-lo
       // ao navegador entrega o schema do banco a quem estiver olhando.
       console.error("createProduct error:", err);
       response.status(500).json({ message: "Erro ao criar o produto." });
-    } finally {
-      client.release();
     }
   }
 
   async getProducts(request, response) {
-    const client = await pool.connect();
     const { category, size, onlyOld } = request.query;
     let page = parseInt(request.query.page) || 1;
-    // Teto de 200: `?limit=999999` faria o painel puxar o catalogo inteiro
-    // numa resposta so.
+    // Teto de 200: `?limit=999999` faria o painel puxar o catálogo inteiro
+    // numa resposta só. A vitrine usa exatamente 200 (repositorio.ts).
     let limit = Math.min(200, Math.max(1, parseInt(request.query.limit) || 10));
 
     try {
@@ -110,21 +143,21 @@ class DashboardRepository {
       const values = [];
 
       if (category) {
-        filters.push(`category = $${values.length + 1}`);
+        filters.push(`categoria = $${values.length + 1}`);
         values.push(category);
       }
 
       if (size) {
-        filters.push(`size = $${values.length + 1}`);
+        filters.push(`tamanho = $${values.length + 1}`);
         values.push(size);
       }
 
       if (onlyOld === "true") {
-        filters.push(`timestamp < NOW() - INTERVAL '5 days'`);
+        filters.push(`destacado_em < now() - INTERVAL '5 days'`);
       }
 
       if (request.query.onlyNew === "true") {
-        filters.push(`timestamp >= NOW() - INTERVAL '5 days'`);
+        filters.push(`destacado_em >= now() - INTERVAL '5 days'`);
       }
 
       const qRaw = (request.query.q || "").trim();
@@ -141,8 +174,11 @@ class DashboardRepository {
           const qIdx = values.length + 1;
           const ilikeIdx = qIdx + 1;
 
+          // A coluna gerada `tsv` (0003) indexa nome, categoria, tamanho e
+          // descrição com a configuração 'portuguese' — a mesma daqui, senão
+          // o índice GIN não é usado.
           filters.push(
-            `(tsv @@ to_tsquery('portuguese', $${qIdx}) OR name ILIKE $${ilikeIdx})`,
+            `(tsv @@ to_tsquery('portuguese', $${qIdx}) OR nome ILIKE $${ilikeIdx})`,
           );
 
           rankSelect = `ts_rank_cd(tsv, to_tsquery('portuguese', $${qIdx})) AS rank`;
@@ -150,7 +186,7 @@ class DashboardRepository {
           values.push(tsQuery, `%${qRaw}%`);
         } else {
           const qIdx = values.length + 1;
-          filters.push(`name ILIKE $${qIdx}`);
+          filters.push(`nome ILIKE $${qIdx}`);
           values.push(`%${qRaw}%`);
         }
       }
@@ -159,8 +195,10 @@ class DashboardRepository {
         ? `WHERE ${filters.join(" AND ")}`
         : "";
 
-      const countQuery = `SELECT COUNT(*) FROM products ${whereClause}`;
-      const countResult = await client.query(countQuery, values);
+      const countResult = await pool.query(
+        `SELECT COUNT(*) FROM canastra.produtos ${whereClause}`,
+        values,
+      );
       const total = parseInt(countResult.rows[0].count);
       const totalPages = Math.ceil(total / limit);
 
@@ -168,34 +206,24 @@ class DashboardRepository {
       if (page > totalPages) page = totalPages || 1;
       const offset = (page - 1) * limit;
 
-      const selectFields = [
-        "product_id",
-        "sku",
-        "name",
-        "size",
-        "category",
-        "price",
-        "image",
-        "timestamp",
-        "quantity",
-        "description",
-        "weight",
-        "width",
-        "height",
-        "length",
-      ];
+      const selectFields = [COLUNAS_DO_CONTRATO];
       if (rankSelect) selectFields.push(rankSelect);
 
-      const dataQuery = `
-      SELECT ${selectFields.join(", ")}
-      FROM products
-      ${whereClause}
-      ORDER BY timestamp DESC
-      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
-    `;
-      values.push(limit, offset);
+      // Com busca, o rank calculado MANDA na ordem — senão o resultado mais
+      // relevante afunda atrás do produto destacado mais recente e a busca
+      // parece quebrada. Sem busca, não há rank nem no SELECT.
+      const ordem = rankSelect
+        ? "rank DESC, destacado_em DESC"
+        : "destacado_em DESC";
 
-      const result = await client.query(dataQuery, values);
+      const result = await pool.query(
+        `SELECT ${selectFields.join(", ")}
+           FROM canastra.produtos
+           ${whereClause}
+          ORDER BY ${ordem}
+          LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+        [...values, limit, offset],
+      );
 
       return response.status(200).json({
         products: result.rows,
@@ -206,24 +234,20 @@ class DashboardRepository {
     } catch (err) {
       console.error("getProducts error:", err);
       return response.status(500).json({ message: "Erro ao buscar produtos!" });
-    } finally {
-      client.release();
     }
   }
 
   async deleteProduct(request, response) {
-    const client = await pool.connect();
     const { id } = request.params;
 
     try {
-      await client.query("DELETE FROM products WHERE product_id=$1", [id]);
-
+      await pool.query("DELETE FROM canastra.produtos WHERE produto_id = $1", [
+        id,
+      ]);
       response.status(204).send();
     } catch (err) {
       console.error("deleteProduct error:", err);
       response.status(500).json({ message: "Erro ao deletar produto." });
-    } finally {
-      client.release();
     }
   }
 
@@ -234,28 +258,27 @@ class DashboardRepository {
     }
     const { id } = request.params;
 
-    const client = await pool.connect();
-
     try {
-      const existing = await client.query(
-        "SELECT * FROM products WHERE product_id = $1",
+      const existing = await pool.query(
+        "SELECT imagem, sku FROM canastra.produtos WHERE produto_id = $1",
         [id],
       );
       if (!existing.rows.length) {
         return response.status(404).json({ error: "Produto não encontrado." });
       }
 
-      const oldImage = existing.rows[0].image;
-      let newImage = oldImage;
+      const newImage = request.file ? request.file.path : existing.rows[0].imagem;
+      // Sem `sku` no corpo, o que está no banco fica: o SKU é a costura com o
+      // catálogo editorial e não pode ser apagado por um formulário que ainda
+      // nem tem o campo.
+      const novoSku = request.body.sku !== undefined ? valores.sku : existing.rows[0].sku;
 
-      if (request.file) {
-        newImage = request.file.path;
-      }
-
-
-      await client.query(
-        `UPDATE products SET name=$1, size=$2, category=$3, price=$4, image=$5, quantity=$6, 
-        description=$7, weight=$9, width=$10, height=$11, length=$12 WHERE product_id=$8`,
+      await pool.query(
+        `UPDATE canastra.produtos
+            SET nome = $1, tamanho = $2, categoria = $3, preco = $4, imagem = $5,
+                quantidade = $6, descricao = $7, peso = $8, largura = $9,
+                altura = $10, comprimento = $11, sku = $12
+          WHERE produto_id = $13`,
         [
           valores.name,
           valores.size,
@@ -264,32 +287,33 @@ class DashboardRepository {
           newImage,
           valores.quantity,
           valores.description,
-          id,
           valores.weight,
           valores.width,
           valores.height,
           valores.length,
+          novoSku,
+          id,
         ],
       );
 
       response.status(200).json({ message: "Produto editado com sucesso!" });
     } catch (err) {
+      if (err.code === "23505") {
+        return response
+          .status(409)
+          .json({ message: "Já existe um produto com este SKU." });
+      }
       console.error("editProduct error:", err);
       response.status(500).json({ message: "Erro ao atualizar produto!" });
-    } finally {
-      client.release();
     }
   }
 
   async getProductById(request, response) {
-    const client = await pool.connect();
     const { id } = request.params;
     try {
-      const { rows } = await client.query(
-        `SELECT product_id, name, size, category, price, image, timestamp, quantity, description, 
-         weight, width, height, length
-         FROM products
-         WHERE product_id = $1`,
+      const { rows } = await pool.query(
+        `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.produtos
+          WHERE produto_id = $1`,
         [id],
       );
 
@@ -299,61 +323,54 @@ class DashboardRepository {
 
       return response.status(200).json(rows[0]);
     } catch (err) {
-      return response
-        .status(500)
-        .json({ error: err, message: "Erro ao buscar produto." });
-    } finally {
-      client.release();
+      console.error("getProductById error:", err);
+      return response.status(500).json({ message: "Erro ao buscar produto." });
     }
   }
 
   async getDashboardSummary() {
-    const client = await pool.connect();
-    try {
-      const [productsRes, ordersRes, usersRes] = await Promise.all([
-        client.query("SELECT COUNT(*) FROM products"),
-        client.query("SELECT COUNT(*) FROM orders"),
-        client.query("SELECT COUNT(*) FROM users"),
-      ]);
+    const [produtosRes, pedidosRes, clientesRes] = await Promise.all([
+      pool.query("SELECT COUNT(*) FROM canastra.produtos"),
+      pool.query("SELECT COUNT(*) FROM canastra.pedidos"),
+      pool.query("SELECT COUNT(*) FROM canastra.clientes"),
+    ]);
 
-      const counts = {
-        products: Number(productsRes.rows[0].count),
-        orders: Number(ordersRes.rows[0].count),
-        users: Number(usersRes.rows[0].count),
-      };
+    const counts = {
+      products: Number(produtosRes.rows[0].count),
+      orders: Number(pedidosRes.rows[0].count),
+      users: Number(clientesRes.rows[0].count),
+    };
 
-      // 2. Gráfico de Vendas (Últimos 7 dias)
-      const salesQuery = `
-        SELECT 
-          TO_CHAR(created_at, 'DD/MM') as day, 
-          SUM(total_amount) as total
-        FROM orders
-        WHERE created_at >= NOW() - INTERVAL '7 days'
-        AND status IN ('approved', 'delivered', 'sent', 'in_process') -- Filtra apenas vendas reais
-        GROUP BY day
-        ORDER BY MIN(created_at) ASC
-      `;
-      const salesRes = await client.query(salesQuery);
+    // Vendas dos últimos 7 dias. "Venda real" = pedido do grupo ATIVO que não
+    // está só aguardando pagamento — o mesmo recorte da versão anterior
+    // (approved/delivered/sent/in_process), agora em português e derivado da
+    // lista única de status para não divergir quando ela mudar.
+    const statusDeVenda = GRUPO_ATIVO.filter(
+      (s) => s !== "pendente" && s !== "autorizado",
+    );
+    const salesRes = await pool.query(
+      `SELECT
+         TO_CHAR(criado_em, 'DD/MM') AS day,
+         SUM(total)                  AS total
+       FROM canastra.pedidos
+       WHERE criado_em >= now() - INTERVAL '7 days'
+         AND status = ANY($1)
+       GROUP BY day
+       ORDER BY MIN(criado_em) ASC`,
+      [statusDeVenda],
+    );
 
-      // 3. Gráfico de Status (Pizza)
-      const statusQuery = `
-        SELECT status, COUNT(*) as count
-        FROM orders
-        GROUP BY status
-      `;
-      const statusRes = await client.query(statusQuery);
+    const statusRes = await pool.query(
+      `SELECT status, COUNT(*) AS count
+       FROM canastra.pedidos
+       GROUP BY status`,
+    );
 
-      return {
-        counts,
-        salesChart: salesRes.rows,
-        statusChart: statusRes.rows,
-      };
-    } catch (err) {
-      console.error("Erro ao buscar resumo do dashboard:", err);
-      throw err;
-    } finally {
-      client.release();
-    }
+    return {
+      counts,
+      salesChart: salesRes.rows,
+      statusChart: statusRes.rows,
+    };
   }
 }
 
