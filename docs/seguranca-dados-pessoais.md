@@ -73,3 +73,50 @@ no GitHub. Para fechar de verdade, é preciso, nesta ordem:
 Dump de banco não entra no repositório. Para reproduzir o ambiente, use
 `npm run db:setup` (`backend/db/migrar.js` + `backend/db/seed.js`), que cria um
 banco completo com o catálogo real do Café Canastra e **nenhum dado pessoal**.
+
+---
+
+# Newsletter — decisão de tratamento (single opt-in)
+
+Data: 2026-08-20 (Onda 2F — motor de vendas)
+
+A loja passou a coletar e-mail no rodapé (`POST /newsletter` →
+`canastra.newsletter_inscritos`, migração 0011). O registro da decisão, com o
+risco assumido por escrito:
+
+## O que se coleta e sob qual base
+
+Só o e-mail e a origem da inscrição (`origem`, hoje sempre `rodape`), com
+`criado_em`. Nada mais — nem nome, nem IP, nem user agent. Base legal:
+consentimento (LGPD art. 7º, I) manifestado pelo envio do formulário; o texto
+do rodapé diz o que a pessoa vai receber e não promete frequência.
+
+## A decisão: single opt-in, e o risco que ela carrega
+
+A inscrição vale **no ato**, sem e-mail de confirmação (*single opt-in*).
+Consequência conhecida: **qualquer pessoa pode inscrever o e-mail de um
+terceiro**, que passaria a receber comunicação que nunca pediu — em nome da
+loja. Foi uma escolha de fase, não um esquecimento: no momento da implantação
+o domínio de envio ainda nem está verificado no Resend (nenhum e-mail de
+confirmação PODERIA sair), e um double opt-in quebrado inscreveria ninguém.
+
+Mitigações em vigor:
+
+- **Rate limit de 10/min por IP** na rota — inscrição em massa de e-mails
+  alheios deixa de ser um laço barato (`backend/src/routes/newsletter.routes.js`).
+- **Anti-enumeração**: a resposta é `{ ok: true }` para inscrito novo E
+  repetido — a rota não serve de oráculo de "este e-mail está na lista".
+- **Validação + CHECK de formato** (`newsletter_email_formato`, 0011): lixo
+  não entra nem por caminho que escape da rota.
+- **RLS ligada sem política + REVOKE** na tabela: a lista não é legível por
+  PostgREST com chave nenhuma; só o serviço Node a lê.
+
+## Pendência recomendada (para a tarefa que ligar o envio de campanhas)
+
+**Double opt-in** assim que houver domínio verificado no Resend: e-mail de
+confirmação com token, coluna `confirmado_em` (nova migração — a 0011 não se
+edita depois de aplicada), e campanha só para confirmados. Junto dele, link de
+descadastro em toda campanha (obrigatório de qualquer forma) e a limpeza dos
+nunca-confirmados após prazo curto. Enquanto a lista não recebe campanha
+nenhuma — que é o estado atual — o risco fica limitado a existir uma linha a
+mais na tabela.

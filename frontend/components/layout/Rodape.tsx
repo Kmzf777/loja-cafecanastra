@@ -2,11 +2,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { linkWhatsApp } from "@/lib/whatsapp";
 import { BotaoReverCookies } from "./BotaoReverCookies";
+import { FormNewsletter } from "./FormNewsletter";
 
 /**
- * estetica.md §5.10 — fundo fuligem, quatro colunas, e encerra com o lockup
- * COMPLETO do logo, grande (max 480px), com o "Desde 1985" visivel. E o unico
- * lugar da navegacao onde a marca aparece em tamanho generoso.
+ * estetica.md §5.10 — fundo fuligem, quatro colunas + newsletter, e encerra
+ * com o lockup COMPLETO do logo, grande (max 480px), com o "Desde 1985"
+ * visivel. E o unico lugar da navegacao onde a marca aparece em tamanho
+ * generoso.
  */
 
 const COLUNAS = [
@@ -117,6 +119,13 @@ export function Rodape() {
               </ul>
             </div>
           ))}
+        </div>
+
+        {/* A newsletter do §5.10 — depois das colunas, antes do lockup. O
+            formulário em si é client component (FormNewsletter): é a única
+            parte do rodapé com estado, e isolá-la mantém isto aqui servidor. */}
+        <div className="mt-14 border-t border-fuligem-80 pt-10 md:mt-16">
+          <FormNewsletter />
         </div>
 
         <div className="mt-14 flex flex-col items-center border-t border-fuligem-80 pt-12 md:mt-16 md:pt-14">

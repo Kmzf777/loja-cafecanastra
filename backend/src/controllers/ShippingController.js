@@ -1,5 +1,10 @@
 const axios = require("axios");
 const pool = require("../pgPool");
+// Sem ciclo aqui: cuponsRepository e utils/cupom só dependem do pgPool. (É o
+// PaymentController que importa ESTE módulo, nunca o contrário.)
+const cuponsRepository = require("../repositories/cuponsRepository");
+const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
+const { somarCentavos } = require("../utils/preco");
 
 /** CEPs atendidos por entrega propria. */
 const LOCAL_PREFIXES = ["350"];
@@ -43,16 +48,13 @@ async function freteGratisMinimoCentavos() {
 }
 
 /**
- * Subtotal dos itens em CENTAVOS. `price` viaja em reais (contrato antigo);
- * cada preco vira inteiro ANTES da soma, porque `49.67 * 3` em float da
- * 149.01000000000002 e uma comparacao em reais erraria exatamente na
- * fronteira do piso.
+ * Subtotal dos itens em CENTAVOS — delega para `somarCentavos` (utils/preco),
+ * a MESMA soma do checkout e da validacao de cupom, para os tres nunca
+ * discordarem sobre o mesmo carrinho. O nome local fica pelo contexto: aqui
+ * ele e o lado esquerdo da comparacao com o piso do frete gratis.
  */
 function subtotalEmCentavos(itens) {
-  return itens.reduce(
-    (acc, i) => acc + Math.round(Number(i.price) * 100) * Number(i.quantity),
-    0,
-  );
+  return somarCentavos(itens);
 }
 
 /**
@@ -67,8 +69,14 @@ function subtotalEmCentavos(itens) {
  *
  * `itens` precisa vir do BANCO (peso e dimensoes reais), nunca do corpo da
  * requisicao: senao o cliente declara um pacote de 1 g e paga frete de carta.
+ *
+ * `descontoCentavos` (F6): o cupom entra na decisao de frete gratis — o piso
+ * e comparado com o subtotal COM desconto. Quem chama e responsavel pelo
+ * numero: o checkout o recalcula dos precos do banco (PaymentController), e a
+ * rota publica o deriva do proprio cupom (handler abaixo). Nunca e um valor
+ * cru do corpo da requisicao.
  */
-async function calcularOpcoesDeFrete({ zipCode, itens }) {
+async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
   const cleanZip = String(zipCode || "").replace(/\D/g, "");
   if (!cleanZip) throw new Error("CEP é obrigatório");
 
@@ -151,8 +159,16 @@ async function calcularOpcoesDeFrete({ zipCode, itens }) {
    * SUGESTAO, como o resto da cotacao; quem decide dinheiro e o checkout, que
    * chama esta mesma funcao com os precos relidos do banco.
    */
+  // O desconto do cupom abate ANTES da comparacao com o piso: um carrinho de
+  // R$ 160 com cupom de 10% e um carrinho de R$ 144 para efeito de frete
+  // gratis. `Math.max(0, ...)` porque um fixed maior que o subtotal ja foi
+  // travado por quem calculou o desconto, mas esta funcao nao confia nisso.
   const minimo = await freteGratisMinimoCentavos();
-  if (minimo !== null && subtotalEmCentavos(itens) >= minimo) {
+  const subtotalComDesconto = Math.max(
+    0,
+    subtotalEmCentavos(itens) - (Number(descontoCentavos) || 0),
+  );
+  if (minimo !== null && subtotalComDesconto >= minimo) {
     shippingOptions = shippingOptions.map((opcao) => ({
       ...opcao,
       price: 0,
@@ -166,13 +182,41 @@ async function calcularOpcoesDeFrete({ zipCode, itens }) {
 class ShippingController {
   async calculate(req, res) {
     try {
-      const { zipCode, items } = req.body;
+      const { zipCode, items, cupom } = req.body;
       if (!zipCode) return res.status(400).json({ error: "CEP é obrigatório" });
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ error: "Informe os itens do carrinho." });
       }
 
-      const opcoes = await calcularOpcoesDeFrete({ zipCode, itens: items });
+      /**
+       * Cupom na cotacao (F6): opcional, e so o CODIGO — o desconto e
+       * resolvido aqui, do banco, com a MESMA `avaliarCupom` do checkout.
+       * Sem isto, um cupom que derruba o subtotal para baixo do piso faria a
+       * cotacao prometer frete gratis que o `conferirFrete` (que desconta)
+       * recusaria com 409.
+       *
+       * Cupom invalido NAO derruba a cotacao: frete e frete — quem explica o
+       * problema do cupom e o POST /cupons/validar. Aqui ele apenas nao
+       * desconta. E como toda esta rota, o resultado e SUGESTAO: quem decide
+       * dinheiro e o checkout, com os precos relidos do banco.
+       */
+      let descontoCentavos = 0;
+      const codigoDeCupom = normalizarCodigo(cupom);
+      if (codigoDeCupom) {
+        try {
+          const linha = await cuponsRepository.buscarPorCodigo(codigoDeCupom);
+          const avaliacao = avaliarCupom(linha, subtotalEmCentavos(items));
+          if (avaliacao.valido) descontoCentavos = avaliacao.descontoCentavos;
+        } catch (erro) {
+          console.error("Cupom ignorado na cotação de frete:", erro.message);
+        }
+      }
+
+      const opcoes = await calcularOpcoesDeFrete({
+        zipCode,
+        itens: items,
+        descontoCentavos,
+      });
       return res.json(opcoes);
     } catch (error) {
       if (error.code === "FRETE_INDISPONIVEL") {

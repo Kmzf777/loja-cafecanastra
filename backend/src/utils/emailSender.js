@@ -1,6 +1,7 @@
 const { REMETENTE, EMAIL_ADMIN, NOME_LOJA, URL_LOJA } = require("../config/remetente");
 const pool = require("../pgPool");
 const resend = require("../config/mailer");
+const { escaparHtml } = require("./escaparHtml");
 
 /**
  * O que cada status em português diz ao cliente. Status fora desta lista
@@ -141,4 +142,83 @@ async function sendAdminNewOrderEmail(order) {
   }
 }
 
-module.exports = { sendStatusEmail, sendAdminNewOrderEmail };
+/**
+ * O corpo do lembrete de carrinho abandonado, PURO — separado do envio para o
+ * teste afirmar assunto e conteúdo sem tocar o Resend.
+ *
+ * O tom segue estetica.md §11: direto, concreto, sem urgência fabricada — nada
+ * de "só hoje!", contador ou desconto surpresa. SEM `<img>` de propósito: pixel
+ * de rastreio em e-mail de lembrete é vigilância que a loja não faz, e imagem
+ * externa quebrada é a primeira coisa que um cliente de e-mail bloqueia.
+ *
+ * O rodapé diz POR QUE o e-mail chegou (transparência exigida pela LGPD para
+ * comunicação não solicitada) e aponta a conta como o lugar de parar: esvaziar
+ * a sacola encerra os lembretes — é um por EPISÓDIO de abandono, por desenho
+ * (a compra reabre o ciclo; ver 0011) — e excluir a conta encerra tudo.
+ */
+function conteudoDoLembreteDeCarrinho({ nome, itens }) {
+  // `nome` e `item.nome` são texto do CLIENTE (cadastro e cópia da sacola) —
+  // escapados sempre, porque nome é dado e nunca marcação (ver escaparHtml).
+  const linhas = (Array.isArray(itens) ? itens : [])
+    .map(
+      (item) =>
+        `<li>${Number(item.quantidade)}× ${escaparHtml(item.nome || "Café")}</li>`,
+    )
+    .join("\n           ");
+
+  return {
+    subject: "Seu café ainda está na sacola",
+    html: `
+        <div>
+           <p>Olá ${escaparHtml(nome || "Cliente")},</p>
+           <p>Você deixou estes itens na sacola:</p>
+           <ul>
+           ${linhas}
+           </ul>
+           <p><a href="${URL_LOJA}/sacola">Ver minha sacola</a></p>
+           <hr/>
+           <p style="font-size:12px">
+             Você recebeu este aviso porque entrou na sua conta do ${NOME_LOJA}
+             e ficou com itens na sacola. É um lembrete único — não vamos
+             insistir. A sacola fica guardada na sua conta: entre na sua conta
+             para ver sua sacola, neste ou em qualquer aparelho. Para
+             gerenciar sua conta (ou excluí-la), acesse
+             <a href="${URL_LOJA}/account">${URL_LOJA}/account</a>.
+           </p>
+        </div>
+      `,
+  };
+}
+
+/**
+ * Envia o lembrete de carrinho abandonado.
+ *
+ * DIFERENTE dos outros senders deste arquivo, este NÃO engole erro — lança.
+ * O motivo é o contrato com o job (jobs/carrinhoAbandonado.js): a marca
+ * `lembrete_enviado_em` é gravada na MESMA transação do envio, e o ROLLBACK
+ * dela depende de a falha CHEGAR lá. Um catch aqui gravaria "lembrado" sem
+ * e-mail nenhum ter saído — exatamente a falha silenciosa que os e-mails de
+ * status tiveram por meses.
+ */
+async function sendCartReminderEmail({ email, nome, itens }) {
+  const conteudo = conteudoDoLembreteDeCarrinho({ nome, itens });
+  const { error } = await resend.emails.send({
+    from: REMETENTE.pedidos,
+    to: [email],
+    subject: conteudo.subject,
+    html: conteudo.html,
+  });
+  // O SDK do Resend resolve com { error } em vez de lançar; para o job, os
+  // dois significam o mesmo "não saiu".
+  if (error) {
+    throw new Error(`Resend recusou o lembrete para ${email}: ${error.message || error}`);
+  }
+  console.log(`📧 Lembrete de sacola enviado para ${email}`);
+}
+
+module.exports = {
+  sendStatusEmail,
+  sendAdminNewOrderEmail,
+  sendCartReminderEmail,
+  conteudoDoLembreteDeCarrinho,
+};

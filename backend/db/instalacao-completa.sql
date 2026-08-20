@@ -52,7 +52,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 
 -- ----------------------------------------------------------------------------
--- 1. Estrutura: as 9 migrações, na ordem do runner
+-- 1. Estrutura: as 11 migrações, na ordem do runner
 -- ----------------------------------------------------------------------------
 
 -- Identico ao BOOTSTRAP de db/migrar.js — inclusive os REVOKE em
@@ -2184,6 +2184,196 @@ ALTER TABLE canastra.config_loja
 -- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
 -- primeiro CREATE de objeto ja existente.
 INSERT INTO canastra.migracoes (versao) VALUES ('0009_status_e_frete_gratis')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0010_cupons
+-- ----------------------------------------------------------------------------
+
+-- Cupons de desconto, e o rastro deles no pedido.
+--
+-- O DESENHO INTEIRO PARTE DE UMA REGRA DA F4: numero que vira dinheiro nunca
+-- vem do navegador. O cupom segue a mesma linha — o cliente manda so o CODIGO;
+-- quem le esta tabela, calcula o desconto sobre os precos do BANCO e decide se
+-- o cupom vale e o servico Node (utils/cupom.js + PaymentController), sempre no
+-- servidor. O `descontoCentavos` que o navegador exibe e cortesia de interface.
+
+CREATE TABLE canastra.cupons (
+  id       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- O codigo e salvo MAIUSCULO pelo servico (quem digita "cafe10" quis dizer
+  -- "CAFE10"), e o CHECK tranca o formato no banco para o caminho que nao
+  -- passar pelo servico — um INSERT manual de emergencia, por exemplo — nao
+  -- criar um cupom que a validacao nunca encontra: a busca e por igualdade
+  -- exata, e um codigo minusculo gravado aqui seria invisivel para sempre.
+  -- A-Z e 0-9 apenas, 3 a 30 caracteres: e o que cabe num anuncio e num campo
+  -- de checkout sem ambiguidade de espaco, acento ou emoji.
+  codigo   text NOT NULL UNIQUE
+             CONSTRAINT cupons_codigo_formato CHECK (codigo ~ '^[A-Z0-9]{3,30}$'),
+
+  -- percent desconta proporcao do subtotal; fixed desconta valor em reais.
+  tipo     text NOT NULL
+             CONSTRAINT cupons_tipo_valido CHECK (tipo IN ('percent', 'fixed')),
+
+  -- O MESMO teto de 90% das promocoes (promotionsRepository.validarDesconto),
+  -- pelo MESMO motivo: acima disso e quase certamente engano, e um "100%"
+  -- liberaria a loja de graca para quem soubesse o codigo. So que la o teto e
+  -- so do servico; aqui vai tambem no banco, porque cupom e um segredo que
+  -- circula fora da loja (anuncio, influencer) e o custo de um erro e maior.
+  -- `fixed` nao tem teto no banco: o servico trava o desconto no subtotal do
+  -- pedido, entao um fixed maior que a compra desconta a compra e para.
+  valor    numeric(10,2) NOT NULL
+             CONSTRAINT cupons_valor_valido
+               CHECK (valor > 0 AND (tipo <> 'percent' OR valor <= 90)),
+
+  descricao text,
+
+  -- Pedido minimo em CENTAVOS e inteiro, como todo dinheiro de comparacao
+  -- neste schema (frete_gratis_minimo_centavos, 0009): numeric aqui convidaria
+  -- aritmetica de ponto flutuante exatamente na fronteira do "vale/nao vale".
+  minimo_centavos integer NOT NULL DEFAULT 0
+             CONSTRAINT cupons_minimo_nao_negativo CHECK (minimo_centavos >= 0),
+
+  -- NULL = sem limite. O CHECK barra o `limite_usos = 0`, que nao significa
+  -- "ilimitado" nem "esgotado desde o inicio" — significa que alguem confundiu
+  -- os dois, e melhor descobrir no INSERT que no primeiro cliente recusado.
+  limite_usos integer
+             CONSTRAINT cupons_limite_positivo
+               CHECK (limite_usos IS NULL OR limite_usos > 0),
+
+  -- Incrementado ATOMICAMENTE pelo checkout (`SET usos = usos + 1 WHERE ...
+  -- usos < limite_usos`), dentro da transacao de reserva de estoque — e o
+  -- mesmo desenho do FOR UPDATE dos produtos: dois checkouts simultaneos no
+  -- ultimo uso serializam e o segundo recebe "Cupom esgotado" ANTES de ser
+  -- cobrado. O CHECK de nao-negativo protege a compensacao (falha de gateway
+  -- devolve o uso): um decremento a mais viraria erro visivel, nao -1.
+  usos     integer NOT NULL DEFAULT 0
+             CONSTRAINT cupons_usos_nao_negativo CHECK (usos >= 0),
+
+  ativo    boolean NOT NULL DEFAULT true,
+
+  -- Janela de validade, as duas pontas opcionais — diferente das promocoes,
+  -- onde as duas datas sao obrigatorias para valer (semantica herdada do
+  -- painel legado). Cupom sem data e o caso comum ("CAFE10 ate acabar").
+  inicio_em timestamptz,
+  fim_em    timestamptz,
+
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  -- MANTIDA POR QUEM ESCREVE, como em 0004/0005: nao ha trigger de moddatetime
+  -- neste schema. Todo UPDATE do servico escreve `atualizado_em = now()` junto.
+  atualizado_em timestamptz NOT NULL DEFAULT now()
+);
+
+-- O rastro no pedido. `cupom_codigo` e TEXTO, nao FK, pela mesma licao do
+-- carrinho sem FK para produtos (0004): o pedido guarda a fotografia do que
+-- foi usado na compra, e apagar ou renomear o cupom amanha nao pode tocar uma
+-- venda ja feita — faturamento nao herda o ciclo de vida de uma campanha.
+-- `desconto` em reais com 2 casas, como `total` e `frete` da mesma tabela:
+-- os tres somam juntos na conferencia de um pedido.
+ALTER TABLE canastra.pedidos
+  ADD COLUMN cupom_codigo text,
+  ADD COLUMN desconto numeric(10,2) NOT NULL DEFAULT 0
+    CONSTRAINT pedidos_desconto_nao_negativo CHECK (desconto >= 0);
+
+-- Chave geral fechada, SEM politica nenhuma — e aqui isso e o estado FINAL,
+-- nao um adiamento como foi em 0002/0004: cupom so e lido e escrito pelo
+-- servico Node, que conecta como dono do banco e nao passa por RLS. O
+-- PostgREST nao serve esta tabela a ninguem: a lista de cupons e o mapa de
+-- descontos da loja, e a validacao publica ja existe do jeito certo
+-- (POST /cupons/validar, que responde so sobre O codigo perguntado).
+ALTER TABLE canastra.cupons ENABLE ROW LEVEL SECURITY;
+
+-- Os ALTER DEFAULT PRIVILEGES de 0001 deram a `authenticated` o pacote arwd
+-- nesta tabela recem-nascida. Hoje ele esta inerte (RLS sem politica nega
+-- tudo), mas a licao de 0003 vale: a primeira politica ampla escrita daqui a
+-- seis meses acordaria o GRANT esquecido. Como nenhuma politica e planejada
+-- para cupons — o painel fala com o Express, nao com o PostgREST — revogar
+-- custa uma linha e fecha a porta nas DUAS camadas. `service_role` fica, como
+-- sempre: e credencial de servidor.
+REVOKE ALL ON canastra.cupons FROM authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0010_cupons')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0011_newsletter_e_abandono
+-- ----------------------------------------------------------------------------
+
+-- Newsletter (captacao de e-mail no rodape) e o marcador do lembrete de
+-- carrinho abandonado.
+
+-- E-mail e DADO PESSOAL, e a tabela nasce com a postura de 0004: RLS ligada,
+-- politica nenhuma, e nenhum GRANT para `anon` — quem escreve aqui e SO o
+-- servico Node (POST /newsletter), que conecta como dono do banco. A rota
+-- publica responde `{ok:true}` para qualquer e-mail valido, inclusive o ja
+-- inscrito, de proposito: uma resposta diferente para "ja existe" deixaria
+-- qualquer pessoa testar se um e-mail especifico esta na lista (enumeracao).
+CREATE TABLE canastra.newsletter_inscritos (
+  id     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- O UNIQUE e o que faz o INSERT ... ON CONFLICT DO NOTHING da rota ser a
+  -- deduplicacao inteira: inscrever duas vezes nao cria duas linhas nem vira
+  -- erro. O CHECK e de FORMATO BASICO (algo@algo.tld, sem espaco) — validar
+  -- e-mail "de verdade" por regex e uma guerra perdida; o que este CHECK barra
+  -- e lixo obvio ("teste", "a@b") entrando por um caminho que nao passou pela
+  -- validacao do servico.
+  email  text NOT NULL UNIQUE
+           CONSTRAINT newsletter_email_formato
+             CHECK (email ~* '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'),
+
+  -- De onde veio a inscricao ('rodape' hoje; um pop-up ou o checkout amanha).
+  -- Serve para medir qual superficie converte — sem coluna, essa pergunta
+  -- nunca mais tem resposta retroativa.
+  origem text NOT NULL DEFAULT 'rodape',
+
+  criado_em timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE canastra.newsletter_inscritos ENABLE ROW LEVEL SECURITY;
+
+-- Mesmo fecho de 0010: o pacote arwd que 0001 concede por padrao a
+-- `authenticated` esta inerte sob a RLS sem politica, e revogar agora impede
+-- que uma politica ampla futura o acorde. Uma lista de e-mails legivel por
+-- qualquer token `authenticated` da instancia COMPARTILHADA seria vazamento
+-- de dado pessoal em massa.
+REVOKE ALL ON canastra.newsletter_inscritos FROM authenticated;
+
+-- O marcador do lembrete de carrinho abandonado: UM lembrete por EPISODIO de
+-- abandono.
+--
+-- A SEMANTICA COMPLETA, porque a coluna sozinha nao conta: NULL = "esta
+-- sacola ainda nao foi lembrada"; preenchida = "ja foi". O episodio comeca
+-- quando a sacola para (job de src/jobs/carrinhoAbandonado.js) e TERMINA NA
+-- COMPRA: o checkout (`limparCarrinho`, PaymentController) apaga os itens e
+-- devolve esta coluna a NULL no mesmo gesto. Sem o reset, quem comprou uma
+-- vez nunca mais receberia lembrete de sacola nenhuma — "um lembrete por
+-- carrinho" e por episodio, nao por cliente para sempre. O ciclo
+-- abandona -> lembra -> compra -> abandona de novo -> lembra de novo esta
+-- medido em test/f6_cupons.test.js.
+--
+-- POR QUE UMA COLUNA, e nao uma tabela de envios: a pergunta que o job faz e
+-- binaria ("esta sacola ja foi lembrada?") e a resposta precisa ser travavel
+-- na MESMA transacao do envio — `UPDATE ... SET lembrete_enviado_em = now()
+-- WHERE lembrete_enviado_em IS NULL` com rowCount 0 significando "outra
+-- execucao chegou antes". Historico de campanhas e problema de outra tarefa.
+--
+-- COMO SE MEDE "ABANDONADO", ja que `carrinho_itens` NAO tem timestamp nenhum
+-- (0004): pelo `carrinhos.atualizado_em`. Quem o mantem e a RPC
+-- `fundir_sacola` (0007), que roda a cada login — a unica escritora do
+-- carrinho do servidor nesta fase (a sacola do dia a dia vive no localStorage
+-- e so encosta no banco no login e no checkout, que APAGA os itens). Ou seja:
+-- carrinho com itens e `atualizado_em` velho = pessoa entrou, fundiu a sacola
+-- e nao comprou. E exatamente o abandono que se quer lembrar.
+ALTER TABLE canastra.carrinhos
+  ADD COLUMN lembrete_enviado_em timestamptz;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0011_newsletter_e_abandono')
   ON CONFLICT (versao) DO NOTHING;
 
 

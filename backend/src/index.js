@@ -16,6 +16,8 @@ const optionsRoutes = require("./routes/options.routes");
 const promotionsRoutes = require("./routes/promotions.routes");
 const paymentRoutes = require("./routes/orders.routes");
 const addressRoutes = require("./routes/address.routes");
+const cuponsRoutes = require("./routes/cupons.routes");
+const { newsletterRoutes } = require("./routes/newsletter.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 
@@ -165,6 +167,20 @@ app.use("/auth", contaRoutes);
 app.use("/options", optionsRoutes);
 app.use(paymentRoutes);
 app.use(addressRoutes);
+// Cupons: /cupons/validar e publico (rate limit proprio, dentro da rota);
+// o CRUD exige admin. Newsletter: publica, rate limit proprio.
+app.use("/cupons", cuponsRoutes);
+app.use("/newsletter", newsletterRoutes);
+
+/**
+ * Carrinho abandonado: cron de hora em hora, DESLIGADO por padrao (decisao 5
+ * do plano mestre — integracao nova nao pode quebrar nem surpreender a
+ * subida). So ABANDONO_ATIVO=true literal liga; qualquer outra coisa, o
+ * processo sobe identico ao de antes, sem nem carregar o node-cron.
+ */
+if (process.env.ABANDONO_ATIVO === "true") {
+  require("./jobs/carrinhoAbandonado").iniciarCronDeAbandono();
+}
 
 // Tratamento de erros gerais
 app.use((err, req, res, next) => {

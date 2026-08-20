@@ -11,6 +11,12 @@ const {
   traduzirStatusMp,
 } = require("../utils/statusDePedido");
 const { ordenarPorProduto } = require("../utils/estoque");
+// `precoComPromocao` morou aqui até a F6; foi para utils/preco.js quando o
+// POST /cupons/validar virou o terceiro chamador — o histórico e o porquê
+// estão no próprio módulo.
+const { precoComPromocao, somarCentavos } = require("../utils/preco");
+const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
+const cuponsRepository = require("../repositories/cuponsRepository");
 const promotionsRepo = new PromotionsRepository();
 const {
   sendStatusEmail,
@@ -39,8 +45,21 @@ const FORMATO_UUID =
  * quando o subtotal atinge o piso — entao o `shippingCost: 0` do navegador
  * casa com uma opcao real de preco 0. Abaixo do piso, o zero nao casa com
  * nada e cai no 409 de sempre.
+ *
+ * `descontoCentavos` (F6) e o cupom entrando na MESMA regra: o frete gratis e
+ * decidido pelo subtotal COM desconto, entao a recotacao daqui tem de usar o
+ * mesmo numero que a cotacao do navegador usou (a rota /shipping/calculate
+ * aceita `cupom` e desconta identicamente) — senao um cupom que derruba o
+ * subtotal para baixo do piso geraria 409 falso, ou pior, o contrario: frete
+ * gratis decidido pelo subtotal cheio de um pedido que o cupom baratearia.
  */
-async function conferirFrete({ address, itens, shippingCost, shippingMethod }) {
+async function conferirFrete({
+  address,
+  itens,
+  shippingCost,
+  shippingMethod,
+  descontoCentavos = 0,
+}) {
   const valor = Number(shippingCost || 0);
 
   if (!Number.isFinite(valor) || valor < 0) {
@@ -68,7 +87,7 @@ async function conferirFrete({ address, itens, shippingCost, shippingMethod }) {
 
   let opcoes;
   try {
-    opcoes = await calcularOpcoesDeFrete({ zipCode: cep, itens });
+    opcoes = await calcularOpcoesDeFrete({ zipCode: cep, itens, descontoCentavos });
   } catch {
     // Sem conseguir recalcular, aceitar o numero do cliente seria reabrir o
     // buraco. Recusar o pedido e o comportamento seguro — e o checkout ja
@@ -156,58 +175,6 @@ function validarAssinaturaWebhook(req) {
   const b = Buffer.from(recebido, "utf8");
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
-}
-
-/**
- * O menor preco do produto dadas as promocoes ativas, arredondado a centavo.
- *
- * Fatorado porque roda DUAS vezes por checkout: na cotacao de frete (leitura
- * sem trava, antes da transacao) e no calculo do valor cobrado (releitura com
- * FOR UPDATE). Duas copias desta logica divergindo fariam o frete gratis e a
- * cobranca discordarem sobre o mesmo carrinho.
- *
- * O arredondamento nao e cosmetico: 10% sobre 49.90 em float da
- * 44.910000000000004, e esse numero iria para o JSON IMUTAVEL do pedido
- * (`itens`, regra de 0005) e para a soma cobrada no gateway.
- */
-function precoComPromocao(productDb, activePromotions) {
-  const precoOriginal = Number(productDb.price);
-  let bestPrice = precoOriginal;
-
-  activePromotions.forEach((p) => {
-    let match = false;
-
-    const promoCategory = p.category
-      ? String(p.category).trim().toLowerCase()
-      : "";
-    const prodCategory = productDb.category
-      ? String(productDb.category).trim().toLowerCase()
-      : "";
-
-    if (p.applies_to === "all") {
-      match = true;
-    } else if (p.applies_to === "category") {
-      if (promoCategory && promoCategory === prodCategory) {
-        match = true;
-      }
-    } else if (p.applies_to === "product") {
-      if (String(p.product_id) === String(productDb.product_id)) {
-        match = true;
-      }
-    }
-
-    if (match) {
-      const value = Number(p.value);
-      const discounted =
-        p.type === "percent"
-          ? precoOriginal * (1 - value / 100)
-          : Math.max(0, precoOriginal - value);
-
-      if (discounted < bestPrice) bestPrice = discounted;
-    }
-  });
-
-  return Math.round(bestPrice * 100) / 100;
 }
 
 /**
@@ -311,6 +278,29 @@ class PaymentController {
     let estoqueReservado = false;
     let pedidoCriado = null;
     let validatedItems = [];
+    // O cupom fica FORA do try pelo mesmo motivo do resto: o bloco de erro
+    // compensa (devolve o uso junto com o estoque) e precisa alcancar os dois.
+    let cupomAplicado = null;
+    let usoDeCupomReservado = false;
+
+    /**
+     * A compensacao COMPLETA de uma reserva ja commitada: estoque de volta e,
+     * se um cupom foi consumido na mesma transacao, o uso de volta junto.
+     * Fatorada porque roda em QUATRO lugares (gateway caiu, 23505 do INSERT,
+     * pagamento nascido recusado, catch externo) e a versao repetida ja tinha
+     * quase esquecido o cupom num deles. Os flags zeram aqui dentro para a
+     * proxima chamada — inclusive a do catch — ser no-op em vez de dobro.
+     */
+    const compensarReserva = async () => {
+      if (estoqueReservado) {
+        await devolverEstoque(pool, validatedItems);
+        estoqueReservado = false;
+      }
+      if (usoDeCupomReservado && cupomAplicado) {
+        await cuponsRepository.devolverUso(cupomAplicado.id, pool);
+        usoDeCupomReservado = false;
+      }
+    };
     try {
       const {
         formData,
@@ -320,6 +310,7 @@ class PaymentController {
         address,
         shippingCost,
         shippingMethod,
+        cupom,
       } = req.body;
 
       /**
@@ -460,14 +451,48 @@ class PaymentController {
         });
       }
 
+      /**
+       * CUPOM, PRIMEIRA PASSADA (F6). O navegador manda so o CODIGO; o
+       * desconto que ele exibiu nunca e aceito — e recalculado aqui sobre o
+       * subtotal dos precos do BANCO ja promocionais (o cupom desconta sobre
+       * o preco com promocao, mesma `precoComPromocao` da cobranca).
+       *
+       * A avaliacao roda ANTES da conferencia de frete por necessidade, nao
+       * por estilo: o frete gratis e decidido pelo subtotal COM desconto, e a
+       * recotacao precisa do numero. Cupom invalido para AQUI, com frase, sem
+       * reservar nem cobrar nada.
+       */
+      const codigoDeCupom = normalizarCodigo(cupom);
+      let descontoPrevioCentavos = 0;
+      if (codigoDeCupom) {
+        cupomAplicado = await cuponsRepository.buscarPorCodigo(codigoDeCupom);
+        const subtotalPrevioCentavos = somarCentavos(itensParaCotacao);
+        const avaliacao = avaliarCupom(cupomAplicado, subtotalPrevioCentavos);
+        if (!avaliacao.valido) {
+          const erro = new Error(avaliacao.motivo);
+          erro.status = 400;
+          erro.codigoPublico = "CUPOM_INVALIDO";
+          throw erro;
+        }
+        descontoPrevioCentavos = avaliacao.descontoCentavos;
+      }
+
       const freteConferido = await conferirFrete({
         address,
         itens: itensParaCotacao,
         shippingCost,
         shippingMethod,
+        descontoCentavos: descontoPrevioCentavos,
       });
 
-      let validatedTotalAmount = 0;
+      /**
+       * Subtotal em CENTAVOS e inteiro. Ate a F6 a soma era em reais
+       * (`validatedTotalAmount`); com o desconto entrando na conta, a
+       * subtracao passa a acontecer exatamente na fronteira de um piso
+       * (frete gratis, total > 0) — e float erra fronteira. Cada bestPrice
+       * ja sai arredondado a centavo, entao a conversao aqui e exata.
+       */
+      let validatedSubtotalCentavos = 0;
 
       /**
        * Agora sim a transacao — enxuta: so leitura travada e reserva, nenhuma
@@ -522,7 +547,7 @@ class PaymentController {
         }
 
         const bestPrice = precoComPromocao(productDb, activePromotions);
-        validatedTotalAmount += bestPrice * qtdSolicitada;
+        validatedSubtotalCentavos += Math.round(bestPrice * 100) * qtdSolicitada;
 
         validatedItems.push({
           product_id: productDb.product_id,
@@ -565,12 +590,63 @@ class PaymentController {
         }
       }
 
+      /**
+       * CUPOM, SEGUNDA PASSADA — a que vale dinheiro. Reavalia com a MESMA
+       * funcao sobre o subtotal dos precos TRAVADOS (se um preco mudou entre
+       * as duas leituras, e este que sera cobrado), e so entao reserva o uso:
+       *
+       *   UPDATE ... SET usos = usos + 1
+       *    WHERE ativo AND (limite_usos IS NULL OR usos < limite_usos)
+       *
+       * O incremento atomico e a trava do esgotamento — dois checkouts no
+       * ultimo uso serializam na linha do cupom e o segundo recebe rowCount 0
+       * AQUI, dentro da transacao de reserva, ANTES de cobrar: o throw abaixo
+       * vira ROLLBACK e devolve estoque e uso juntos, de graca.
+       */
+      let descontoCentavos = 0;
+      if (cupomAplicado) {
+        const reavaliacao = avaliarCupom(
+          cupomAplicado,
+          validatedSubtotalCentavos,
+        );
+        if (!reavaliacao.valido) {
+          const erro = new Error(reavaliacao.motivo);
+          erro.status = 400;
+          erro.codigoPublico = "CUPOM_INVALIDO";
+          throw erro;
+        }
+        descontoCentavos = reavaliacao.descontoCentavos;
+
+        const reservou = await cuponsRepository.reservarUso(
+          cupomAplicado.id,
+          client,
+        );
+        if (!reservou) {
+          const erro = new Error("Cupom esgotado");
+          erro.status = 400;
+          erro.codigoPublico = "CUPOM_INVALIDO";
+          throw erro;
+        }
+      }
+
       const finalAmountToCharge = Number(
-        (validatedTotalAmount + freteConferido).toFixed(2),
+        (
+          (validatedSubtotalCentavos - descontoCentavos) / 100 +
+          freteConferido
+        ).toFixed(2),
       );
 
       if (!(finalAmountToCharge > 0)) {
-        const erro = new Error("Valor total do pedido inválido.");
+        // Dois motivos possiveis, duas frases: um cupom fixed pode cobrir o
+        // subtotal inteiro (o desconto trava la, mas com frete zero o total
+        // fecha em 0.00) — e "valor invalido" mandaria a pessoa cacar um erro
+        // que nao cometeu. O MP nao cobra R$ 0, e pedido gratis nao e um
+        // fluxo que esta loja vende.
+        const erro = new Error(
+          cupomAplicado && descontoCentavos >= validatedSubtotalCentavos
+            ? "O cupom cobre o valor inteiro do pedido; ajuste os itens ou fale com a gente."
+            : "Valor total do pedido inválido.",
+        );
         erro.status = 400;
         throw erro;
       }
@@ -583,6 +659,9 @@ class PaymentController {
        */
       await client.query("COMMIT");
       estoqueReservado = true;
+      // O uso do cupom commitou JUNTO com a reserva: a partir daqui, toda
+      // compensacao de estoque devolve o uso tambem.
+      usoDeCupomReservado = Boolean(cupomAplicado);
       client.release();
       client = null;
 
@@ -631,9 +710,10 @@ class PaymentController {
         mpResponse = await payment.create({ body: paymentData });
       } catch (falhaNoGateway) {
         // Cobranca nao saiu: devolve o que foi reservado, senao o produto some
-        // do estoque sem ninguem ter comprado.
-        await devolverEstoque(pool, validatedItems);
-        estoqueReservado = false;
+        // do estoque sem ninguem ter comprado. O uso do cupom volta junto —
+        // ele foi reservado na mesma transacao e um cupom "gasto" numa compra
+        // que nao existiu esgotaria o limite sem vender nada.
+        await compensarReserva();
         throw falhaNoGateway;
       }
 
@@ -660,6 +740,10 @@ class PaymentController {
           shippingMethod: shippingMethod || "Retirada",
           chaveIdempotencia,
           status: "pendente",
+          // A fotografia do cupom (0010): o codigo usado e o desconto em
+          // reais, ambos os RECALCULADOS — nunca o que o navegador exibiu.
+          cupomCodigo: cupomAplicado ? cupomAplicado.codigo : null,
+          desconto: descontoCentavos / 100,
         });
       } catch (erroDeInsert) {
         if (erroDeInsert.code === "23505") {
@@ -672,8 +756,7 @@ class PaymentController {
            * (estornar automaticamente exigiria a API de refunds, fora desta
            * onda).
            */
-          await devolverEstoque(pool, validatedItems);
-          estoqueReservado = false;
+          await compensarReserva();
           console.error(
             `PAGAMENTO DUPLICADO: chave ${chaveIdempotencia} ja tinha pedido; ` +
               `pagamento MP ${mpId} precisa de estorno manual.`,
@@ -747,6 +830,21 @@ class PaymentController {
               )`,
             [userId],
           );
+          /**
+           * A compra ENCERRA o episodio do lembrete de abandono (F6): a marca
+           * `lembrete_enviado_em` significa "esta sacola ja foi lembrada", e
+           * a sacola que ela lembrava acabou de virar pedido. Sem o reset, o
+           * cliente que comprou e depois montou OUTRA sacola nunca mais
+           * receberia lembrete — "um lembrete por carrinho" e por episodio de
+           * abandono, nao por cliente para sempre. Semantica documentada na
+           * 0011 e no job (jobs/carrinhoAbandonado.js).
+           */
+          await pool.query(
+            `UPDATE canastra.carrinhos
+                SET lembrete_enviado_em = NULL
+              WHERE user_id = $1::uuid AND lembrete_enviado_em IS NOT NULL`,
+            [userId],
+          );
         } catch (err) {
           console.error("Falha ao limpar o carrinho após a compra:", err.message);
         }
@@ -762,9 +860,11 @@ class PaymentController {
           await limparCarrinho();
         }
       } else if (GRUPO_CANCELADO.includes(statusAplicado)) {
-        // O pagamento ja nasceu recusado: a reserva nao se justifica.
-        await devolverEstoque(pool, validatedItems);
-        estoqueReservado = false;
+        // O pagamento ja nasceu recusado: a reserva nao se justifica — e o
+        // uso do cupom tampouco, porque a venda nao aconteceu. (Se o webhook
+        // tivesse vencido esta corrida, statusAplicado seria null e quem
+        // devolve estoque E uso e ele — ver receiveWebhook.)
+        await compensarReserva();
       } else if (userId) {
         await limparCarrinho();
       }
@@ -793,8 +893,11 @@ class PaymentController {
       if (client) {
         await client.query("ROLLBACK").catch(() => {});
       }
-      if (estoqueReservado && !pedidoCriado) {
-        await devolverEstoque(pool, validatedItems);
+      // O uso do cupom foi commitado na mesma transacao da reserva; se a
+      // reserva esta voltando na mao, ele volta junto (compensarReserva zera
+      // os flags, entao um caminho que ja compensou nao compensa duas vezes).
+      if (!pedidoCriado) {
+        await compensarReserva();
       }
 
       console.error("Erro ao processar pagamento:", error);
@@ -932,6 +1035,44 @@ class PaymentController {
               [Number(item.quantity), item.product_id],
             );
           }
+
+          /**
+           * O USO DO CUPOM VOLTA JUNTO COM O ESTOQUE, na mesma transacao: a
+           * venda morreu, e um cupom de limite 50 "gasto" em pedidos
+           * cancelados esgotaria a campanha sem vender nada.
+           *
+           * QUEM DEVOLVE E EXATAMENTE UM, tracado pelos dois lados da corrida
+           * checkout×webhook (a mesma corrida do estoque, resolvida pelo
+           * mesmo mecanismo — o FOR UPDATE do pedido e o `status !== statusPt`):
+           *
+           *   · checkout vence (avancarStatusInicial aplicou pendente→recusado):
+           *     o proprio checkout devolve estoque e uso (compensarReserva);
+           *     quando o webhook chegar, vera o status ja igual e este bloco
+           *     NEM RODA — zero dobro.
+           *   · webhook vence (chegou antes da resposta sincrona): devolve
+           *     estoque e uso AQUI; o checkout recebe `avancado` vazio
+           *     (statusAplicado null) e, por contrato daquele ramo, nao
+           *     produz efeito nenhum — nem estoque, nem uso — zero perda.
+           *
+           * A idempotencia do reenvio e a de sempre: a segunda notificacao
+           * identica encontra `status` ja transicionado e nao entra aqui.
+           *
+           * `false` = nenhuma linha casou (cupom renomeado apos a venda, ou
+           * contador ja zerado). Nao e falha da transicao — loga e segue.
+           */
+          if (pedido.coupon_code) {
+            const devolveu = await cuponsRepository.devolverUsoPorCodigo(
+              pedido.coupon_code,
+              client,
+            );
+            if (!devolveu) {
+              console.warn(
+                `CUPOM: uso do cupom "${pedido.coupon_code}" (pedido ${pedido.order_id}) ` +
+                  "não pôde ser devolvido — código renomeado ou contador zerado. " +
+                  "Confira o contador manualmente.",
+              );
+            }
+          }
         } else if (eraCancelado && ficouAtivo && Array.isArray(items)) {
           // O caminho de volta (um rejeitado que o MP reprocessa e aprova):
           // o estoque que a devolucao repos sai de novo. GREATEST(0, ...)
@@ -944,6 +1085,26 @@ class PaymentController {
                   SET quantidade = GREATEST(0, quantidade - $1)
                 WHERE produto_id = $2`,
               [Number(item.quantity), item.product_id],
+            );
+          }
+
+          /**
+           * O caminho de volta NAO re-reserva o uso do cupom, de proposito.
+           * Re-incrementar as cegas (`usos + 1`) poderia ESTOURAR o limite —
+           * a vaga devolvida no cancelamento pode ja ter sido consumida por
+           * outro pedido nesse meio tempo — e um `reservarUso` que falhasse
+           * aqui nao teria resposta boa: cancelar a reaprovacao de um
+           * pagamento JA APROVADO por causa de contador de campanha seria
+           * deixar o marketing mandar no dinheiro. O contador fica 1 abaixo
+           * do real para este cupom; a divergencia e conhecida, logada e
+           * conferivel no painel.
+           */
+          if (pedido.coupon_code) {
+            console.warn(
+              `CUPOM: pedido ${pedido.order_id} voltou a ativo com o cupom ` +
+                `"${pedido.coupon_code}" ja devolvido — o contador de usos ` +
+                "fica 1 abaixo do real para este cupom (divergência conhecida, " +
+                "não re-reservamos às cegas para não estourar o limite).",
             );
           }
         }
