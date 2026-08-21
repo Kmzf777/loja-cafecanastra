@@ -1,6 +1,9 @@
 // Relativo, e não "@/": o alias vive só no tsconfig/Next — o Vitest não o
 // resolve, e este módulo é coberto por clube.test.ts.
 import { API_BASE } from "./api-base";
+// O MESMO módulo de CPF do checkout (máscara + dígitos verificadores da
+// Receita, coberto por cpf.test.ts): a adesão não reimplementa nada disso.
+import { limparCpf } from "./cpf";
 import type { Lote, Moagem, PesoGramas } from "./catalogo/tipos";
 import type { Endereco } from "./sacola/checkout";
 
@@ -134,6 +137,17 @@ export type CorpoDeAssinatura = {
   sku: string;
   quantidade: number;
   frequenciaDias: FrequenciaDias;
+  /**
+   * Só dígitos. É o dado da NOTA FISCAL de cada envio: toda cobrança do Clube
+   * vira pedido de venda no Bling, e o ERP recusa pedido sem contato
+   * identificado — sem CPF a assinatura cobra e nunca emite nota.
+   *
+   * OPCIONAL no contrato de propósito: quem já tem CPF no cadastro (comprou
+   * avulso antes, por exemplo) não precisa redigitar, e o servidor usa o da
+   * conta. A chave é OMITIDA quando não há número — mandar `""` seria dizer
+   * "o CPF é vazio", que é diferente de "não informei".
+   */
+  cpf?: string;
   endereco: Endereco;
 };
 
@@ -146,12 +160,16 @@ export function montarCorpoDeAssinatura(dados: {
   variante: VarianteDoClube;
   quantidade: number;
   frequenciaDias: FrequenciaDias;
+  cpf?: string;
   endereco: Endereco;
 }): CorpoDeAssinatura {
+  // A máscara fica na tela; o que viaja são dígitos, como no checkout.
+  const cpf = limparCpf(dados.cpf ?? "");
   return {
     sku: dados.variante.sku,
     quantidade: dados.quantidade,
     frequenciaDias: dados.frequenciaDias,
+    ...(cpf ? { cpf } : {}),
     endereco: dados.endereco,
   };
 }

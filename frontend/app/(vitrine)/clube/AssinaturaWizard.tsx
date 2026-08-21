@@ -7,6 +7,10 @@ import { MOAGENS, type Moagem, type PesoGramas } from "@/lib/catalogo/tipos";
 import { formatarPreco, precoParaLeitor } from "@/lib/catalogo/repositorio";
 import { recuperarSessao, type Sessao } from "@/lib/conta/sessao";
 import { buscarCep, cepCompleto, formatarCep, limparCep } from "@/lib/cep";
+// O MESMO módulo do checkout: máscara progressiva e dígitos verificadores da
+// Receita, já cobertos por lib/cpf.test.ts. Nada de segunda implementação.
+import { formatarCpf, limparCpf, validarCpf } from "@/lib/cpf";
+import { clienteNavegador } from "@/lib/supabase/cliente";
 import { buscarEndereco, type Endereco } from "@/lib/sacola/checkout";
 import {
   FREQUENCIAS_DIAS,
@@ -95,8 +99,35 @@ type Rascunho = {
   peso: PesoGramas;
   quantidade: number;
   frequencia: FrequenciaDias;
+  /** Com máscara, como está na tela — a volta do login reencontra o campo igual. */
+  cpf: string;
   endereco: Endereco;
 };
+
+/**
+ * O CPF que a conta JÁ tem (`canastra.clientes.cpf`), para quem comprou avulso
+ * antes não redigitar o número na adesão — a mesma cortesia do endereço salvo
+ * logo acima. A política `clientes_dono_le` (0006) garante que só o dono lê a
+ * própria linha.
+ *
+ * FALHA É SILENCIOSA e devolve "": isto é conveniência, não regra. Supabase mal
+ * configurado, RLS negando, rede fora — em todos os casos a pessoa digita o CPF
+ * e assina do mesmo jeito. Quem decide de verdade é o servidor, que grava o
+ * número e recusa a adesão sem ele.
+ */
+async function lerCpfDoCadastro(userId: string): Promise<string> {
+  try {
+    const { data, error } = await clienteNavegador()
+      .from("clientes")
+      .select("cpf")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error) return "";
+    return data?.cpf ?? "";
+  } catch {
+    return "";
+  }
+}
 
 function guardarRascunho(rascunho: Rascunho) {
   try {
@@ -144,6 +175,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
   const [peso, setPeso] = useState<PesoGramas>(250);
   const [quantidade, setQuantidade] = useState(1);
   const [frequencia, setFrequencia] = useState<FrequenciaDias>(30);
+  const [cpf, setCpf] = useState("");
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO);
   const [sessao, setSessao] = useState<Sessao | null>(null);
   // "já perguntamos ao servidor" — separado de `sessao` para o aviso de login
@@ -176,6 +208,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
       setPeso(rascunho.peso);
       setQuantidade(rascunho.quantidade);
       setFrequencia(rascunho.frequencia);
+      if (rascunho.cpf) setCpf(rascunho.cpf);
       setEndereco({ ...ENDERECO_VAZIO, ...rascunho.endereco });
       setPasso(rascunho.passo);
       return;
@@ -189,7 +222,9 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
   }, [opcoes]);
 
   // Sessão: além de decidir o destino do "Assinar", preenche o endereço salvo
-  // — quem já comprou não redigita rua e CEP para assinar café.
+  // e o CPF do cadastro — quem já comprou não redigita rua, CEP nem CPF para
+  // assinar café. Os dois campos só entram se estiverem VAZIOS: o rascunho da
+  // volta do login (e o que a pessoa já digitou) vence o que veio do servidor.
   useEffect(() => {
     let vivo = true;
     recuperarSessao().then(async (s) => {
@@ -197,12 +232,17 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
       setSessaoConferida(true);
       if (!s) return;
       setSessao(s);
-      const salvo = await buscarEndereco(s.accessToken);
-      if (salvo && vivo) {
+      const [salvo, cpfSalvo] = await Promise.all([
+        buscarEndereco(s.accessToken),
+        lerCpfDoCadastro(s.usuario.userId),
+      ]);
+      if (!vivo) return;
+      if (salvo) {
         setEndereco((atual) =>
           atual.zip_code ? atual : { ...ENDERECO_VAZIO, ...salvo },
         );
       }
+      if (cpfSalvo) setCpf((atual) => atual || formatarCpf(cpfSalvo));
     });
     return () => {
       vivo = false;
@@ -296,6 +336,9 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
     endereco.city.trim() &&
     endereco.state.trim();
 
+  const cpfDigitos = limparCpf(cpf);
+  const cpfValido = validarCpf(cpfDigitos);
+
   const porEnvio = variante ? precoPorEnvio(variante.precoCentavos, quantidade) : 0;
   const economia = variante ? economiaPorEnvio(variante.precoCentavos, quantidade) : 0;
 
@@ -312,6 +355,19 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
       setErro("Preencha o endereço de entrega: CEP, rua, número, cidade e UF.");
       return;
     }
+    /**
+     * O CPF É PARADA OBRIGATÓRIA, e não capricho de formulário: cada cobrança
+     * do Clube vira pedido de venda no Bling, e o ERP recusa pedido sem
+     * contato identificado — uma assinatura sem CPF cobraria todo ciclo e
+     * nunca emitiria nota. O servidor também recusa (400 CPF_MISSING); a
+     * conferência aqui só evita a ida inútil e diz o motivo na hora.
+     */
+    if (!cpfValido) {
+      setErro(
+        "Informe um CPF válido: ele é o dado da nota fiscal de cada envio.",
+      );
+      return;
+    }
 
     // Assinar exige conta — a assinatura precisa de dono para aparecer na
     // conta e ser cancelável. O login devolve para cá, e o rascunho garante
@@ -326,6 +382,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
         peso,
         quantidade,
         frequencia,
+        cpf,
         endereco,
       });
       router.push("/account/login?de=/clube");
@@ -340,6 +397,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
           variante,
           quantidade,
           frequenciaDias: frequencia,
+          cpf: cpfDigitos,
           endereco,
         }),
       );
@@ -632,6 +690,37 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
                   className={`mt-2 ${CAMPO_MATA}`}
                 />
               </div>
+            </div>
+
+            {/* ── CPF — nota fiscal ─────────────────────────────────────────
+                Mesma explicação do checkout ("para a nota fiscal"), porque é
+                exatamente o mesmo motivo: cada envio do Clube emite nota, e o
+                ERP recusa pedido sem contato identificado. Quem já tem CPF no
+                cadastro encontra o campo PREENCHIDO (ver `lerCpfDoCadastro`) e
+                não digita nada. */}
+            <div className="mt-8 max-w-[280px]">
+              <label htmlFor="clube-cpf" className={ROTULO_MATA}>
+                CPF
+              </label>
+              <input
+                id="clube-cpf"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="000.000.000-00"
+                value={cpf}
+                onChange={(e) => setCpf(formatarCpf(e.target.value))}
+                aria-describedby="clube-cpf-ajuda"
+                aria-invalid={cpfDigitos.length === 11 && !cpfValido}
+                className={`mt-2 font-dado ${CAMPO_MATA}`}
+              />
+              <p id="clube-cpf-ajuda" className="mt-2 text-[12px] text-cal/60">
+                Usamos o CPF para emitir a nota fiscal de cada envio.
+              </p>
+              {cpfDigitos.length === 11 && !cpfValido ? (
+                <p role="alert" className="mt-1.5 text-[13px] text-cal">
+                  Este CPF não confere. Confira os dígitos.
+                </p>
+              ) : null}
             </div>
           </fieldset>
 

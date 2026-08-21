@@ -36,6 +36,7 @@ let pedidoDaAna; // criado no before, usado pelos testes de detalhe
 let pedidoAntigo; // criado_em em 2020, para o filtro de data do export
 let pedidoComCupom; // CAFE10 / desconto 6.74 — detalhe, listas e CSV
 let pedidoLimite; // 23:59 de 2026-09-10 em São Paulo = 02:59 do dia 11 em UTC
+let pedidoNoBling; // já sincronizado e com NF-e — a fila do painel de Bling
 
 /** Dublê de `res` com o que o controller usa: status/json/send/setHeader. */
 function respostaFalsa() {
@@ -143,6 +144,25 @@ before(async () => {
     [BETO],
   );
   pedidoLimite = limite.rows[0].pedido_id;
+
+  // Pedido que JÁ foi ao ERP, com a nota autorizada: é a linha que a tela de
+  // Bling do painel (e o modal de detalhe de Pedidos) lê para decidir quais
+  // dos três botões oferecer. Inserido direto porque `createOrder` não escreve
+  // nas colunas do Bling — quem escreve nelas é `services/blingPedidos`.
+  const noBling = await bd.pool.query(
+    `INSERT INTO canastra.pedidos
+       (pedido_id, user_id, total, status, chave_idempotencia,
+        bling_id, bling_situacao, bling_sincronizado_em,
+        nfe_id, nfe_numero, nfe_chave, nfe_url)
+     VALUES (gen_random_uuid(), $1, 41.20, 'aprovado', 'onda3g-painel',
+             '901234567', 'Em aberto', '2026-08-20T10:00:00Z',
+             '77001', '1234/1',
+             '31260812345678000199550010000012341000012345',
+             'https://bling.com.br/danfe/exemplo.pdf')
+     RETURNING pedido_id`,
+    [ANA],
+  );
+  pedidoNoBling = noBling.rows[0].pedido_id;
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -266,6 +286,57 @@ test("pedido com cupom expõe coupon_code e discount no detalhe", async () => {
   assert.ok(linhaAdmin, "o pedido com cupom aparece na lista do admin");
   assert.equal(linhaAdmin.coupon_code, "CAFE10");
   assert.equal(Number(linhaAdmin.discount), 6.74);
+});
+
+/* --------------------------------------------------------------------------
+ * GET /admin/orders — os campos do Bling na linha da listagem
+ * -------------------------------------------------------------------------- */
+
+test("a listagem do admin carrega o rastro do Bling que o painel aciona", async () => {
+  const admin = await OrderRepository.getAllOrders(1, 100);
+  const linha = admin.data.find((o) => o.order_id === pedidoNoBling);
+  assert.ok(linha, "o pedido sincronizado aparece na listagem do admin");
+
+  // OS NOMES SÃO OS MESMOS que as rotas de `/bling` devolvem no `pedido` da
+  // resposta (`COLUNAS_COM_BLING`, services/blingPedidos.js). É essa igualdade
+  // que deixa a tela mesclar o resultado de uma ação na linha da lista sem
+  // mapa de conversão — se um dos dois lados renomear, o painel passa a exibir
+  // "não sincronizado" logo depois de sincronizar com sucesso.
+  assert.equal(linha.bling_id, "901234567");
+  assert.equal(linha.bling_situacao, "Em aberto");
+  assert.ok(linha.bling_sincronizado_em instanceof Date);
+  assert.equal(linha.nfe_numero, "1234/1");
+  assert.equal(
+    linha.nfe_chave,
+    "31260812345678000199550010000012341000012345",
+  );
+  assert.equal(linha.nfe_url, "https://bling.com.br/danfe/exemplo.pdf");
+
+  // `nfe_id` fica FORA da projeção de propósito: ele é a mecânica da
+  // retentativa (retransmitir a MESMA nota), não informação de gestão.
+  assert.ok(!("nfe_id" in linha), "nfe_id não pertence ao contrato do painel");
+
+  // Pedido que nunca foi ao ERP: os campos vêm NULL — e não ausentes. É assim
+  // que a fila separa "não sincronizado" de "sincronizado".
+  const semBling = admin.data.find((o) => o.order_id === pedidoDaAna.order_id);
+  assert.ok(semBling, "o pedido sem Bling continua na listagem");
+  assert.equal(semBling.bling_id, null);
+  assert.equal(semBling.bling_situacao, null);
+  assert.equal(semBling.nfe_chave, null);
+  assert.equal(semBling.nfe_url, null);
+});
+
+test("o contrato do CLIENTE não ganhou os campos do ERP", async () => {
+  // `/my-orders/:id` e a lista do dono continuam sem rastro de Bling: nada na
+  // vitrine mostra ERP, e o campo que ninguém exibe é campo que vaza um dia.
+  const res = respostaFalsa();
+  await OrderController.getOrderDetail(
+    { params: { id: pedidoNoBling }, user: { userId: ANA, ehAdmin: false } },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+  assert.ok(!("bling_id" in res.corpo.order));
+  assert.ok(!("nfe_url" in res.corpo.order));
 });
 
 test("pedido de OUTRO usuário responde o MESMO 404 de inexistente", async () => {
@@ -410,4 +481,218 @@ test("data em formato inválido é 400 com frase, nunca filtro ignorado", async 
   );
   assert.equal(res.codigo, 400);
   assert.match(res.corpo.error, /YYYY-MM-DD/);
+});
+
+/* --------------------------------------------------------------------------
+ * PUT /admin/orders/:id/status — a travessia de status pelo PAINEL
+ *
+ * O caminho mais usado pelo gestor, e o que estava incompleto: ele movimentava
+ * estoque na travessia ativo→cancelado (com CÓPIA PRÓPRIA da lógica que
+ * `utils/estoque.js` já era dona) e NÃO devolvia o uso do cupom — enquanto o
+ * webhook do Mercado Pago devolvia, na mesma transação, com o comentário
+ * explicando que uma campanha de 50 usos se esgota sem vender.
+ *
+ * Aqui as duas coisas: o cupom voltando pelo painel, e a garantia de que trocar
+ * a cópia pelo módulo único não mexeu em nenhuma regra de estoque.
+ * -------------------------------------------------------------------------- */
+
+const CAFE_PAINEL = "cc000000-0000-0000-0000-0000000000c1";
+const CAFE_ESGOTADO = "cc000000-0000-0000-0000-0000000000c2";
+
+async function estoqueDe(produtoId) {
+  const { rows } = await bd.pool.query(
+    "SELECT quantidade FROM canastra.produtos WHERE produto_id = $1",
+    [produtoId],
+  );
+  return rows[0].quantidade;
+}
+
+async function usosDe(codigo) {
+  const { rows } = await bd.pool.query(
+    "SELECT usos FROM canastra.cupons WHERE codigo = $1",
+    [codigo],
+  );
+  return rows[0].usos;
+}
+
+/** O pedido do bloco: 2 unidades do CAFE_PAINEL, pago com PAINEL10. */
+let pedidoDoPainel;
+
+test("cancelar pelo painel devolve o estoque E o uso do cupom", async () => {
+  await bd.pool.query(
+    `INSERT INTO canastra.produtos (produto_id, nome, preco, quantidade, sku)
+     VALUES ($1, 'Café do Painel', 50.00, 5, 'PAINEL-1')`,
+    [CAFE_PAINEL],
+  );
+  // `usos: 1` é a venda que este pedido representa: foi o checkout que o
+  // consumiu, e é ele que o cancelamento tem de devolver.
+  await bd.pool.query(
+    `INSERT INTO canastra.cupons (codigo, tipo, valor, limite_usos, usos)
+     VALUES ('PAINEL10', 'percent', 10, 50, 1)`,
+  );
+
+  pedidoDoPainel = await OrderRepository.createOrder({
+    userId: ANA,
+    totalAmount: 90,
+    items: [
+      {
+        product_id: CAFE_PAINEL,
+        quantity: 2,
+        price: 50,
+        name: "Café do Painel",
+      },
+    ],
+    paymentMethod: "pix",
+    paymentIdMp: "MP-PAINEL-1",
+    address_json: { zip_code: "35012345" },
+    shippingCost: 0,
+    shippingMethod: "Retirada",
+    chaveIdempotencia: "painel-cupom-1",
+    status: "aprovado",
+    cupomCodigo: "PAINEL10",
+    desconto: 10,
+  });
+
+  const res = respostaFalsa();
+  await OrderController.updateStatus(
+    { params: { id: pedidoDoPainel.order_id }, body: { status: "cancelado" } },
+    res,
+  );
+
+  assert.equal(res.codigo, 200);
+  assert.equal(res.corpo.status, "cancelado");
+  assert.equal(await estoqueDe(CAFE_PAINEL), 7, "as 2 unidades voltaram");
+  // O DEFEITO: até aqui o contador ficava em 1 para sempre, e uma campanha de
+  // limite 50 se esgotava em pedidos que ninguém pagou.
+  assert.equal(await usosDe("PAINEL10"), 0, "o uso do cupom voltou junto");
+});
+
+test("reenviar o MESMO status não devolve nada de novo", async () => {
+  const res = respostaFalsa();
+  await OrderController.updateStatus(
+    { params: { id: pedidoDoPainel.order_id }, body: { status: "cancelado" } },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+  assert.equal(await estoqueDe(CAFE_PAINEL), 7, "cancelado→cancelado é no-op");
+  assert.equal(await usosDe("PAINEL10"), 0);
+});
+
+test("cancelado→ativo rebaixa o estoque e NÃO re-reserva o uso às cegas", async () => {
+  const res = respostaFalsa();
+  await OrderController.updateStatus(
+    { params: { id: pedidoDoPainel.order_id }, body: { status: "aprovado" } },
+    res,
+  );
+
+  assert.equal(res.codigo, 200);
+  assert.equal(await estoqueDe(CAFE_PAINEL), 5, "o café saiu de novo");
+  // A MESMA regra do webhook, e pelo mesmo motivo: `usos + 1` às cegas poderia
+  // ESTOURAR o limite (a vaga devolvida pode já ter sido consumida por outro
+  // pedido), e recusar a reativação de um pagamento aprovado por causa de
+  // contador de campanha seria deixar o marketing mandar no dinheiro. Fica a
+  // divergência conhecida, logada.
+  assert.equal(await usosDe("PAINEL10"), 0, "sem re-reserva às cegas");
+});
+
+test("transição entre status ATIVOS não move estoque nem cupom", async () => {
+  const res = respostaFalsa();
+  await OrderController.updateStatus(
+    {
+      params: { id: pedidoDoPainel.order_id },
+      body: { status: "enviado", trackingCode: "BR123456789BR" },
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 200);
+  assert.equal(res.corpo.tracking_code, "BR123456789BR");
+  assert.equal(await estoqueDe(CAFE_PAINEL), 5, "aprovado→enviado não move");
+  assert.equal(await usosDe("PAINEL10"), 0);
+});
+
+test("no rebaixamento, o estoque para em zero — nunca negativo", async () => {
+  // A unidade devolvida por um cancelamento pode já ter sido vendida a outra
+  // pessoa. `GREATEST(0, ...)` (utils/estoque.js) é o que impede a prateleira
+  // de mentir para baixo — a regra que a cópia do painel também tinha e que a
+  // troca pelo módulo único não podia perder.
+  await bd.pool.query(
+    `INSERT INTO canastra.produtos (produto_id, nome, preco, quantidade, sku)
+     VALUES ($1, 'Café Esgotado', 40.00, 1, 'PAINEL-2')`,
+    [CAFE_ESGOTADO],
+  );
+  const pedido = await OrderRepository.createOrder({
+    userId: ANA,
+    totalAmount: 120,
+    items: [
+      // Item SEM `product_id` no meio: café que saiu do catálogo não tem linha
+      // para atualizar, e ele não pode derrubar a transição dos irmãos.
+      { quantity: 1, price: 10, name: "Fantasma" },
+      { product_id: CAFE_ESGOTADO, quantity: 3, price: 40, name: "Café Esgotado" },
+    ],
+    paymentMethod: "pix",
+    paymentIdMp: "MP-PAINEL-2",
+    address_json: { zip_code: "35012345" },
+    shippingCost: 0,
+    shippingMethod: "Retirada",
+    chaveIdempotencia: "painel-greatest-1",
+    status: "cancelado",
+  });
+
+  const res = respostaFalsa();
+  await OrderController.updateStatus(
+    { params: { id: pedido.order_id }, body: { status: "aprovado" } },
+    res,
+  );
+
+  assert.equal(res.codigo, 200);
+  assert.equal(await estoqueDe(CAFE_ESGOTADO), 0, "para em zero, não em −2");
+});
+
+test("cancelar pedido SEM cupom segue funcionando, e status inválido é 400", async () => {
+  // Pedido próprio: os do `before` são fixture de outros testes, e cancelar
+  // fixture alheia é como um teste passa a depender da ordem do arquivo.
+  const pedido = await OrderRepository.createOrder({
+    userId: BETO,
+    totalAmount: 100,
+    items: [{ product_id: CAFE_PAINEL, quantity: 1, price: 50, name: "Café" }],
+    paymentMethod: "pix",
+    paymentIdMp: "MP-PAINEL-3",
+    address_json: { zip_code: "35012345" },
+    shippingCost: 0,
+    shippingMethod: "Retirada",
+    chaveIdempotencia: "painel-sem-cupom-1",
+    status: "aprovado",
+  });
+
+  const semCupom = respostaFalsa();
+  await OrderController.updateStatus(
+    { params: { id: pedido.order_id }, body: { status: "cancelado" } },
+    semCupom,
+  );
+  assert.equal(semCupom.codigo, 200);
+  assert.equal(semCupom.corpo.status, "cancelado");
+  assert.equal(semCupom.corpo.coupon_code, null);
+  assert.equal(await estoqueDe(CAFE_PAINEL), 6, "estoque devolvido sem cupom");
+
+  // O vocabulário continua sendo o do módulo único: `pending` (o do MP) é 400
+  // com a lista certa na mensagem, não uma gravação traduzida em silêncio.
+  const invalido = respostaFalsa();
+  await OrderController.updateStatus(
+    { params: { id: pedido.order_id }, body: { status: "pending" } },
+    invalido,
+  );
+  assert.equal(invalido.codigo, 400);
+  assert.match(invalido.corpo.error, /pendente/);
+
+  // Pedido inexistente: 404, e sem deixar transação aberta atrás de si.
+  const inexistente = respostaFalsa();
+  await OrderController.updateStatus(
+    {
+      params: { id: "99999999-9999-4999-8999-999999999999" },
+      body: { status: "cancelado" },
+    },
+    inexistente,
+  );
+  assert.equal(inexistente.codigo, 404);
 });

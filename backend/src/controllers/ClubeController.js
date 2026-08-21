@@ -41,6 +41,18 @@ const { GRUPO_ATIVO, traduzirStatusMp } = require("../utils/statusDePedido");
 // pagamentos avulsos — mora em utils/estoque.js para um status novo em GRUPO_*
 // não precisar ser corrigido em dois controllers (revisão da 3J).
 const { lerItensDoPedido, aplicarTransicaoDeEstoque } = require("../utils/estoque");
+// O MESMO `garantirCpf` do checkout (mora em utils/cpf.js desde a revisão
+// transversal da F7): a adesão do Clube grava o CPF em `canastra.clientes` com
+// a mesma disciplina — persistência, UNIQUE de 0002 virando 400 legível, e o
+// CPF que a conta já tem valendo sem redigitar.
+const { garantirCpf } = require("../utils/cpf");
+// Bling (onda 3G): o MESMO gatilho que o PaymentController dispara quando um
+// pedido entra em 'aprovado'. Ele confere BLING_ATIVO por conta própria, roda
+// fora da resposta e engole a própria falha — daqui só sai a CHAMADA, sempre
+// depois do COMMIT. Sem ela, cobrança recorrente virava pedido 'aprovado' sem
+// pedido de venda no ERP, sem NF-e e fora do cron de rastreio (que filtra
+// `bling_id IS NOT NULL`).
+const blingPedidos = require("../services/blingPedidos");
 const {
   sendStatusEmail,
   sendAdminNewOrderEmail,
@@ -177,7 +189,8 @@ async function assinar(req, res) {
   // Preenchido conforme o fluxo avança; o catch decide o que desfazer.
   let assinaturaId = null;
   try {
-    const { sku, quantidade, frequenciaDias, endereco } = req.body || {};
+    const { sku, quantidade, frequenciaDias, cpf: cpfDoCorpo, endereco } =
+      req.body || {};
     const userId = req.user?.userId;
 
     if (typeof sku !== "string" || !sku.trim() || sku.length > 64) {
@@ -196,6 +209,34 @@ async function assinar(req, res) {
       throw erroDeEntrada(
         "Endereço incompleto: a entrega recorrente precisa de CEP, rua, número, cidade e estado.",
       );
+    }
+
+    /**
+     * O CPF, E POR QUE ELE PARA A ADESÃO AQUI.
+     *
+     * Toda cobrança recorrente vira pedido de venda no Bling (ver o gatilho em
+     * `aplicarCobranca`), e `garantirContatoNoBling` recusa com 422 um pedido
+     * cujo cliente não tem CPF: o ERP exige contato identificado, e a NF-e é
+     * emitida A PARTIR desse pedido de venda. Sem o número, um assinante que
+     * nunca comprou avulso produziria, a cada ciclo, um pedido cobrado,
+     * insincronizável e sem nota — descoberto só no fechamento fiscal.
+     *
+     * A recusa é na ADESÃO, não na cobrança, porque é aqui que existe alguém
+     * do outro lado da tela para digitar. No webhook não há a quem pedir nada.
+     *
+     * `garantirCpf` é a MESMA função do checkout: grava o número informado em
+     * `canastra.clientes` (e a conta passa a ter CPF para sempre), traduz o
+     * 23505 do UNIQUE de 0002 em 400 com frase, e devolve o CPF VIGENTE — por
+     * isso quem já tem CPF no cadastro não precisa mandar nada: o corpo sem
+     * `cpf` passa, o corpo com um `cpf` novo atualiza.
+     */
+    const cpf = await garantirCpf(userId, { type: "CPF", number: cpfDoCorpo });
+    if (!cpf) {
+      const erro = erroDeEntrada(
+        "Informe o CPF do titular: ele é o dado da nota fiscal de cada envio do Clube.",
+      );
+      erro.codigoPublico = "CPF_MISSING";
+      throw erro;
     }
 
     /**
@@ -579,6 +620,19 @@ async function aplicarCobranca(paymentId, res) {
       sendStatusEmail(pedidoExistente, statusPt).catch((e) =>
         console.error("Falha ao enviar e-mail de status do Clube:", e.message),
       );
+      /**
+       * BLING (3G) NO CAMINHO DA TRANSIÇÃO: uma cobrança que chegou pendente
+       * (cartão em análise, por exemplo) virou pedido 'pendente' e só agora
+       * entrou em 'aprovado'. É o MESMO gatilho do webhook de pagamentos
+       * avulsos, com a mesma disciplina: só quando `mudou` (o reenvio do MP
+       * com o status igual não entra aqui, então dispara UMA vez por
+       * transição), depois do COMMIT e fora da resposta — uma falha do Bling
+       * vira log e `bling_id` nulo, nunca um 500 que poria o MP em retry de
+       * uma transição já aplicada.
+       */
+      if (statusPt === "aprovado") {
+        blingPedidos.aoAprovarPedido(pedidoExistente.order_id);
+      }
     }
     return res.sendStatus(200);
   }
@@ -655,6 +709,50 @@ async function aplicarCobranca(paymentId, res) {
   const unidadeCentavos = Math.round(
     assinatura.preco_centavos / assinatura.quantidade,
   );
+
+  /**
+   * `sem_reserva` — A MARCA DE "ESTE PEDIDO NASCEU SEM TIRAR CAFÉ DA
+   * PRATELEIRA", e o defeito que ela fecha.
+   *
+   * Acima, a cobrança vira pedido MESMO sem baixa de estoque (o dinheiro já
+   * saiu; um débito sem pedido seria pior). Só que o pedido nascia
+   * indistinguível de um com reserva — e aí o gestor fazia exatamente o que o
+   * e-mail de alerta manda, estornava no painel do MP, o webhook aplicava
+   * ativo→cancelado e `aplicarTransicaoDeEstoque` DEVOLVIA à prateleira
+   * unidades que nunca saíram dela. O caminho de recuperação recomendado
+   * inflava o estoque, em silêncio, e o rombo só aparecia no inventário.
+   *
+   * POR QUE UMA CHAVE NO JSON DOS ITENS, E NÃO UMA COLUNA (migração 0017)
+   *   · o `itens` do pedido já É a fotografia congelada da venda — preço,
+   *     quantidade, nome do café —, e "não houve reserva" é um fato DESTA
+   *     fotografia, não um estado que muda depois;
+   *   · a marca chega exatamente onde a decisão é tomada: os TRÊS chamadores
+   *     de `aplicarTransicaoDeEstoque` (webhook do MP, webhook do Clube e o
+   *     painel do admin) já entregam os itens do pedido a ela, então nenhum
+   *     deles precisa aprender a carregar um campo novo — os três passaram a
+   *     respeitar a marca de graça, inclusive o cancelamento feito na mão pelo
+   *     painel, que é por onde muitos gestores desfazem uma venda;
+   *   · a granularidade é POR ITEM: hoje o Clube manda um item só, mas uma
+   *     baixa parcial futura (dois cafés, um em falta) é expressável sem
+   *     migração nem coluna nova;
+   *   · e o gestor continua conseguindo achá-los no banco:
+   *     `WHERE itens @> '[{"sem_reserva": true}]'::jsonb`.
+   *
+   * A REGRA É SIMÉTRICA (ver utils/estoque.js): item marcado não devolve no
+   * cancelamento E não rebaixa na ressurreição. O invariante é "este pedido
+   * nunca moveu estoque"; aplicar só uma das pontas seria pior que o defeito
+   * original — a devolução pulada com a rebaixa mantida deixaria o pedido
+   * marcado para sempre e o cancelamento SEGUINTE sumiria com o estoque.
+   *
+   * E A CONDIÇÃO É EXATAMENTE A DO ALERTA AO GESTOR, nem mais nem menos: a
+   * venda PRECISAVA tirar café da prateleira (`precisavaBaixar`) e não tirou.
+   * Uma cobrança que nasce recusada não precisava baixar nada e NÃO é marcada
+   * de propósito — ela nasce no grupo cancelado, e o dia em que o MP a
+   * reprocessar como aprovada a travessia cancelado→ativo tem de rebaixar
+   * normalmente, senão o café sairia da loja sem sair da conta.
+   */
+  const semReserva = precisavaBaixar && !estoqueBaixado;
+
   const itens = [
     {
       product_id: produto ? produto.produto_id : null,
@@ -663,6 +761,7 @@ async function aplicarCobranca(paymentId, res) {
       price: unidadeCentavos / 100,
       quantity: assinatura.quantidade,
       sku: assinatura.sku,
+      ...(semReserva ? { sem_reserva: true } : {}),
     },
   ];
 
@@ -713,6 +812,25 @@ async function aplicarCobranca(paymentId, res) {
   console.log(
     `📦 Clube: cobrança ${paymentId} virou o pedido ${pedido.order_id} (${statusPt}).`,
   );
+
+  /**
+   * BLING (3G): a cobrança recorrente APROVADA vai ao ERP, exatamente como
+   * uma venda avulsa aprovada — é o que gera o pedido de venda, a NF-e (com
+   * BLING_NFE_AUTO) e o rastreio que o cron traz de volta.
+   *
+   * O gatilho estava faltando aqui, e essa ausência não dava erro nenhum: os
+   * pedidos do Clube simplesmente nunca chegavam ao Bling, ficavam sem nota e
+   * fora do cron (que filtra `bling_id IS NOT NULL`). Depois do COMMIT e sem
+   * bloquear — o `aoAprovarPedido` já roda em Promise com catch logado, e um
+   * Bling fora do ar não pode derrubar o webhook de uma cobrança que já
+   * aconteceu (a mesma regra dos e-mails logo abaixo).
+   *
+   * Pedido nascido SEM reserva também vai: o dinheiro saiu e a nota é devida;
+   * quem decide separar o café ou estornar é o gestor, pelo e-mail de alerta.
+   */
+  if (statusPt === "aprovado") {
+    blingPedidos.aoAprovarPedido(pedido.order_id);
+  }
 
   // E-mails são efeito colateral: provedor fora não pode virar retry do MP de
   // uma cobrança já registrada.

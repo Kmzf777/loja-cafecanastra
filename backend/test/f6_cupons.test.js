@@ -700,6 +700,73 @@ test("com o frete real, o mesmo carrinho com cupom fecha a conta certa", async (
   assert.equal(await usosDoCupom("CAFE10"), usosAntes + 1);
 });
 
+/**
+ * A conferência de subtotal (defeito 3 da revisão de dinheiro) contra o caso
+ * que mais facilmente a quebraria: PROMOÇÃO ATIVA.
+ *
+ * A vitrine NÃO renderiza preço promocional — `repositorio.ts` sobrepõe o
+ * `preco` cru do banco sobre o JSON editorial, e é esse número que a sacola
+ * guarda. Se a conferência comparasse contra o valor COBRADO (que é o
+ * promocional), toda venda com promoção ativa viraria 409 e a loja pararia de
+ * vender no dia de campanha. Por isso o que se compara é o subtotal de
+ * VITRINE — e `precoComPromocao` só ABAIXA o preço, então a promoção aparecendo
+ * ou sumindo no meio do caminho só faz o cliente pagar menos do que viu.
+ */
+test("promoção ativa não vira 409: confere-se o preço de VITRINE, cobra-se o promocional", async () => {
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: {},
+      body: {
+        ...corpoDeCheckout({ produto: P2, quantity: 1 }),
+        // P2 custa R$ 100,00 no catálogo — é o que a tela mostrou.
+        subtotalCentavos: 10000,
+      },
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  // ...e a cobrança é a metade, por causa da promoção de 50% no P2.
+  assert.equal(mp.criacoes[mp.criacoes.length - 1].transaction_amount, 50);
+});
+
+test("subtotal do cupom NÃO entra na declaração: o campo é só dos itens", async () => {
+  // 2 × R$ 50,00 = 10000 — o desconto de 10% do CAFE10 não desconta daqui. A
+  // declaração é o SUBTOTAL exibido, não o total a pagar: desconto e frete têm
+  // conferências próprias (revalidação do cupom e `conferirFrete`).
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: {},
+      body: { ...corpoDeCheckout({ cupom: "CAFE10" }), subtotalCentavos: 10000 },
+    },
+    res,
+  );
+  assert.equal(res.codigo, 201);
+  assert.equal(mp.criacoes[mp.criacoes.length - 1].transaction_amount, 90);
+
+  // E declarar o total JÁ descontado (o erro fácil de quem monta o corpo) é
+  // recusado, em vez de virar cobrança silenciosa sobre outra base.
+  const usosAntes = await usosDoCupom("CAFE10");
+  const estoqueAntes = await estoqueDe(P1);
+  const errado = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: {},
+      body: { ...corpoDeCheckout({ cupom: "CAFE10" }), subtotalCentavos: 9000 },
+    },
+    errado,
+  );
+  assert.equal(errado.codigo, 409);
+  assert.equal(errado.corpo.error, "PRECO_MUDOU");
+  assert.equal(await usosDoCupom("CAFE10"), usosAntes, "o uso não foi gasto");
+  assert.equal(await estoqueDe(P1), estoqueAntes, "nada reservado");
+});
+
 test("cupom que cobre o pedido inteiro: 400 com a frase certa, nada consumido", async () => {
   // fixed de R$ 1000 num pedido de R$ 100 com retirada (frete 0): o desconto
   // trava no subtotal e o total fecha em 0,00 — que o MP não cobra.

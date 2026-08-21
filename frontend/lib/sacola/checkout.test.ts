@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { _zerarIdempotencia } from "./idempotencia";
-import { cotarFrete, pagarComCartao, pagarComPix } from "./checkout";
+import {
+  buscarPrecosAtuais,
+  cotarFrete,
+  pagarComCartao,
+  pagarComPix,
+  subtotalDosItensCentavos,
+  CODIGO_PRECO_MUDOU,
+  ErroDoPagamento,
+} from "./checkout";
 import type { ItemDaSacola } from "./sacola";
 import type { DadosDoCartao } from "./cartao";
 
@@ -96,6 +104,10 @@ describe("pagarComPix", () => {
     expect(corpo.shippingMethod).toBe("Correios SEDEX");
     expect(corpo.address).toEqual(endereco);
     expect(corpo).not.toHaveProperty("cupom");
+    // O subtotal EXIBIDO, em centavos, dos itens e só deles: 2 × R$ 39,70.
+    // Não é preço de item (que o servidor ignora): é a declaração que o
+    // servidor CONFERE antes de cobrar — divergiu, 409 em vez de cobrança.
+    expect(corpo.subtotalCentavos).toBe(7940);
 
     const headers = headersEnviados(f);
     expect(headers.Authorization).toBe("Bearer tok-sessao");
@@ -168,6 +180,10 @@ describe("pagarComCartao", () => {
       number: "52998224725",
     });
     expect(corpo.paymentMethodType).toBe("credit_card");
+    // O cartão é o caso PIOR do preço divergente: o CardForm é montado com o
+    // total da tela (`transaction_amount`) e quem cobra é o servidor. Por isso
+    // a declaração do subtotal viaja nos dois meios, não só no Pix.
+    expect(corpo.subtotalCentavos).toBe(7940);
   });
 
   it("parcelas vazias caem para 1x, nunca NaN", async () => {
@@ -183,6 +199,116 @@ describe("pagarComCartao", () => {
     expect(headersEnviados(f, 0)["Idempotency-Key"]).toBe(
       headersEnviados(f, 1)["Idempotency-Key"],
     );
+  });
+});
+
+/**
+ * Defeito 3 — o total exibido podia diferir do cobrado. A sacola guarda `price`
+ * no localStorage e nunca o revalida; o servidor cobra o preço do banco. O
+ * corpo agora DECLARA o subtotal exibido e o servidor confere (409 na
+ * divergência), e este é o lado do navegador desse contrato.
+ */
+describe("subtotal declarado", () => {
+  it("soma item a item em centavos — nada de arredondar o total no fim", () => {
+    // 3 × 19,99 = 59,97. Somar em reais e arredondar depois passaria por
+    // 59.970000000000006; a fronteira de um centavo é o que decide 409 ou não.
+    expect(
+      subtotalDosItensCentavos([
+        { ...itens[0], price: 19.99, quantity: 3 },
+      ]),
+    ).toBe(5997);
+    expect(subtotalDosItensCentavos([])).toBe(0);
+  });
+
+  it("é o mesmo número que a sacola exibe — inclui todos os itens, sem frete", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    const doisItens = [
+      itens[0],
+      { ...itens[0], product_id: "b2", price: 10.5, quantity: 1 },
+    ];
+    await pagarComPix("t", { ...dadosBase, itens: doisItens }, f);
+    // 7940 + 1050 — e o frete de R$ 22,50 fica de fora: ele tem conferência
+    // própria (`conferirFrete`), com tolerância de centavo que o preço não tem.
+    expect(corpoEnviado(f).subtotalCentavos).toBe(8990);
+  });
+
+  it("preço diferente NÃO troca a chave de idempotência — é o mesmo pedido", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", dadosBase, f);
+    await pagarComPix(
+      "t",
+      { ...dadosBase, itens: [{ ...itens[0], price: 44.9 }] },
+      f,
+    );
+    // Corrigir o preço depois de um 409 é a MESMA tentativa: mesmos cafés, mesma
+    // quantidade, mesmo CEP. Chave nova aqui seria o caminho para a segunda
+    // cobrança se a primeira resposta se perdesse — e o 409 não chega a criar
+    // pedido, então repetir a chave é seguro por construção.
+    expect(headersEnviados(f, 0)["Idempotency-Key"]).toBe(
+      headersEnviados(f, 1)["Idempotency-Key"],
+    );
+  });
+
+  it("o 409 de preço chega com o CÓDIGO, não só com a frase", async () => {
+    const f = fetchComResposta(
+      {
+        error: CODIGO_PRECO_MUDOU,
+        details: "O preço de um item mudou desde que você abriu a sacola — confira o resumo.",
+      },
+      false,
+    );
+    await expect(pagarComPix("t", dadosBase, f)).rejects.toMatchObject({
+      // A frase é a do servidor (details continua tendo precedência)...
+      message: /preço de um item mudou/,
+      // ...e o código sobrevive, que é o que deixa a tela RECARREGAR os preços
+      // em vez de só exibir o texto. Um 409 de frete pede outra ação.
+      codigo: CODIGO_PRECO_MUDOU,
+    });
+  });
+
+  it("erro sem código conhecido continua sendo um Error com a mesma mensagem", async () => {
+    const erro = await pagarComPix(
+      "t",
+      dadosBase,
+      fetchComResposta({ details: "Estoque insuficiente" }, false),
+    ).catch((e) => e);
+    expect(erro).toBeInstanceOf(Error);
+    expect(erro).toBeInstanceOf(ErroDoPagamento);
+    expect(erro.message).toBe("Estoque insuficiente");
+    expect(erro.codigo).toBeUndefined();
+  });
+});
+
+describe("buscarPrecosAtuais", () => {
+  it("relê da MESMA fonte da vitrine e devolve só o que está na sacola", async () => {
+    const f = fetchComResposta({
+      products: [
+        { product_id: "a1", price: "44.90" },
+        { product_id: "zzz", price: "1.00" },
+      ],
+    });
+    const precos = await buscarPrecosAtuais(itens, f);
+
+    expect(String(f.mock.calls[0][0])).toContain("/dashboard?limit=200");
+    expect(precos.get("a1")).toBe(44.9);
+    // Catálogo inteiro na resposta, sacola pequena: o resto não interessa.
+    expect(precos.has("zzz")).toBe(false);
+  });
+
+  it("preço torto é descartado, e resposta ruim LANÇA em vez de mentir", async () => {
+    const f = fetchComResposta({
+      products: [
+        { product_id: "a1", price: "abc" },
+        { product_id: "a1x", price: -5 },
+      ],
+    });
+    expect((await buscarPrecosAtuais(itens, f)).size).toBe(0);
+
+    // Sem conseguir reler, quem chama precisa SABER: a tela manda recarregar a
+    // página em vez de exibir um total que não conferiu.
+    await expect(
+      buscarPrecosAtuais(itens, fetchComResposta({}, false)),
+    ).rejects.toThrow(/preços/i);
   });
 });
 

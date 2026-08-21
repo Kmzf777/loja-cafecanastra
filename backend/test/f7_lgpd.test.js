@@ -744,12 +744,128 @@ test("sem injeção, a exclusão chama o cancelamento do ClubeController", async
   assert.deepEqual(chamadas, [titular.id], "o titular certo, pelo caminho padrão");
 });
 
+/* --------------------------------------------------------------------------
+ * A inscrição na newsletter: o vínculo é o E-MAIL, e o e-mail some com a conta
+ * -------------------------------------------------------------------------- */
+
+/** Uma inscrição do rodapé para este e-mail, na caixa que se quiser. */
+async function inscreverNaNewsletter(email) {
+  await bd.pool.query(
+    "INSERT INTO canastra.newsletter_inscritos (email, origem) VALUES ($1, 'rodape')",
+    [email],
+  );
+}
+
+async function inscricoesDe(email) {
+  const { rows } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.newsletter_inscritos WHERE lower(email) = lower($1)",
+    [email],
+  );
+  return rows[0].n;
+}
+
+/**
+ * O furo que este teste guarda: `newsletter_inscritos` (0011) não tem
+ * `user_id` — o vínculo com a pessoa é o e-mail, que só existe em
+ * `auth.users`. Se o DELETE no GoTrue vier primeiro, ninguém mais consegue
+ * dizer de quem era aquela linha, e o e-mail de quem pediu para sumir do banco
+ * fica na lista da loja para sempre. Mesma mecânica do pedido irredigível.
+ */
+test("excluirMinhaConta apaga a inscrição na newsletter ANTES de chamar o GoTrue", async () => {
+  const titular = await novoTitular("Sônia Vaz");
+  const vizinho = await novoTitular("Tadeu Melo");
+  // Em CAIXA DIFERENTE de propósito: quem digitou "Titular9@EX.com" no rodapé
+  // continua sendo o titular de "titular9@ex.com".
+  await inscreverNaNewsletter(titular.email.toUpperCase());
+  await inscreverNaNewsletter(vizinho.email);
+
+  let inscricoesQuandoOGoTrueFoiChamado = null;
+  const res = respostaFalsa();
+
+  await conta.excluirMinhaConta({ user: { userId: titular.id } }, res, {
+    cancelarAssinaturas: async () => [],
+    buscar: async () => {
+      // Fotografa o estado NO MOMENTO da chamada: se o DELETE viesse depois,
+      // este valor seria 1 e o teste ficaria vermelho.
+      inscricoesQuandoOGoTrueFoiChamado = await inscricoesDe(titular.email);
+      return { ok: true, status: 200 };
+    },
+    ambiente: AMBIENTE_COM_GOTRUE,
+  });
+
+  assert.equal(res.codigo, 200);
+  assert.equal(
+    inscricoesQuandoOGoTrueFoiChamado,
+    0,
+    "quando o GoTrue foi chamado, a inscrição JÁ deveria ter sido apagada",
+  );
+  assert.equal(await inscricoesDe(vizinho.email), 1, "só a de quem foi excluído");
+});
+
+test("falha ao apagar a inscrição ABORTA a exclusão: 500 e o GoTrue nem é chamado", async () => {
+  // Mesma disciplina da redação: nada de apagar a conta e deixar o e-mail
+  // para trás — depois do DELETE ele fica sem dono identificável.
+  const titular = await novoTitular("Ulisses Rocha");
+  await inscreverNaNewsletter(titular.email);
+
+  let chamouGoTrue = false;
+  const res = respostaFalsa();
+
+  const conexao = {
+    query: (sql, params) => {
+      if (String(sql).includes("newsletter_inscritos")) {
+        throw new Error("o banco caiu ao apagar a inscrição");
+      }
+      return bd.pool.query(sql, params);
+    },
+  };
+
+  await conta.excluirMinhaConta({ user: { userId: titular.id } }, res, {
+    conexao,
+    cancelarAssinaturas: async () => [],
+    buscar: async () => {
+      chamouGoTrue = true;
+      return { ok: true, status: 200 };
+    },
+    ambiente: AMBIENTE_COM_GOTRUE,
+  });
+
+  assert.equal(res.codigo, 500);
+  assert.equal(chamouGoTrue, false, "apagar a conta deixaria o e-mail órfão na lista");
+  assert.equal(await inscricoesDe(titular.email), 1, "nada foi apagado");
+  const { rows } = await bd.pool.query(
+    "SELECT 1 FROM canastra.clientes WHERE user_id = $1",
+    [titular.id],
+  );
+  assert.equal(rows.length, 1, "a conta continua de pé");
+});
+
+test("titular sem e-mail no GoTrue não trava a exclusão: não há o que casar", async () => {
+  // Acontece na SEGUNDA tentativa de uma exclusão que falhou no fim, ou num
+  // cliente cuja conta foi apagada por fora. Insistir aqui travaria para
+  // sempre uma exclusão que só quer terminar.
+  sequencia += 1;
+  const id = `00000000-0000-4000-8000-${String(sequencia).padStart(12, "0")}`;
+  await criarPessoa(id, null, "Vera Sem E-mail");
+
+  const res = respostaFalsa();
+  await conta.excluirMinhaConta({ user: { userId: id } }, res, {
+    cancelarAssinaturas: async () => [],
+    buscar: async () => ({ ok: true, status: 200 }),
+    ambiente: AMBIENTE_COM_GOTRUE,
+  });
+
+  assert.equal(res.codigo, 200);
+});
+
 test("excluirClientePeloAdmin cancela e redige antes de apagar, pela mesma regra", async () => {
   const titular = await novoTitular("Otto Lemos");
   const pedidoId = await criarPedido(titular.id);
   const assinaturaId = await criarAssinatura(titular.id, { status: "pausada" });
+  await inscreverNaNewsletter(titular.email);
 
   const ordem = [];
+  let inscricoesNoGoTrue = null;
   const res = respostaFalsa();
 
   await conta.excluirClientePeloAdmin(
@@ -767,6 +883,7 @@ test("excluirClientePeloAdmin cancela e redige antes de apagar, pela mesma regra
           [pedidoId],
         );
         ordem.push(rows[0].redigido_em ? "gotrue-com-redacao" : "gotrue-sem-redacao");
+        inscricoesNoGoTrue = await inscricoesDe(titular.email);
         return { ok: true, status: 200 };
       },
       ambiente: AMBIENTE_COM_GOTRUE,
@@ -778,6 +895,9 @@ test("excluirClientePeloAdmin cancela e redige antes de apagar, pela mesma regra
   const assinatura = await lerAssinatura(assinaturaId);
   assert.equal(assinatura.status, "cancelada");
   assert.ok(assinatura.redigido_em);
+  // A rota do admin segue a MESMA ordem: a inscrição já saiu quando o GoTrue
+  // é chamado — depois dele, ela não teria mais dono identificável.
+  assert.equal(inscricoesNoGoTrue, 0);
 });
 
 test("exclusão pelo admin também aborta na recusa do MP", async () => {

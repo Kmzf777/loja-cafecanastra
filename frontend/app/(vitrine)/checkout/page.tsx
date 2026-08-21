@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Botao, BotaoLink } from "@/components/ui/Botao";
@@ -21,14 +21,19 @@ import {
 } from "@/lib/sacola/cartao";
 import {
   buscarEndereco,
+  buscarPrecosAtuais,
   salvarEndereco,
   cotarFrete,
   pagarComPix,
   pagarComCartao,
+  subtotalDosItensCentavos,
+  CODIGO_PRECO_MUDOU,
+  ErroDoPagamento,
   type Endereco,
   type OpcaoDeFrete,
   type RespostaDoPagamento,
 } from "@/lib/sacola/checkout";
+import type { ItemDaSacola } from "@/lib/sacola/sacola";
 import { eventoPurchase } from "@/lib/analytics";
 
 /**
@@ -72,12 +77,32 @@ const ENDERECO_VAZIO: Endereco = {
   state: "",
 };
 
-/** Status de resposta que significam "nasceu morto: nada foi cobrado". */
-const STATUS_RECUSADO = new Set(["rejeitado", "cancelado", "rejected", "cancelled"]);
+/**
+ * Status de resposta que significam "o pedido nasceu morto: nada ficou cobrado".
+ *
+ * A FONTE É `backend/src/utils/statusDePedido.js` (GRUPO_CANCELADO: cancelado,
+ * rejeitado, reembolsado) — esta é uma cópia de leitura, e estava INCOMPLETA:
+ * faltava `reembolsado`. Na prática um pedido recém-criado não volta
+ * reembolsado da resposta síncrona do MP, então a falta nunca deu defeito
+ * visível; é precisamente por isso que ela sobreviveria calada até o dia em que
+ * desse. Cópia que não confere com a fonte é dívida com data marcada.
+ *
+ * Os equivalentes em inglês continuam porque o campo `status` da resposta cai
+ * para o vocabulário cru do MP quando a tradução falha (`statusPt || mpStatus`,
+ * PaymentController).
+ */
+const STATUS_RECUSADO = new Set([
+  "rejeitado",
+  "cancelado",
+  "reembolsado",
+  "rejected",
+  "cancelled",
+  "refunded",
+]);
 
 export default function PaginaCheckout() {
   const router = useRouter();
-  const { itens, totalCentavos, limpar } = useSacola();
+  const { itens: itensDaSacola, limpar } = useSacola();
 
   const [sessao, setSessao] = useState<Sessao | null>(null);
   const [carregando, setCarregando] = useState(true);
@@ -95,6 +120,38 @@ export default function PaginaCheckout() {
   const [cupom, setCupom] = useState<CupomAplicado | null>(null);
   const [erroCupom, setErroCupom] = useState<string | null>(null);
   const [validandoCupom, setValidandoCupom] = useState(false);
+
+  /**
+   * PREÇOS RELIDOS DEPOIS DE UM 409 DE PREÇO.
+   *
+   * A sacola guarda `price` no `localStorage` e nunca o revalida; o servidor
+   * cobra o preço do banco. Quando o gestor muda um preço com a sacola de
+   * alguém aberta, o `process_payment` recusa com 409 em vez de cobrar
+   * diferente do que a pessoa viu (`conferirSubtotal`, PaymentController) — e
+   * aí ESTA tela precisa mostrar o número novo, senão o cliente reenvia o
+   * mesmo valor velho e leva 409 de novo, para sempre.
+   *
+   * Guardado aqui, e não gravado na sacola, porque é correção de UMA tentativa
+   * de pagamento: o que a sacola tem é assunto da vitrine, que relê preço a
+   * cada visita. Enquanto este mapa existir, é ele que manda no resumo, no
+   * total, na cotação de frete e no subtotal declarado ao servidor.
+   */
+  const [precosFrescos, setPrecosFrescos] = useState<Record<
+    string,
+    number
+  > | null>(null);
+
+  /** A sacola com os preços corrigidos, quando houver. Tudo na tela lê daqui. */
+  const itens = useMemo<ItemDaSacola[]>(() => {
+    if (!precosFrescos) return itensDaSacola;
+    return itensDaSacola.map((i) =>
+      precosFrescos[i.product_id] === undefined
+        ? i
+        : { ...i, price: precosFrescos[i.product_id] },
+    );
+  }, [itensDaSacola, precosFrescos]);
+
+  const totalCentavos = subtotalDosItensCentavos(itens);
 
   // Cartão: só existe com a chave pública no build.
   const temCartao = chavePublicaMp() !== null;
@@ -179,21 +236,45 @@ export default function PaginaCheckout() {
    * — oferecendo um frete que o servidor recusaria na cobrança.
    */
   const idDaCotacao = useRef(0);
-  async function recotar(codigoDoCupom?: string) {
+  /**
+   * `itensParaCotar` existe para o caminho do 409 de preço: ele recota logo
+   * depois de corrigir os preços, e a `itens` desta closure ainda é a do render
+   * anterior (o estado só chega no próximo). Passar a lista explicitamente é o
+   * que impede a recotação de decidir frete grátis com o preço velho.
+   *
+   * Devolve a frase de falha (ou `null`): quem chama pode ANTEPOR o próprio
+   * motivo em vez de perdê-lo — `setErro(null)` na entrada apagaria a
+   * explicação de quem pediu a recotação.
+   */
+  async function recotar(
+    codigoDoCupom?: string,
+    itensParaCotar: ItemDaSacola[] = itens,
+  ): Promise<string | null> {
     const meuId = ++idDaCotacao.current;
     setErro(null);
     setCotando(true);
     setFretes(null);
     setFreteEscolhido(null);
     try {
-      const opcoes = await cotarFrete(endereco.zip_code, itens, codigoDoCupom);
-      if (idDaCotacao.current !== meuId) return; // uma mais nova assumiu
+      const opcoes = await cotarFrete(
+        endereco.zip_code,
+        itensParaCotar,
+        codigoDoCupom,
+      );
+      if (idDaCotacao.current !== meuId) return null; // uma mais nova assumiu
       setFretes(opcoes);
-      if (opcoes.length) setFreteEscolhido(opcoes[0]);
-      else setErro("Nenhuma transportadora atende este CEP no momento.");
+      if (opcoes.length) {
+        setFreteEscolhido(opcoes[0]);
+        return null;
+      }
+      const semFrete = "Nenhuma transportadora atende este CEP no momento.";
+      setErro(semFrete);
+      return semFrete;
     } catch (e) {
-      if (idDaCotacao.current !== meuId) return;
-      setErro(e instanceof Error ? e.message : "Erro ao calcular o frete.");
+      if (idDaCotacao.current !== meuId) return null;
+      const falha = e instanceof Error ? e.message : "Erro ao calcular o frete.";
+      setErro(falha);
+      return falha;
     } finally {
       if (idDaCotacao.current === meuId) setCotando(false);
     }
@@ -267,7 +348,9 @@ export default function PaginaCheckout() {
     if (STATUS_RECUSADO.has(resposta.status)) {
       descartarChave();
       setErro(
-        "O pagamento foi recusado pelo emissor. Nenhum valor foi cobrado — " +
+        // "ficou cobrado", e não "foi cobrado": o grupo agora inclui
+        // `reembolsado`, em que o valor chegou a sair e voltou.
+        "O pagamento não foi aprovado. Nenhum valor ficou cobrado — " +
           "confira os dados, tente outro cartão ou pague com Pix.",
       );
       return;
@@ -298,6 +381,80 @@ export default function PaginaCheckout() {
     await limpar();
   }
 
+  /**
+   * O QUE FAZER COM UMA TENTATIVA DE PAGAMENTO QUE FALHOU.
+   *
+   * Quase todo erro é frase na tela e ponto. O 409 DE PREÇO é diferente: ele
+   * diz que o número que esta tela exibiu não é mais o preço da loja, e mostrar
+   * a frase sem corrigir nada deixaria o cliente preso — reenviar o mesmo
+   * subtotal velho daria o mesmo 409 para sempre, e o botão "Pagar" viraria
+   * botão de mentira.
+   *
+   * Então releem-se os preços na fonte que a vitrine usa (`GET /dashboard`,
+   * o mesmo endpoint de `lib/catalogo/repositorio.ts`), o resumo passa a exibir
+   * o total novo e a tentativa seguinte já sai com o número certo. Se nem a
+   * releitura funcionar, a instrução é recarregar a página — nunca prometer um
+   * total que não foi conferido.
+   */
+  async function tratarFalhaDePagamento(falha: unknown, fraseDeFallback: string) {
+    const frase = falha instanceof Error ? falha.message : fraseDeFallback;
+    const ehPreco =
+      falha instanceof ErroDoPagamento && falha.codigo === CODIGO_PRECO_MUDOU;
+
+    if (!ehPreco) {
+      setErro(frase);
+      return;
+    }
+
+    let precos: Map<string, number>;
+    try {
+      precos = await buscarPrecosAtuais(itensDaSacola);
+    } catch {
+      setErro(
+        `${frase} Recarregue a página para ver os valores atualizados antes de pagar.`,
+      );
+      return;
+    }
+
+    const mapa: Record<string, number> = {};
+    const corrigidos = itensDaSacola.map((i) => {
+      const preco = precos.get(i.product_id);
+      if (preco === undefined) return i;
+      mapa[i.product_id] = preco;
+      return { ...i, price: preco };
+    });
+    setPrecosFrescos(mapa);
+
+    // O cupom foi validado contra o subtotal ANTIGO: revalida, senão o resumo
+    // exibe um desconto que o servidor não vai aceitar (e um mínimo de pedido
+    // pode ter deixado de ser atingido com a mudança de preço).
+    let codigoDoCupom = cupom?.codigo;
+    if (cupom) {
+      const revalidado = await validarCupom(cupom.codigo, corrigidos);
+      if (revalidado.valido) {
+        setCupom(revalidado.cupom);
+      } else {
+        setCupom(null);
+        setErroCupom(revalidado.motivo);
+        codigoDoCupom = undefined;
+      }
+    }
+
+    // Preço novo pode cruzar o piso do frete grátis nos dois sentidos: o frete
+    // escolhido caducou junto. Recota agora, senão a próxima tentativa levaria
+    // o 409 do FRETE logo depois deste.
+    const falhaNaCotacao = await recotar(codigoDoCupom, corrigidos);
+
+    const aviso =
+      `${frase} Atualizamos o resumo: o subtotal agora é ` +
+      `${formatarPreco(subtotalDosItensCentavos(corrigidos))}.`;
+    setErro(
+      falhaNaCotacao
+        ? `${aviso} ${falhaNaCotacao}`
+        : `${aviso} Confira e confirme para pagar esse valor.`,
+    );
+  }
+
   async function aoPagarComPix() {
     if (pagando) return;
     if (!sessao || !freteEscolhido || !cpfValido) return;
@@ -314,7 +471,7 @@ export default function PaginaCheckout() {
       });
       await concluir(resposta);
     } catch (e) {
-      setErro(e instanceof Error ? e.message : "Não foi possível gerar o Pix.");
+      await tratarFalhaDePagamento(e, "Não foi possível gerar o Pix.");
     } finally {
       setPagando(false);
     }
@@ -346,9 +503,7 @@ export default function PaginaCheckout() {
       });
       await concluir(resposta);
     } catch (e) {
-      setErro(
-        e instanceof Error ? e.message : "Não foi possível processar o cartão.",
-      );
+      await tratarFalhaDePagamento(e, "Não foi possível processar o cartão.");
     } finally {
       setPagando(false);
     }

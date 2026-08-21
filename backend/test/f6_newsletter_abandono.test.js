@@ -21,6 +21,7 @@ const { aplicarMigracoes } = require("../db/migrar.js");
 
 let bd;
 let inscrever;
+let descadastrar;
 let selecionarAbandonados;
 let enviarLembretes;
 let conteudoDoLembreteDeCarrinho;
@@ -81,7 +82,7 @@ before(async () => {
 
   process.env.DATABASE_URL = bd.connectionString;
 
-  ({ inscrever } = require("../src/routes/newsletter.routes.js"));
+  ({ inscrever, descadastrar } = require("../src/routes/newsletter.routes.js"));
   ({
     selecionarAbandonados,
     enviarLembretes,
@@ -147,6 +148,72 @@ test("inscrever: e-mail inválido é 400 — o único caso que difere", async ()
     await inscrever({ body: { email } }, res);
     assert.equal(res.codigo, 400, `aceitou "${email}"`);
   }
+});
+
+/* --------------------------------------------------------------------------
+ * Newsletter — a saída (POST /newsletter/descadastrar)
+ * -------------------------------------------------------------------------- */
+
+/** Quantas linhas há para este e-mail, sem depender de caixa. */
+async function inscricoesDe(email) {
+  const { rows } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.newsletter_inscritos WHERE lower(email) = lower($1)",
+    [email],
+  );
+  return rows[0].n;
+}
+
+test("descadastrar: a linha some, e a resposta é IGUAL à de quem nunca esteve na lista", async () => {
+  // Personagens próprias deste teste: a que sai e a vizinha que fica.
+  await inscrever({ body: { email: "cora@ex.com" } }, respostaFalsa());
+  await inscrever({ body: { email: "vizinha@ex.com" } }, respostaFalsa());
+  assert.equal(await inscricoesDe("cora@ex.com"), 1);
+
+  // Caixa e espaços não importam na saída, como não importam na entrada.
+  const saida = respostaFalsa();
+  await descadastrar({ body: { email: "  Cora@Ex.com  " } }, saida);
+  assert.equal(saida.codigo, 200);
+  assert.deepEqual(saida.corpo, { ok: true });
+  assert.equal(await inscricoesDe("cora@ex.com"), 0, "a inscrição foi apagada");
+  assert.equal(await inscricoesDe("vizinha@ex.com"), 1, "só a de quem pediu");
+
+  // As TRÊS respostas seguintes têm de ser indistinguíveis da primeira — é a
+  // mesma defesa anti-enumeração do cadastro: quem descadastra não descobre se
+  // o e-mail estava na lista. Repetir o descadastro é no-op, nunca erro.
+  const repetida = respostaFalsa();
+  await descadastrar({ body: { email: "cora@ex.com" } }, repetida);
+  const nuncaInscrita = respostaFalsa();
+  await descadastrar({ body: { email: "quem-nunca@ex.com" } }, nuncaInscrita);
+
+  for (const res of [repetida, nuncaInscrita]) {
+    assert.equal(res.codigo, 200);
+    assert.deepEqual(res.corpo, saida.corpo);
+  }
+
+  // Limpa a vizinha para este teste não deixar estado para os próximos.
+  await descadastrar({ body: { email: "vizinha@ex.com" } }, respostaFalsa());
+});
+
+test("descadastrar: e-mail inválido é 400 — o único caso que difere, aqui também", async () => {
+  for (const email of ["", "   ", "sem-arroba", "a@b", "a b@c.com", null]) {
+    const res = respostaFalsa();
+    await descadastrar({ body: { email } }, res);
+    assert.equal(res.codigo, 400, `aceitou "${email}"`);
+  }
+});
+
+test("descadastrar alcança inscrição gravada FORA da rota, em outra caixa", async () => {
+  // O UNIQUE de 0011 é sensível a caixa; o e-mail não é. Uma inscrição vinda
+  // de um import ou do SQL de um atendimento pode estar em maiúsculas, e a
+  // pessoa que digita minúsculo no formulário continua sendo a titular dela.
+  await bd.pool.query(
+    "INSERT INTO canastra.newsletter_inscritos (email, origem) VALUES ('Dora@EX.com', 'importacao')",
+  );
+
+  const res = respostaFalsa();
+  await descadastrar({ body: { email: "dora@ex.com" } }, res);
+  assert.equal(res.codigo, 200);
+  assert.equal(await inscricoesDe("dora@ex.com"), 0);
 });
 
 test("0011: o CHECK do banco recusa formato torto por qualquer caminho", async () => {

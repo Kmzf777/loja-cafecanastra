@@ -12,9 +12,13 @@ const { GRUPO_ATIVO, GRUPO_CANCELADO } = require("./statusDePedido");
  * horário de pico, o pior tipo de bug para reproduzir. Com ordem canônica,
  * quem chega segundo espera na PRIMEIRA linha em comum e segue em fila.
  *
- * Vale para os três lugares que travam/movimentam estoque em lote: o checkout
- * (FOR UPDATE + reserva), o webhook (devolução/retirada) e o painel do admin
- * (mudança manual de status). Um módulo só, para os três nunca divergirem.
+ * Vale para TODO lugar que trava/movimenta estoque em lote: o checkout (FOR
+ * UPDATE + reserva), o webhook do Mercado Pago, o webhook do Clube e o painel
+ * do admin (mudança manual de status). Um módulo só, para eles nunca
+ * divergirem — e desde a revisão de dinheiro os três últimos não chamam nem
+ * esta função diretamente: chamam `aplicarTransicaoDeEstoque`, que já itera
+ * nesta ordem. Quem ainda a usa sozinho é o checkout, que ordena os itens
+ * ANTES de travar, e não uma transição de status.
  */
 function ordenarPorProduto(itens) {
   return [...itens].sort((a, b) =>
@@ -44,7 +48,7 @@ function lerItensDoPedido(itens, contexto = "Pedido") {
   return Array.isArray(itens) ? itens : [];
 }
 
-/** O que `aplicarTransicaoDeEstoque` fez — o vocabulário dos dois chamadores. */
+/** O que `aplicarTransicaoDeEstoque` fez — o vocabulário dos chamadores. */
 const DEVOLVEU = "devolveu";
 const REBAIXOU = "rebaixou";
 
@@ -70,9 +74,16 @@ const REBAIXOU = "rebaixou";
  *
  * Devolve "devolveu" | "rebaixou" | null — o que aconteceu, para o chamador
  * decidir o que mais depende da mesma travessia (o uso do cupom, no
- * PaymentController) sem recalcular os grupos de status por conta própria.
- * Este módulo virou o dono da regra porque ela estava COPIADA em dois
- * controllers: um status novo em GRUPO_* exigia acertar os dois.
+ * PaymentController e no OrderController) sem recalcular os grupos de status
+ * por conta própria.
+ *
+ * OS TRÊS CHAMADORES: o webhook do Mercado Pago (PaymentController), o webhook
+ * do Clube (ClubeController) e o painel do admin (OrderController.updateStatus).
+ * Este módulo virou o dono da regra porque ela estava COPIADA em controllers
+ * diferentes: um status novo em GRUPO_* exigia acertar todos. O painel foi o
+ * último a entrar — a cópia dele coincidia nas regras de estoque e DIVERGIA no
+ * que vinha depois (não devolvia o uso do cupom), que é precisamente o tipo de
+ * divergência que a cópia esconde.
  */
 async function aplicarTransicaoDeEstoque(client, itens, de, para) {
   const eraAtivo = GRUPO_ATIVO.includes(de);
@@ -84,8 +95,29 @@ async function aplicarTransicaoDeEstoque(client, itens, de, para) {
   const rebaixar = eraCancelado && ficouAtivo;
   if (!devolver && !rebaixar) return null;
 
+  /**
+   * DUAS EXCLUSÕES, E A SEGUNDA É A QUE FECHA UM ROMBO REAL.
+   *
+   * `product_id` ausente: café que saiu do catálogo não tem linha para
+   * atualizar (era o único filtro até a revisão transversal da F7).
+   *
+   * `sem_reserva`: o item NUNCA saiu da prateleira, então não pode voltar para
+   * ela. Quem marca é o webhook do Clube (ver ClubeController.aplicarCobranca):
+   * quando falta café, a cobrança vira pedido MESMO ASSIM — o dinheiro já saiu
+   * do cliente — e o pedido nasce sem baixa nenhuma. Sem esta linha, o gestor
+   * que fizesse o que o próprio e-mail de alerta manda (estornar no painel do
+   * MP) faria o webhook aplicar ativo→cancelado e DEVOLVER unidades
+   * inexistentes: o caminho de recuperação recomendado inflava o estoque.
+   *
+   * A exclusão vale para as DUAS travessias de propósito. Pular só a devolução
+   * e deixar a ressurreição (cancelado→ativo) rebaixar trocaria estoque
+   * inflado por estoque sumido, porque o pedido continuaria marcado e o
+   * cancelamento seguinte não devolveria o que essa baixa tirou. O invariante é
+   * "pedido marcado não move estoque", ponto — a conta dele é do gestor, que
+   * separa o café ou estorna com o alerta na mão.
+   */
   const comProduto = (Array.isArray(itens) ? itens : []).filter(
-    (item) => item && item.product_id,
+    (item) => item && item.product_id && item.sem_reserva !== true,
   );
 
   for (const item of ordenarPorProduto(comProduto)) {

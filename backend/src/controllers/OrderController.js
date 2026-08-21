@@ -1,12 +1,14 @@
 const OrderRepository = require("../repositories/ordersRepository");
 const pool = require("../pgPool");
 const { sendStatusEmail } = require("../utils/emailSender");
+const { STATUS_VALIDOS } = require("../utils/statusDePedido");
 const {
-  STATUS_VALIDOS,
-  GRUPO_ATIVO,
-  GRUPO_CANCELADO,
-} = require("../utils/statusDePedido");
-const { ordenarPorProduto } = require("../utils/estoque");
+  lerItensDoPedido,
+  aplicarTransicaoDeEstoque,
+  DEVOLVEU,
+  REBAIXOU,
+} = require("../utils/estoque");
+const cuponsRepository = require("../repositories/cuponsRepository");
 const { gerarCsvDePedidos } = require("../utils/csvDePedidos");
 
 /**
@@ -156,7 +158,7 @@ class OrderController {
 
       const { rows } = await client.query(
         `SELECT pedido_id AS order_id, status, itens AS items, user_id,
-                total AS total_amount
+                total AS total_amount, cupom_codigo AS coupon_code
            FROM canastra.pedidos
           WHERE pedido_id = $1::uuid
             FOR UPDATE`,
@@ -169,46 +171,72 @@ class OrderController {
       const order = rows[0];
       const currentStatus = order.status;
 
-      const isNowCancelled = GRUPO_CANCELADO.includes(newStatus);
-      const wasCancelled = GRUPO_CANCELADO.includes(currentStatus);
-      const isNowActive = GRUPO_ATIVO.includes(newStatus);
-      const wasActive = GRUPO_ATIVO.includes(currentStatus);
+      /**
+       * A MOVIMENTAÇÃO DE ESTOQUE VEM DO MÓDULO ÚNICO (utils/estoque.js) — o
+       * painel tinha CÓPIA PRÓPRIA desta lógica, que é exatamente o que o
+       * módulo existe para impedir. As regras coincidiam por sorte, e a linha
+       * onde elas divergiam de fato era a de baixo: o webhook devolvia o uso
+       * do cupom na travessia ativo→cancelado e o painel não — e o painel é o
+       * caminho MAIS usado pelo gestor.
+       *
+       * O helper decide a travessia, itera em ordem canônica (o painel mudando
+       * um pedido enquanto um checkout reserva os mesmos produtos em ordem
+       * oposta seria deadlock 40P01) e diz o que fez.
+       */
+      const items = lerItensDoPedido(order.items, "Painel");
+      const movimento = await aplicarTransicaoDeEstoque(
+        client,
+        items,
+        currentStatus,
+        newStatus,
+      );
 
-      let items = order.items;
-      if (typeof items === "string") {
-        try {
-          items = JSON.parse(items);
-        } catch (e) {
-          console.error("Erro ao parsear items do pedido:", e);
-        }
-      }
-
-      // Ordem canonica nas travas de estoque (ver utils/estoque.js): o painel
-      // mudando um pedido enquanto um checkout reserva os mesmos produtos em
-      // ordem oposta seria deadlock 40P01.
-      if (wasActive && isNowCancelled) {
-        if (Array.isArray(items)) {
-          for (const item of ordenarPorProduto(items)) {
-            await client.query(
-              `UPDATE canastra.produtos
-                  SET quantidade = quantidade + $1
-                WHERE produto_id = $2`,
-              [Number(item.quantity), item.product_id],
+      if (movimento === DEVOLVEU) {
+        /**
+         * O USO DO CUPOM VOLTA JUNTO COM O ESTOQUE, na MESMA transação — a
+         * mesma regra do webhook do Mercado Pago (ver receiveWebhook): a venda
+         * morreu, e um cupom de limite 50 "gasto" em pedidos cancelados
+         * esgotaria a campanha sem vender nada.
+         *
+         * `devolverUsoPorCodigo` (e não `devolverUso`) porque o pedido guarda a
+         * FOTOGRAFIA do código, não o id do cupom — e porque ela NÃO engole
+         * erro: aqui a devolução vive dentro da transação, e um erro engolido
+         * dentro de transação envenena tudo que vier depois (25P02). O erro
+         * sobe, vira ROLLBACK + 500, e o gestor tenta de novo.
+         *
+         * `false` = nenhuma linha casou (cupom renomeado depois da venda, ou
+         * contador já em zero). Não é falha da transição — loga e segue.
+         */
+        if (order.coupon_code) {
+          const devolveu = await cuponsRepository.devolverUsoPorCodigo(
+            order.coupon_code,
+            client,
+          );
+          if (!devolveu) {
+            console.warn(
+              `CUPOM: uso do cupom "${order.coupon_code}" (pedido ${order.order_id}) ` +
+                "não pôde ser devolvido — código renomeado ou contador zerado. " +
+                "Confira o contador manualmente.",
             );
           }
         }
-      } else if (wasCancelled && isNowActive) {
-        if (Array.isArray(items)) {
-          for (const item of ordenarPorProduto(items)) {
-            // GREATEST(0, ...): a unidade devolvida pode ja ter sido vendida;
-            // estoque negativo mentiria pior que zero.
-            await client.query(
-              `UPDATE canastra.produtos
-                  SET quantidade = GREATEST(0, quantidade - $1)
-                WHERE produto_id = $2`,
-              [Number(item.quantity), item.product_id],
-            );
-          }
+      } else if (movimento === REBAIXOU) {
+        /**
+         * O caminho de volta NÃO re-reserva o uso do cupom, pela MESMA razão do
+         * webhook: re-incrementar às cegas (`usos + 1`) poderia ESTOURAR o
+         * limite — a vaga devolvida no cancelamento pode já ter sido consumida
+         * por outro pedido nesse meio tempo — e recusar a reativação de um
+         * pedido por causa de contador de campanha seria deixar o marketing
+         * mandar no dinheiro. O contador fica 1 abaixo do real para este cupom;
+         * divergência conhecida, logada e conferível no painel.
+         */
+        if (order.coupon_code) {
+          console.warn(
+            `CUPOM: pedido ${order.order_id} voltou a ativo com o cupom ` +
+              `"${order.coupon_code}" ja devolvido — o contador de usos ` +
+              "fica 1 abaixo do real para este cupom (divergência conhecida, " +
+              "não re-reservamos às cegas para não estourar o limite).",
+          );
         }
       }
 

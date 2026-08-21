@@ -209,6 +209,64 @@ describe("montarCorpoDeAssinatura + assinarClube", () => {
     expect("preco" in corpo).toBe(false);
   });
 
+  /**
+   * O CPF NO CORPO DA ADESÃO. Toda cobrança do Clube vira pedido de venda no
+   * Bling, e o ERP recusa (422) pedido cujo cliente não tem CPF: sem ele, a
+   * assinatura cobra todo ciclo e nunca emite nota. O checkout já forçava o
+   * número; a adesão passou a forçar também.
+   */
+  it("o CPF viaja só com dígitos — a máscara fica na tela", () => {
+    const [classico] = opcoesDoClube(lotesDeTeste());
+    const corpo = montarCorpoDeAssinatura({
+      variante: varianteDoClube(classico, "grao", 250)!,
+      quantidade: 1,
+      frequenciaDias: 15,
+      cpf: "529.982.247-25",
+      endereco,
+    });
+    expect(corpo.cpf).toBe("52998224725");
+  });
+
+  it("sem CPF digitado, a chave é OMITIDA — quem já o tem no cadastro não redigita", () => {
+    const [classico] = opcoesDoClube(lotesDeTeste());
+    const semNada = montarCorpoDeAssinatura({
+      variante: varianteDoClube(classico, "grao", 250)!,
+      quantidade: 1,
+      frequenciaDias: 15,
+      endereco,
+    });
+    // Omitida, não `""`: "não informei" é diferente de "o CPF é vazio", e é o
+    // que faz o servidor usar o CPF da conta em vez de recusar.
+    expect("cpf" in semNada).toBe(false);
+
+    const soMascara = montarCorpoDeAssinatura({
+      variante: varianteDoClube(classico, "grao", 250)!,
+      quantidade: 1,
+      frequenciaDias: 15,
+      cpf: "   ",
+      endereco,
+    });
+    expect("cpf" in soMascara).toBe(false);
+  });
+
+  it("assinarClube propaga a recusa de CPF do servidor com a frase dele", async () => {
+    const semCpf = vi.fn(async () => ({
+      ok: false,
+      json: async () => ({
+        error: "CPF_MISSING",
+        details:
+          "Informe o CPF do titular: ele é o dado da nota fiscal de cada envio do Clube.",
+      }),
+    })) as unknown as typeof fetch;
+    await expect(
+      assinarClube(
+        "token",
+        { sku: "CLA-250M", quantidade: 1, frequenciaDias: 15, endereco },
+        semCpf,
+      ),
+    ).rejects.toThrow(/nota fiscal/);
+  });
+
   it("assinarClube devolve o initPoint e propaga a frase de erro do servidor", async () => {
     const ok = vi.fn(async () => ({
       ok: true,

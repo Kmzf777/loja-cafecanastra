@@ -433,3 +433,110 @@ test("erro de banco vira 500 — nunca um 200 que faz o MP esquecer", async () =
   assert.equal(await statusDoPedido(pagamentoMp), "cancelado");
   assert.equal(await estoqueDoProduto(), 10);
 });
+
+/* --------------------------------------------------------------------------
+ * Conferência de SUBTOTAL — o preço exibido contra o preço cobrado
+ *
+ * A sacola guarda `price` no localStorage e nunca o revalida; o servidor cobra
+ * o preço do BANCO. O frete já tinha conferência (409 do `conferirFrete`); o
+ * preço dos itens não tinha nenhuma — e no cartão o buraco é pior, porque o
+ * CardForm é montado com o total da tela e o `transaction_amount` cobrado é o
+ * do servidor. Agora o corpo DECLARA o subtotal exibido e o servidor confere.
+ *
+ * PRODUTO custa R$ 50,00 e o corpo pede 2 → o subtotal do banco é 10000.
+ * -------------------------------------------------------------------------- */
+
+test("subtotal divergente do exibido: 409 SEM cobrar e SEM reservar", async () => {
+  const cobrancasAntes = mp.criacoes.length;
+  const estoqueAntes = await estoqueDoProduto();
+
+  const corpo = corpoDeCheckout();
+  // A tela mostrou R$ 90,00 (preço de antes de o gestor mexer); o banco diz 100.
+  corpo.subtotalCentavos = 9000;
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    { user: { userId: ANA }, headers: {}, body: corpo },
+    res,
+  );
+
+  assert.equal(res.codigo, 409);
+  // Código próprio: é ele que deixa a tela RECARREGAR os preços em vez de só
+  // exibir a frase — um 409 de frete pede outra ação.
+  assert.equal(res.corpo.error, "PRECO_MUDOU");
+  assert.match(res.corpo.details, /preço de um item mudou/i);
+  assert.equal(mp.criacoes.length, cobrancasAntes, "não pode cobrar");
+  assert.equal(await estoqueDoProduto(), estoqueAntes, "nada reservado");
+});
+
+test("um centavo de diferença já é 409: preço não é frete", async () => {
+  // O 409 do frete tolera um centavo porque compara com cotação de
+  // transportadora, que arredonda. Aqui os dois lados somam
+  // `round(preco * 100) * quantidade` sobre a mesma linha do banco.
+  const corpo = corpoDeCheckout();
+  corpo.subtotalCentavos = 9999;
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    { user: { userId: ANA }, headers: {}, body: corpo },
+    res,
+  );
+  assert.equal(res.codigo, 409);
+  assert.equal(res.corpo.error, "PRECO_MUDOU");
+});
+
+test("subtotal torto é 400 — desarmar a conferência em silêncio seria pior", async () => {
+  for (const valor of ["cem reais", -1, 10.5, Number.NaN]) {
+    const corpo = corpoDeCheckout();
+    corpo.subtotalCentavos = valor;
+
+    const res = respostaFalsa();
+    await PaymentController.createPayment(
+      { user: { userId: ANA }, headers: {}, body: corpo },
+      res,
+    );
+    assert.equal(res.codigo, 400, `subtotalCentavos=${String(valor)}`);
+    assert.match(res.corpo.details, /centavos/i);
+  }
+});
+
+test("subtotal batendo: 201, e quem cobra continua sendo o servidor", async () => {
+  const estoqueAntes = await estoqueDoProduto();
+  const corpo = corpoDeCheckout();
+  corpo.subtotalCentavos = 10000; // 2 × R$ 50,00 — o que a tela exibiu
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "subtotal-confere" },
+      body: corpo,
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  // O valor cobrado NÃO sai do campo declarado: ele saiu da releitura travada
+  // do banco. O campo só serviu para o servidor saber que a tela estava certa.
+  assert.equal(mp.criacoes[mp.criacoes.length - 1].transaction_amount, 100);
+  assert.equal(await estoqueDoProduto(), estoqueAntes - 2);
+});
+
+test("sem o campo, o pedido passa: o checkout legado ainda não o manda", async () => {
+  // Omitir não é buraco de segurança — o valor cobrado nunca sai do campo. É a
+  // proteção do CLIENTE que fica sem armar, e recusar o legado seria trocar um
+  // defeito de exibição por uma loja que não vende.
+  const corpo = corpoDeCheckout();
+  assert.equal(corpo.subtotalCentavos, undefined);
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "subtotal-ausente" },
+      body: corpo,
+    },
+    res,
+  );
+  assert.equal(res.codigo, 201);
+});

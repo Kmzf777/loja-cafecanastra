@@ -25,12 +25,21 @@ const { aplicarMigracoes } = require("../db/migrar.js");
 
 let bd;
 let ClubeController;
+let blingPedidos;
 
 const ANA = "aaaaaaaa-0000-0000-0000-000000000001";
 const BRUNO = "bbbbbbbb-0000-0000-0000-000000000002";
 const DORA = "dddddddd-0000-0000-0000-000000000004";
 const PRODUTO = "11111111-0000-0000-0000-0000000000aa";
 const SKU = "CLUBE-250";
+
+/**
+ * CPFs de verdade (dígitos verificadores válidos), um por pessoa: o UNIQUE de
+ * `clientes.cpf` (0002) é o que transforma "o CPF do irmão" num 400 legível, e
+ * um teste que reusasse o mesmo número esbarraria nele sem querer.
+ */
+const CPF_ANA = "529.982.247-25";
+const CPF_BRUNO = "111.444.777-35";
 
 /** O que o dublê do MP responde; cada teste ajusta. */
 const mp = {
@@ -46,6 +55,45 @@ const mp = {
 
 /** E-mails que TERIAM saído. */
 const emails = { deStatus: [], deAdmin: [], deAlertaDeEstoque: [] };
+
+/**
+ * O Bling é dublê no NÍVEL DO CLIENTE HTTP (`services/blingClient`), como em
+ * f7_bling.test.js: `blingPedidos` roda de verdade — claim, idempotência,
+ * resolução de SKU, contato — contra o banco real, e só a rede é falsa. É a
+ * única forma de provar que a cobrança do Clube CHEGA ao ERP, e não apenas que
+ * alguém chamou uma função.
+ */
+const bling = { requisicoes: [], produtosPorSku: { [SKU]: { id: 501, codigo: SKU } }, proximoId: 900 };
+
+function chamadasDe(metodo, caminho) {
+  return bling.requisicoes.filter(
+    (r) => r.metodo === metodo && r.caminho === caminho,
+  );
+}
+
+const dubleDoBlingClient = {
+  configurado: () => true,
+  zerarCacheParaTeste: () => {},
+  sondar: async () => ({ configurado: true, token: { ok: true } }),
+  obterAccessToken: async () => "token-do-duble",
+  renovarAccessToken: async () => "token-do-duble",
+  requisitar: async (metodo, caminho, { body, query } = {}) => {
+    bling.requisicoes.push({ metodo, caminho, body, query });
+    if (metodo === "GET" && caminho === "/produtos") {
+      const p = bling.produtosPorSku[query?.codigo];
+      return { data: p ? [p] : [] };
+    }
+    if (metodo === "GET" && caminho === "/contatos") return { data: [] };
+    if (metodo === "GET" && caminho === "/pedidos/vendas") return { data: [] };
+    if (metodo === "POST" && caminho === "/contatos") {
+      return { data: { id: ++bling.proximoId } };
+    }
+    if (metodo === "POST" && caminho === "/pedidos/vendas") {
+      return { data: { id: ++bling.proximoId } };
+    }
+    throw new Error(`dublê do Bling não conhece ${metodo} ${caminho}`);
+  },
+};
 
 function respostaFalsa() {
   const res = { codigo: null, corpo: null };
@@ -182,6 +230,10 @@ before(async () => {
         },
       };
     }
+    // O dublê do Bling: `services/blingPedidos` (e só ele) requer "./blingClient".
+    if (caminho === "./blingClient") {
+      return dubleDoBlingClient;
+    }
     if (caminho === "../utils/emailSender") {
       return {
         sendStatusEmail: async (pedido, status) => {
@@ -202,9 +254,17 @@ before(async () => {
 
   try {
     ClubeController = require("../src/controllers/ClubeController.js");
+    // O MESMO módulo que o ClubeController carregou (cache de require): é dele
+    // que os testes esperam os disparos do gatilho.
+    blingPedidos = require("../src/services/blingPedidos.js");
   } finally {
     Module.prototype.require = requireOriginal;
   }
+
+  // A integração nasce DESLIGADA (decisão 5 do plano mestre); cada teste do
+  // Bling liga e desliga a sua.
+  delete process.env.BLING_ATIVO;
+  delete process.env.BLING_NFE_AUTO;
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -239,6 +299,9 @@ function corpoDeAssinatura(sobrescreve = {}) {
     sku: SKU,
     quantidade: 2,
     frequenciaDias: 30,
+    // O CPF entra no corpo da adesão desde a revisão transversal da F7: sem
+    // ele o pedido recorrente é insincronizável no Bling e não tem nota.
+    cpf: CPF_ANA,
     endereco: { ...ENDERECO },
     ...sobrescreve,
   };
@@ -348,6 +411,73 @@ test("assinar grava pendente com o preço do SERVIDOR e devolve o init_point", a
     corpo.notification_url,
     "https://loja.exemplo/webhook/mercadopago/assinaturas",
   );
+});
+
+/* --------------------------------------------------------------------------
+ * O CPF DA ADESÃO
+ *
+ * O Bling recusa (422) pedido de venda cujo cliente não tem CPF, e toda
+ * cobrança do Clube vira pedido de venda lá. O checkout avulso já forçava o
+ * CPF; a adesão não — um assinante que nunca comprou avulso produzia, a cada
+ * ciclo, um pedido cobrado, insincronizável e sem nota fiscal.
+ * -------------------------------------------------------------------------- */
+
+test("assinar SEM CPF (e sem CPF no cadastro): 400, sem ir ao MP e sem gravar nada", async () => {
+  const criadosAntes = mp.preapprovalsCriados.length;
+  // A Dora tem cadastro e nunca comprou: é exatamente o assinante que o
+  // defeito produzia — adesão feita, cobrança recorrente, nota impossível.
+  const res = await assinar(corpoDeAssinatura({ cpf: undefined }), DORA);
+
+  assert.equal(res.codigo, 400);
+  assert.equal(res.corpo.error, "CPF_MISSING");
+  assert.match(res.corpo.details, /nota fiscal/i);
+  assert.equal(
+    mp.preapprovalsCriados.length,
+    criadosAntes,
+    "recusa antes do MP: nenhum preapproval pendente fica órfão lá",
+  );
+  const { rows } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.assinaturas WHERE user_id = $1::uuid",
+    [DORA],
+  );
+  assert.equal(rows[0].n, 0, "nem linha local");
+});
+
+test("CPF de outra conta: 400 com frase (o UNIQUE de 0002), e nada é criado", async () => {
+  const criadosAntes = mp.preapprovalsCriados.length;
+  const res = await assinar(corpoDeAssinatura({ cpf: CPF_ANA }), DORA);
+
+  assert.equal(res.codigo, 400);
+  assert.equal(res.corpo.error, "CPF_EM_USO");
+  assert.match(res.corpo.details, /outra conta/i);
+  assert.equal(mp.preapprovalsCriados.length, criadosAntes);
+  const { rows } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.assinaturas WHERE user_id = $1::uuid",
+    [DORA],
+  );
+  assert.equal(rows[0].n, 0);
+});
+
+test("o CPF da adesão fica no cadastro — e quem já o tem não redigita", async () => {
+  // A Ana assinou acima MANDANDO o CPF: ele foi persistido, com a mesma
+  // disciplina do checkout (só dígitos em `canastra.clientes.cpf`).
+  const { rows } = await bd.pool.query(
+    "SELECT cpf FROM canastra.clientes WHERE user_id = $1::uuid",
+    [ANA],
+  );
+  assert.equal(rows[0].cpf, "52998224725", "gravado só com dígitos");
+
+  // E a partir daí o corpo SEM cpf passa: o servidor lê o da conta. É o que
+  // faz a segunda adesão (e a primeira de quem já comprou avulso) não pedir o
+  // número de novo — o mesmo comportamento do checkout.
+  const res = await assinar(corpoDeAssinatura({ cpf: undefined }), ANA);
+  assert.equal(res.codigo, 201);
+
+  // Esta assinatura é só a prova do ponto acima; sai de cena para as
+  // listagens seguintes continuarem contando o que contavam.
+  await bd.pool.query("DELETE FROM canastra.assinaturas WHERE id = $1::uuid", [
+    res.corpo.assinatura.id,
+  ]);
 });
 
 /* --------------------------------------------------------------------------
@@ -777,7 +907,10 @@ async function apagarOVinculo(id) {
 }
 
 test("evento de preapproval sem vínculo: acha pela referência e REGRAVA o id", async () => {
-  const res = await assinar(corpoDeAssinatura({ quantidade: 1 }), BRUNO);
+  const res = await assinar(
+    corpoDeAssinatura({ quantidade: 1, cpf: CPF_BRUNO }),
+    BRUNO,
+  );
   assert.equal(res.codigo, 201);
   assinaturaDoBruno = res.corpo.assinatura.id;
   const preapprovalId = (await linhaDaAssinatura(assinaturaDoBruno)).preapproval_id;
@@ -966,5 +1099,235 @@ test("cancelarAssinaturasDoTitular: fecha todas as vivas do titular e é idempot
   await assert.rejects(
     () => ClubeController.cancelarAssinaturasDoTitular("nao-e-uuid"),
     (erro) => erro.status === 400,
+  );
+});
+
+/* --------------------------------------------------------------------------
+ * A COSTURA COM O BLING (3G × 3J)
+ *
+ * O gatilho `aoAprovarPedido` era chamado só do PaymentController. Toda
+ * cobrança recorrente virava pedido 'aprovado' em `canastra.pedidos` SEM pedido
+ * de venda no Bling, sem NF-e e fora do cron de rastreio (que filtra
+ * `bling_id IS NOT NULL`) — e nada disso dava erro em lugar nenhum.
+ * -------------------------------------------------------------------------- */
+
+async function pedidoDaCobranca(paymentId) {
+  const { rows } = await bd.pool.query(
+    `SELECT pedido_id, status, itens, bling_id, bling_situacao
+       FROM canastra.pedidos WHERE pagamento_id_mp = $1`,
+    [paymentId],
+  );
+  return rows[0] ?? null;
+}
+
+test("cobrança aprovada do Clube vira pedido de venda no Bling", async () => {
+  await bd.pool.query(
+    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
+    [PRODUTO],
+  );
+  mp.pagamentos["pay-bling"] = {
+    id: "pay-bling",
+    status: "approved",
+    payment_type_id: "credit_card",
+    metadata: { preapproval_id: "pre-1" },
+  };
+
+  process.env.BLING_ATIVO = "true";
+  try {
+    const res = respostaFalsa();
+    await ClubeController.webhook(requisicaoDeWebhook("payment", "pay-bling"), res);
+    assert.equal(res.codigo, 200);
+
+    // O gatilho é deliberadamente FORA da resposta (falha do ERP não pode
+    // derrubar o webhook de uma cobrança que já aconteceu): espera os disparos.
+    await blingPedidos.aguardarDisparos();
+
+    const pedido = await pedidoDaCobranca("pay-bling");
+    assert.ok(pedido, "a cobrança virou pedido");
+    assert.equal(pedido.status, "aprovado");
+    assert.ok(
+      pedido.bling_id,
+      "sem bling_id não há NF-e e o pedido some do cron de rastreio",
+    );
+    assert.equal(pedido.bling_situacao, "sincronizado");
+
+    // O pedido de venda foi criado com o elo de volta e o SKU certo — é o que
+    // faz o estoque e a nota do ERP baterem com a venda da loja.
+    const venda = chamadasDe("POST", "/pedidos/vendas").at(-1);
+    assert.equal(venda.body.numeroLoja, pedido.pedido_id);
+    assert.equal(venda.body.itens[0].codigo, SKU);
+    assert.equal(venda.body.itens[0].quantidade, 2);
+    // E o contato saiu com o CPF que a adesão coletou (defeito 2): sem ele,
+    // `garantirContatoNoBling` recusaria com 422 e nada disto existiria.
+    const contato = chamadasDe("POST", "/contatos").at(-1);
+    assert.equal(contato.body.numeroDocumento, "52998224725");
+
+    // Reserva feita: o item NÃO nasce marcado (ver o teste do estorno adiante).
+    assert.equal(pedido.itens[0].sem_reserva, undefined);
+    assert.equal(await estoqueDoProduto(), 8);
+  } finally {
+    delete process.env.BLING_ATIVO;
+  }
+});
+
+test("pendente que depois é aprovada: a TRANSIÇÃO também leva o pedido ao ERP", async () => {
+  mp.pagamentos["pay-transicao"] = {
+    id: "pay-transicao",
+    status: "pending",
+    payment_type_id: "credit_card",
+    metadata: { preapproval_id: "pre-1" },
+  };
+
+  process.env.BLING_ATIVO = "true";
+  try {
+    let res = respostaFalsa();
+    await ClubeController.webhook(
+      requisicaoDeWebhook("payment", "pay-transicao"),
+      res,
+    );
+    assert.equal(res.codigo, 200);
+    await blingPedidos.aguardarDisparos();
+
+    let pedido = await pedidoDaCobranca("pay-transicao");
+    assert.equal(pedido.status, "pendente");
+    assert.equal(
+      pedido.bling_id,
+      null,
+      "pagamento ainda não confirmado não vira pedido de venda",
+    );
+
+    // O cartão saiu: a MESMA cobrança volta aprovada, e o pedido só muda de
+    // status — é o ramo de transição, o segundo lugar onde o gatilho faltava.
+    mp.pagamentos["pay-transicao"].status = "approved";
+    res = respostaFalsa();
+    await ClubeController.webhook(
+      requisicaoDeWebhook("payment", "pay-transicao"),
+      res,
+    );
+    assert.equal(res.codigo, 200);
+    await blingPedidos.aguardarDisparos();
+
+    pedido = await pedidoDaCobranca("pay-transicao");
+    assert.equal(pedido.status, "aprovado");
+    assert.ok(pedido.bling_id, "a transição para aprovado sincroniza");
+
+    // O MP reenvia por desenho: mesmo status, nenhuma segunda venda no ERP.
+    const vendas = chamadasDe("POST", "/pedidos/vendas").length;
+    res = respostaFalsa();
+    await ClubeController.webhook(
+      requisicaoDeWebhook("payment", "pay-transicao"),
+      res,
+    );
+    await blingPedidos.aguardarDisparos();
+    assert.equal(chamadasDe("POST", "/pedidos/vendas").length, vendas);
+  } finally {
+    delete process.env.BLING_ATIVO;
+  }
+});
+
+test("com BLING_ATIVO desligado, a cobrança do Clube não fala com o ERP", async () => {
+  assert.notEqual(process.env.BLING_ATIVO, "true");
+  const antes = bling.requisicoes.length;
+  mp.pagamentos["pay-sem-bling"] = {
+    id: "pay-sem-bling",
+    status: "approved",
+    payment_type_id: "credit_card",
+    metadata: { preapproval_id: "pre-1" },
+  };
+
+  const res = respostaFalsa();
+  await ClubeController.webhook(
+    requisicaoDeWebhook("payment", "pay-sem-bling"),
+    res,
+  );
+  assert.equal(res.codigo, 200);
+  await blingPedidos.aguardarDisparos();
+
+  assert.equal(
+    bling.requisicoes.length,
+    antes,
+    "integração desligada por padrão: nenhuma chamada ao Bling",
+  );
+  const pedido = await pedidoDaCobranca("pay-sem-bling");
+  assert.equal(pedido.status, "aprovado", "e o pedido é normal na loja");
+  assert.equal(pedido.bling_id, null);
+});
+
+/* --------------------------------------------------------------------------
+ * O ESTOQUE FANTASMA DO PEDIDO SEM RESERVA
+ *
+ * Sem café na prateleira, a cobrança vira pedido MESMO ASSIM (o dinheiro já
+ * saiu) e o gestor recebe o alerta de decisão. Quando ele fazia o que o próprio
+ * alerta manda — estornar no painel do MP —, o webhook aplicava ativo→cancelado
+ * e devolvia à prateleira unidades que nunca saíram dela: o caminho de
+ * recuperação recomendado INFLAVA o estoque, em silêncio.
+ * -------------------------------------------------------------------------- */
+
+test("pedido nascido SEM reserva: estornar não devolve café que nunca saiu", async () => {
+  // A prateleira tem 1; a assinatura da Ana pede 2.
+  await bd.pool.query(
+    "UPDATE canastra.produtos SET quantidade = 1 WHERE produto_id = $1",
+    [PRODUTO],
+  );
+  emails.deAlertaDeEstoque.length = 0;
+  mp.pagamentos["pay-fantasma"] = {
+    id: "pay-fantasma",
+    status: "approved",
+    payment_type_id: "credit_card",
+    metadata: { preapproval_id: "pre-1" },
+  };
+
+  let res = respostaFalsa();
+  await ClubeController.webhook(requisicaoDeWebhook("payment", "pay-fantasma"), res);
+  assert.equal(res.codigo, 200);
+
+  const pedido = await pedidoDaCobranca("pay-fantasma");
+  assert.equal(pedido.status, "aprovado", "o dinheiro saiu: o pedido existe");
+  assert.equal(await estoqueDoProduto(), 1, "baixa é tudo-ou-nada: nada saiu");
+  assert.equal(
+    pedido.itens[0].sem_reserva,
+    true,
+    "e o pedido nasce MARCADO — é o que distingue este de um pedido com café separado",
+  );
+  assert.equal(emails.deAlertaDeEstoque.length, 1, "o gestor recebe o alerta");
+
+  // O gestor faz exatamente o que o alerta manda: estorna no painel do MP.
+  mp.pagamentos["pay-fantasma"].status = "refunded";
+  res = respostaFalsa();
+  await ClubeController.webhook(requisicaoDeWebhook("payment", "pay-fantasma"), res);
+  assert.equal(res.codigo, 200);
+
+  assert.equal(
+    (await pedidoDaCobranca("pay-fantasma")).status,
+    "reembolsado",
+    "a transição acontece normalmente",
+  );
+  assert.equal(
+    await estoqueDoProduto(),
+    1,
+    "e o estoque NÃO aumenta: as unidades nunca tinham saído",
+  );
+
+  // A marca é simétrica: a volta (um estorno que o MP reprocessa como
+  // aprovado) também não rebaixa — pedido marcado não move estoque, ponto.
+  mp.pagamentos["pay-fantasma"].status = "approved";
+  res = respostaFalsa();
+  await ClubeController.webhook(requisicaoDeWebhook("payment", "pay-fantasma"), res);
+  assert.equal(res.codigo, 200);
+  assert.equal(await estoqueDoProduto(), 1);
+
+  /**
+   * E O PEDIDO COM RESERVA CONTINUA DEVOLVENDO — a marca não desligou a
+   * devolução de verdade. O `pay-bling` acima tirou 2 unidades da prateleira
+   * (nasceu sem marca); estorná-lo repõe as 2.
+   */
+  mp.pagamentos["pay-bling"].status = "refunded";
+  res = respostaFalsa();
+  await ClubeController.webhook(requisicaoDeWebhook("payment", "pay-bling"), res);
+  assert.equal(res.codigo, 200);
+  assert.equal(
+    await estoqueDoProduto(),
+    3,
+    "pedido com reserva devolve as 2 unidades que realmente saíram",
   );
 });

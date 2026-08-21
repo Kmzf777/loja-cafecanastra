@@ -126,11 +126,92 @@ export async function cotarFrete(
   return r.json();
 }
 
+/**
+ * Preço de catálogo AO VIVO dos itens da sacola, por `product_id`, em REAIS.
+ *
+ * Existe para o desfecho do 409 de preço: a sacola guarda `price` no
+ * `localStorage` e nunca o revalida, então quando o servidor recusa o pedido
+ * dizendo "o preço mudou" a tela precisa de um jeito de saber o preço novo —
+ * senão o cliente reenvia o mesmo número velho e leva outro 409, para sempre.
+ *
+ * A FONTE É A MESMA DA VITRINE: `GET /dashboard`, público, o endpoint que
+ * `lib/catalogo/repositorio.ts` já usa para sobrepor preço e estoque do banco
+ * sobre o JSON editorial. Isso não é detalhe — é o que garante que o número
+ * relido aqui seja exatamente o que a conferência do servidor compara (o preço
+ * de catálogo, sem promoção; ver `conferirSubtotal` no PaymentController).
+ *
+ * Sem cache de propósito (o `next.revalidate` de 60s do repositório serve à
+ * vitrine, não a uma correção de preço em curso), e sem engolir a falha: quem
+ * chama precisa saber que não conseguiu reler para poder mandar recarregar a
+ * página em vez de prometer um total que não conferiu.
+ */
+export async function buscarPrecosAtuais(
+  itens: ItemDaSacola[],
+  fetchFn: typeof fetch = fetch,
+): Promise<Map<string, number>> {
+  const r = await fetchFn(`${API_BASE}/dashboard?limit=200`, {
+    cache: "no-store",
+  });
+  if (!r.ok) throw new Error("Não foi possível reler os preços agora.");
+
+  const dados = await r.json();
+  const linhas: { product_id?: string; price?: string | number }[] =
+    dados?.products ?? [];
+
+  const naSacola = new Set(itens.map((i) => i.product_id));
+  const precos = new Map<string, number>();
+  for (const p of linhas) {
+    if (!p?.product_id || !naSacola.has(p.product_id)) continue;
+    const preco = Number(p.price);
+    if (Number.isFinite(preco) && preco >= 0) precos.set(p.product_id, preco);
+  }
+  return precos;
+}
+
+/**
+ * O subtotal DOS ITENS em centavos — sem frete, sem desconto. A mesma conta do
+ * `totalCentavos` da sacola (`round(price * 100) * quantity`, item a item, para
+ * float não errar na fronteira) porque é literalmente o mesmo número: o que a
+ * tela exibe como "Subtotal" e o que viaja no corpo do pagamento.
+ */
+export function subtotalDosItensCentavos(itens: ItemDaSacola[]): number {
+  return itens.reduce(
+    (soma, i) => soma + Math.round(Number(i.price) * 100) * Number(i.quantity),
+    0,
+  );
+}
+
 export type RespostaDoPagamento = {
   status: string;
   orderId: string;
   ticketUrl?: string;
 };
+
+/**
+ * O código que o servidor devolve no 409 de preço (campo `error`). A tela o usa
+ * para distinguir ESTE 409 do 409 de frete: um pede recarregar os preços, o
+ * outro pede recalcular a entrega — e uma frase genérica deixaria o cliente
+ * sem saber qual dos dois fazer.
+ */
+export const CODIGO_PRECO_MUDOU = "PRECO_MUDOU";
+
+/**
+ * Erro do `process_payment` COM o código de erro do servidor preservado.
+ *
+ * `processarPagamento` sempre lançou `new Error(details || error)` — a frase
+ * chegava na tela, o CÓDIGO se perdia no caminho. Continua sendo um `Error` com
+ * exatamente a mesma mensagem (nada que só olha `e.message` muda), mas agora
+ * quem precisa AGIR conforme o motivo consegue.
+ */
+export class ErroDoPagamento extends Error {
+  readonly codigo?: string;
+
+  constructor(mensagem: string, codigo?: string) {
+    super(mensagem);
+    this.name = "ErroDoPagamento";
+    this.codigo = codigo;
+  }
+}
 
 /** O que os dois meios de pagamento têm em comum. */
 type DadosDoPedido = {
@@ -149,6 +230,14 @@ type DadosDoPedido = {
  * `Idempotency-Key` e o servidor devolve o pedido que a primeira tentativa
  * criou (com ticketUrl), em vez de cobrar de novo. Mudou item, frete ou cupom
  * → assinatura nova → chave nova. Ver lib/sacola/idempotencia.ts.
+ *
+ * O SUBTOTAL NÃO ENTRA NA ASSINATURA, e isso é decisão, não esquecimento.
+ * Corrigir o preço depois de um 409 não é montar outro pedido: são os mesmos
+ * cafés, na mesma quantidade, para o mesmo CEP — é a MESMA tentativa, e ela
+ * precisa da mesma chave. Se o preço entrasse aqui, a retentativa depois da
+ * recarga ganharia chave nova; e uma retentativa com chave nova é exatamente o
+ * que cobra duas vezes quando a primeira resposta se perde na rede. O 409 não
+ * chega a criar pedido nenhum, então reusar a chave é seguro por construção.
  */
 function chaveDestePedido(dados: DadosDoPedido): string {
   return chaveDeIdempotencia(
@@ -176,6 +265,16 @@ function chaveDestePedido(dados: DadosDoPedido): string {
  * teria efeito — o backend passou a ignorá-los justamente porque eram
  * falsificáveis. O `cupom` viaja como CÓDIGO pela mesma razão: o servidor
  * revalida e calcula o desconto; o número do navegador é só exibição.
+ *
+ * `subtotalCentavos` É A EXCEÇÃO QUE CONFIRMA A REGRA, e vale explicar por quê:
+ * ele também não entra em conta nenhuma — o servidor continua somando o preço
+ * do banco para cobrar. Ele é uma DECLARAÇÃO: "foi este o subtotal que eu
+ * mostrei para o cliente". O servidor compara com o que acabou de ler e, se
+ * divergir, recusa com 409 em vez de cobrar um valor que a pessoa não viu (o
+ * cartão era o caso pior: o CardForm é montado com o total da tela e o
+ * `transaction_amount` cobrado é o do servidor). É a mesma disciplina do
+ * `shippingCost`, que o `conferirFrete` já reconferia — o preço dos itens é que
+ * não tinha conferência nenhuma.
  */
 function corpoComum(dados: DadosDoPedido) {
   return {
@@ -188,6 +287,7 @@ function corpoComum(dados: DadosDoPedido) {
     address: dados.endereco,
     shippingCost: dados.frete.price,
     shippingMethod: dados.frete.name,
+    subtotalCentavos: subtotalDosItensCentavos(dados.itens),
     ...(dados.cupom ? { cupom: dados.cupom } : {}),
   };
 }
@@ -208,7 +308,10 @@ async function processarPagamento(
 
   const d = await r.json().catch(() => ({}));
   if (!r.ok) {
-    throw new Error(d.details || d.error || fraseDeErro);
+    throw new ErroDoPagamento(
+      d.details || d.error || fraseDeErro,
+      typeof d.error === "string" ? d.error : undefined,
+    );
   }
   /**
    * 200 sem `orderId` é resposta que a tela não sabe consumir (um proxy

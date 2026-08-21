@@ -21,6 +21,10 @@ const {
 // POST /cupons/validar virou o terceiro chamador — o histórico e o porquê
 // estão no próprio módulo.
 const { precoComPromocao, somarCentavos } = require("../utils/preco");
+// `garantirCpf` morou AQUI dentro ate a revisao transversal da F7. Foi para
+// utils/cpf.js quando a adesao do Clube virou o segundo chamador — o
+// comportamento e o mesmo, linha por linha; o contrato esta no proprio modulo.
+const { garantirCpf } = require("../utils/cpf");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const cuponsRepository = require("../repositories/cuponsRepository");
 const promotionsRepo = new PromotionsRepository();
@@ -123,6 +127,81 @@ async function conferirFrete({
 
   return valor;
 }
+
+/**
+ * A FRASE do 409 de preco. Uma constante porque a conferencia roda DUAS vezes
+ * (antes e dentro da transacao) e as duas tem de dizer exatamente o mesmo.
+ */
+const FRASE_PRECO_MUDOU =
+  "O preço de um item mudou desde que você abriu a sacola — confira o resumo.";
+
+/**
+ * Confere o SUBTOTAL DOS ITENS que o navegador exibiu contra o que o servidor
+ * acabou de ler do banco. Irma gemea de `conferirFrete`, logo acima, e pelo
+ * mesmo motivo: o numero que o cliente VIU e o numero que a loja COBRA tem de
+ * ser o mesmo, e ate aqui so o frete tinha essa conferencia.
+ *
+ * O buraco que ela fecha: a sacola guarda `price` no localStorage e nunca o
+ * revalida; o servidor cobra o preco do BANCO. Se o gestor mudar um preco
+ * enquanto alguem esta com a sacola aberta, o cliente e cobrado por um valor
+ * diferente do que leu na tela — no cartao e pior ainda, porque o CardForm e
+ * montado com o total exibido e o `transaction_amount` enviado ao MP e o do
+ * servidor.
+ *
+ * TOLERANCIA ZERO, e de proposito: preco nao e frete. O 409 do frete tolera um
+ * centavo porque compara com uma COTACAO de transportadora, que arredonda; aqui
+ * os dois lados somam `round(preco * 100) * quantidade` sobre a mesma linha do
+ * banco. Um centavo de diferenca E preco diferente.
+ *
+ * O QUE SE COMPARA E O SUBTOTAL DE VITRINE — a soma dos precos de CATALOGO, sem
+ * promocao, sem cupom e sem frete. Nao e o valor cobrado, e nem deveria ser: e
+ * exatamente o que a vitrine mostra (`repositorio.ts` sobrepoe `preco` do banco
+ * sobre o JSON editorial e a sacola guarda esse numero) e portanto o unico
+ * numero que os dois lados calculam a partir da MESMA base. Comparar contra o
+ * valor promocional daria 409 em toda venda com promocao ativa — a vitrine nao
+ * renderiza preco promocional, entao o navegador nunca teria como acertar —, e
+ * `precoComPromocao` so ABAIXA o preco (ver utils/preco.js): promocao aparecendo
+ * ou sumindo no meio do caminho so faz o cliente pagar menos do que viu, que e
+ * o lado seguro do erro.
+ *
+ * `declarado` nulo = nenhuma conferencia. O campo e OPCIONAL no contrato porque
+ * o checkout legado (frontend/legacy/pages/Checkout/Checkout.jsx) ainda nao o
+ * manda, e recusar o pedido dele seria trocar um defeito de exibicao por uma
+ * loja que nao vende. Nao ha risco de seguranca em omitir: o valor cobrado
+ * NUNCA sai deste campo — ele so serve para o servidor perceber que a tela do
+ * cliente esta velha.
+ */
+function conferirSubtotal(declarado, subtotalDeVitrineCentavos) {
+  if (declarado === null) return;
+  if (declarado === subtotalDeVitrineCentavos) return;
+
+  const erro = new Error(FRASE_PRECO_MUDOU);
+  erro.status = 409;
+  // Codigo proprio para o navegador reconhecer ESTE 409 e recarregar os precos
+  // em vez de so exibir a frase — um 409 de frete pede outra acao.
+  erro.codigoPublico = "PRECO_MUDOU";
+  throw erro;
+}
+
+/**
+ * Le `subtotalCentavos` do corpo. Ausente vira `null` (sem conferencia, ver
+ * acima); presente mas torto e 400 na hora — cair no silencio desarmaria a
+ * unica protecao que o cliente tem contra pagar diferente do que viu, e um
+ * campo que "as vezes protege" e pior que campo nenhum.
+ */
+function lerSubtotalDeclarado(valor) {
+  if (valor === undefined || valor === null) return null;
+  const n = Number(valor);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    const erro = new Error(
+      "Subtotal do pedido inválido: use o total dos itens em centavos.",
+    );
+    erro.status = 400;
+    throw erro;
+  }
+  return n;
+}
+
 /**
  * Confere a assinatura da notificacao do Mercado Pago.
  *
@@ -235,45 +314,6 @@ async function devolverEstoque(conexao, itens) {
   }
 }
 
-/**
- * Grava o CPF do corpo em `canastra.clientes` e devolve o CPF vigente.
- *
- * A Onda 2D vai coletar o CPF no checkout; o backend ja aceita: se
- * `formData.payer.identification` trouxer um CPF de 11 digitos, ele e
- * persistido ANTES da conferencia — e a partir dai a conta tem CPF para
- * sempre. Sem CPF de nenhuma fonte, o checkout recusa com CPF_MISSING, como
- * sempre recusou.
- */
-async function garantirCpf(userId, identification) {
-  const tipo = String(identification?.type || "CPF").toUpperCase();
-  const digitos = String(identification?.number || "").replace(/\D/g, "");
-
-  if (tipo === "CPF" && digitos.length === 11) {
-    try {
-      await pool.query(
-        "UPDATE canastra.clientes SET cpf = $1 WHERE user_id = $2::uuid",
-        [digitos, userId],
-      );
-    } catch (err) {
-      if (err.code === "23505") {
-        // O UNIQUE de `clientes.cpf` (0002): este numero ja pertence a outra
-        // conta. Recusar com frase e melhor que um 500 sem explicacao.
-        const erro = new Error("Este CPF já está cadastrado em outra conta.");
-        erro.status = 400;
-        erro.codigoPublico = "CPF_EM_USO";
-        throw erro;
-      }
-      throw err;
-    }
-  }
-
-  const { rows } = await pool.query(
-    "SELECT cpf FROM canastra.clientes WHERE user_id = $1::uuid",
-    [userId],
-  );
-  return rows.length ? rows[0].cpf : null;
-}
-
 class PaymentController {
   async createPayment(req, res) {
     // Fora do try: o bloco de erro precisa saber em que ponto do fluxo parou.
@@ -321,7 +361,13 @@ class PaymentController {
         shippingCost,
         shippingMethod,
         cupom,
+        // O subtotal dos itens QUE A TELA EXIBIU, em centavos, sem frete e sem
+        // desconto. Nao entra em conta nenhuma — so e conferido (ver
+        // `conferirSubtotal`). Opcional: o checkout legado ainda nao o manda.
+        subtotalCentavos,
       } = req.body;
+
+      const subtotalDeclarado = lerSubtotalDeclarado(subtotalCentavos);
 
       /**
        * A IDENTIDADE VEM DO TOKEN, NUNCA DO CORPO.
@@ -441,6 +487,9 @@ class PaymentController {
       const previaPorId = new Map(leituraPrevia.map((p) => [p.product_id, p]));
 
       const itensParaCotacao = [];
+      // O subtotal de CATALOGO desta leitura — a base que a vitrine exibe, sem
+      // promocao. E o numero que a conferencia de preco compara.
+      let subtotalDeVitrinePreviaCentavos = 0;
       for (const item of itensOrdenados) {
         const previa = previaPorId.get(item.product_id);
         if (!previa) {
@@ -448,6 +497,8 @@ class PaymentController {
           erro.status = 400;
           throw erro;
         }
+        subtotalDeVitrinePreviaCentavos +=
+          Math.round(Number(previa.price) * 100) * Number(item.quantity);
         itensParaCotacao.push({
           product_id: previa.product_id,
           quantity: Number(item.quantity),
@@ -460,6 +511,23 @@ class PaymentController {
           length: previa.length,
         });
       }
+
+      /**
+       * PRECO, PRIMEIRA PASSADA — a que da a resposta CERTA depressa.
+       *
+       * A conferencia que vale dinheiro e a de baixo, sobre os precos travados;
+       * esta existe porque um preco mudado tambem muda o frete (o piso do frete
+       * gratis e comparado com o subtotal), e sem ela o cliente receberia
+       * primeiro o 409 do FRETE — mandando recalcular a entrega quando o que
+       * mudou foi a etiqueta do café. Alem disso, `conferirFrete` pode chamar a
+       * transportadora (ate 12s de rede): cotar um pedido que ja sabemos que vai
+       * ser recusado e trabalho jogado fora.
+       *
+       * Mesmo desenho das DUAS passadas do cupom, logo abaixo, e pela mesma
+       * razao: a leitura sem trava serve para responder, a leitura travada serve
+       * para cobrar.
+       */
+      conferirSubtotal(subtotalDeclarado, subtotalDeVitrinePreviaCentavos);
 
       /**
        * CUPOM, PRIMEIRA PASSADA (F6). O navegador manda so o CODIGO; o
@@ -503,6 +571,14 @@ class PaymentController {
        * ja sai arredondado a centavo, entao a conversao aqui e exata.
        */
       let validatedSubtotalCentavos = 0;
+
+      /**
+       * O MESMO subtotal, mas de CATALOGO (sem promocao) e sobre as linhas
+       * TRAVADAS: e este que a conferencia de preco compara com o que a tela
+       * exibiu. Anda lado a lado com o de cima porque um cobra e o outro
+       * confere — ver `conferirSubtotal`.
+       */
+      let subtotalDeVitrineCentavos = 0;
 
       /**
        * Agora sim a transacao — enxuta: so leitura travada e reserva, nenhuma
@@ -558,6 +634,8 @@ class PaymentController {
 
         const bestPrice = precoComPromocao(productDb, activePromotions);
         validatedSubtotalCentavos += Math.round(bestPrice * 100) * qtdSolicitada;
+        subtotalDeVitrineCentavos +=
+          Math.round(Number(productDb.price) * 100) * qtdSolicitada;
 
         validatedItems.push({
           product_id: productDb.product_id,
@@ -572,6 +650,18 @@ class PaymentController {
           length: productDb.length,
         });
       }
+
+      /**
+       * PRECO, SEGUNDA PASSADA — A QUE VALE DINHEIRO.
+       *
+       * Sobre as linhas TRAVADAS, portanto sobre exatamente os precos que vao
+       * ser cobrados: se um preco mudou entre a leitura previa e esta, e AQUI
+       * que a divergencia aparece. Roda ANTES da reserva de estoque e da
+       * reserva do uso do cupom — o throw vira ROLLBACK e o pedido morre sem
+       * ter tirado nada da prateleira, sem gastar cupom e (obviamente) sem
+       * cobrar: o gateway so entra em cena depois do COMMIT.
+       */
+      conferirSubtotal(subtotalDeclarado, subtotalDeVitrineCentavos);
 
       /**
        * RESERVA DO ESTOQUE, ainda dentro da transacao e ANTES de cobrar.
@@ -1157,7 +1247,9 @@ class PaymentController {
 
 module.exports = new PaymentController();
 
-// Exportados para teste. Sao as duas regras que protegem dinheiro: quanto o
-// cliente paga de frete, e quem pode dizer que um pagamento mudou de status.
+// Exportados para teste. Sao as regras que protegem dinheiro: quanto o cliente
+// paga de frete, se o preco que ele viu ainda e o preco da loja, e quem pode
+// dizer que um pagamento mudou de status.
 module.exports.conferirFrete = conferirFrete;
+module.exports.conferirSubtotal = conferirSubtotal;
 module.exports.validarAssinaturaWebhook = validarAssinaturaWebhook;
