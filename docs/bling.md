@@ -4,19 +4,60 @@ O que a integração faz, uma linha por peça:
 
 - **Pedido aprovado → pedido de venda no Bling**, sozinho (gatilho no webhook
   e no checkout), idempotente por `pedidos.bling_id` — nunca duplica.
-- **NF-e** gerada e transmitida a partir do pedido de venda: manual pelo
-  painel, ou automática junto da sincronização com `BLING_NFE_AUTO=true`.
+- **NF-e** gerada e transmitida a partir do pedido de venda: pelo botão
+  **Emitir NF-e** do painel, ou automática junto da sincronização com
+  `BLING_NFE_AUTO=true`.
 - **Rastreio** preenchido no Bling volta para a loja: grava
   `codigo_rastreio`, avança o pedido para `enviado` e dispara o e-mail com o
-  código ao cliente. Manual pelo painel, ou de hora em hora com
-  `BLING_RASTREIO_CRON=true`.
+  código ao cliente. Pelo botão **Buscar rastreio** do painel, ou de hora em
+  hora com `BLING_RASTREIO_CRON=true`.
 - Tudo atrás de `BLING_ATIVO=true`. **Nenhuma falha do Bling derruba checkout
-  ou webhook**: o pior caso é `bling_id` nulo + uma linha de log, e o painel
-  ressincroniza com um clique.
+  ou webhook**: o pior caso é `bling_id` nulo + uma linha de log, e o botão
+  **Sincronizar** do painel refaz o que faltou.
 
 Variáveis: `BLING_ATIVO`, `BLING_CLIENT_ID`, `BLING_CLIENT_SECRET`,
 `BLING_REFRESH_TOKEN`, `BLING_NFE_AUTO`, `BLING_RASTREIO_CRON` — todas
 documentadas em `backend/src/.env.example`.
+
+---
+
+## Onde ficam os botões, no painel da loja
+
+Duas telas, e as MESMAS três ações nas duas:
+
+**`/dashboard/bling`** — no menu lateral, em *Gestão de pedidos* → **"Bling:
+NF-e e rastreio"**. É a tela de trabalho:
+
+- **Status da integração** (a leitura de `GET /bling/status`): se a integração
+  está ligada, se as credenciais estão presentes, se o token está renovando —
+  com a frase do erro quando não está —, e se NF-e automática e busca de
+  rastreio automática estão ativas. Com a integração desligada, a tela diz
+  isso em azul (não é erro: é o estado de fábrica) e aponta este documento.
+  O botão **Conferir de novo** re-sonda sem recarregar a página.
+- **Fila de pedidos** — só os pedidos **pagos** (aprovado, enviado, entregue),
+  cada um com o estado no ERP: `Não sincronizado`, `Sincronizando…`,
+  `Pedido <id>` (está no Bling, sem nota), `NF-e <n> não transmitida` (o caso
+  do §7 — laranja, porque parece resolvido e não está) ou `NF-e <n>` com o
+  link do DANFE. O seletor **Mostrar** filtra por *Pendentes no Bling*, *Sem
+  pedido de venda*, *Sem NF-e autorizada*, *Sem rastreio* ou *Todos*.
+  A fila é paginada (50 por página) e **o filtro olha só a página carregada** —
+  a própria tela avisa em que página está e quantos pedidos existem no total.
+- **Três botões por pedido**: **Sincronizar**, **Emitir NF-e** e **Buscar
+  rastreio**. Um clique tranca os três daquele pedido até a resposta chegar
+  (nada duplica por duplo clique), e a linha se atualiza sozinha com o que o
+  servidor devolveu. Quando o servidor recusa, **a frase dele aparece
+  inteira** — é o diagnóstico, não um "erro genérico": o SKU que falta, a
+  variável a ligar, o que fazer com a nota pendente. "Buscar rastreio" fica
+  desabilitado enquanto o pedido não tiver pedido de venda no Bling.
+
+**Pedidos → botão de detalhes (👁) de um pedido** — o mesmo bloco
+**"Bling (ERP e NF-e)"** dentro do modal, com a situação, o link do DANFE e os
+mesmos três botões. É onde a maioria dos problemas é percebida: o gestor abriu
+o pedido para conferir e viu que a nota não saiu.
+
+Ambas as telas exigem conta de **administrador** (é o mesmo `isAdmin` das
+rotas). Nada aqui é destrutivo: as três ações são idempotentes do lado do
+Bling.
 
 ---
 
@@ -62,8 +103,9 @@ O Bling usa OAuth 2.0 com autorização única no navegador:
 4. Da resposta, cole o `refresh_token` em `BLING_REFRESH_TOKEN` e ligue
    `BLING_ATIVO=true`. O `access_token` da resposta pode ser ignorado — o
    serviço renova sozinho.
-5. Confira em `GET /bling/status` (logado como admin): deve responder
-   `token: { ok: true }`.
+5. Confira no painel, em **`/dashboard/bling`** → cartão *Status da
+   integração*: **Token: ligado — renovando normalmente**. (É a leitura de
+   `GET /bling/status`, que também responde por `curl` com o token de admin.)
 
 ### O refresh token é ROTATIVO — leia isto antes de estranhar o .env
 
@@ -178,31 +220,40 @@ o erro do Bling, legível):
 1. No painel da loja, crie um produto de teste "Teste Bling" com SKU
    `teste-bling-1` e preço R$ 1,00 — e cadastre o MESMO SKU no Bling.
 2. Suba o backend com `BLING_ATIVO=true` (deixe `BLING_NFE_AUTO=false` no
-   primeiro teste) e confira `GET /bling/status` → `token: { ok: true }`.
+   primeiro teste) e confira em **`/dashboard/bling`** que *Integração*,
+   *Credenciais* e *Token* estão os três verdes.
 3. Faça um pedido real de R$ 1 no checkout (Pix) e pague.
 4. Quando o webhook aprovar, o log mostra
    `Bling: pedido <id> sincronizado (pedido de venda <n>)` e o pedido aparece
    em Vendas → Pedidos de venda no Bling, com o id do pedido da loja no campo
    **Nº no canal de venda** (`numeroLoja`).
-5. Emita a nota do teste manualmente: `POST /bling/pedidos/<id>/nfe` (pelo
-   painel). Confira `nfe_numero`/`nfe_chave`/`nfe_url` na resposta e o DANFE
-   no link. (Se preferir não emitir nota de teste, valide só a sincronização
-   e emita a primeira NF-e numa venda real.)
+5. Emita a nota do teste manualmente: em **`/dashboard/bling`**, ache o pedido
+   na fila e clique em **Emitir NF-e**. A linha passa a mostrar `NF-e <n>` com
+   o link **Abrir DANFE** — confira o documento no link. (Se preferir não
+   emitir nota de teste, valide só a sincronização e emita a primeira NF-e
+   numa venda real.)
 6. Preencha um código de rastreio qualquer no pedido de venda do Bling
-   (transporte → volumes) e rode `POST /bling/pedidos/<id>/rastreio`: o
-   pedido da loja vira `enviado`, com o código, e o e-mail sai.
+   (transporte → volumes) e clique em **Buscar rastreio** no painel: o pedido
+   da loja vira `enviado`, com o código na linha, e o e-mail sai.
 7. Cancele/estorne o pedido de teste no MP e no Bling, apague o produto de
    teste dos dois lados, e só então ligue `BLING_NFE_AUTO=true` /
    `BLING_RASTREIO_CRON=true` se quiser o fluxo 100% automático.
 
 ## 6. O que cada endpoint faz (todos exigem admin)
 
-| Endpoint | O que faz |
-|---|---|
-| `GET /bling/status` | Sonda: variáveis ligadas, credencial presente, token renovando (`token: { ok }`). Responde mesmo com `BLING_ATIVO=false` — é o endpoint que diagnostica o desligado. |
-| `POST /bling/pedidos/:id/sincronizar` | Cria o pedido de venda no Bling (idempotente: já sincronizado responde `jaSincronizado: true`). Erros legíveis: SKU ausente (400, nomeia o SKU), status não pago (409), falha do Bling (502 com a frase do Bling). |
-| `POST /bling/pedidos/:id/nfe` | Sincroniza antes se preciso; gera a NF-e do pedido de venda, transmite à SEFAZ e grava `nfe_numero`/`nfe_chave`/`nfe_url`. Configuração fiscal ausente → o erro do Bling volta legível, a nota fica pendente lá e a retentativa **retransmite a mesma** (§7). "Já emitida" só depois da chave de acesso. |
-| `POST /bling/pedidos/:id/rastreio` | Lê o pedido no Bling; com rastreio lá, grava o código, avança para `enviado` (quando cabível) e dispara o e-mail com o código. Sem rastreio ainda → `rastreio: null`, sem efeito. Pedido cancelado/rejeitado/reembolsado → 409, sem gravar nada. |
+Cada linha desta tabela é um botão do painel — a coluna do meio diz qual.
+
+| Endpoint | Botão no painel | O que faz |
+|---|---|---|
+| `GET /bling/status` | cartão *Status da integração* (e **Conferir de novo**) | Sonda: variáveis ligadas, credencial presente, token renovando (`token: { ok }`). Responde mesmo com `BLING_ATIVO=false` — é o endpoint que diagnostica o desligado. |
+| `POST /bling/pedidos/:id/sincronizar` | **Sincronizar** | Cria o pedido de venda no Bling (idempotente: já sincronizado responde `jaSincronizado: true`). Erros legíveis: SKU ausente (400, nomeia o SKU), status não pago (409), falha do Bling (502 com a frase do Bling). |
+| `POST /bling/pedidos/:id/nfe` | **Emitir NF-e** | Sincroniza antes se preciso; gera a NF-e do pedido de venda, transmite à SEFAZ e grava `nfe_numero`/`nfe_chave`/`nfe_url`. Configuração fiscal ausente → o erro do Bling volta legível, a nota fica pendente lá e a retentativa **retransmite a mesma** (§7). "Já emitida" só depois da chave de acesso. |
+| `POST /bling/pedidos/:id/rastreio` | **Buscar rastreio** | Lê o pedido no Bling; com rastreio lá, grava o código, avança para `enviado` (quando cabível) e dispara o e-mail com o código. Sem rastreio ainda → `rastreio: null`, sem efeito. Pedido cancelado/rejeitado/reembolsado → 409, sem gravar nada. |
+
+Os três botões aparecem tanto na fila de **`/dashboard/bling`** quanto no modal
+de detalhe de um pedido em **Pedidos**. Toda mensagem de recusa (503, 502, 422,
+409, 504) chega ao painel **com a frase do servidor**, que é onde está o
+diagnóstico.
 
 Gatilhos automáticos: aprovado → sincroniza (`BLING_ATIVO=true`);
 `BLING_NFE_AUTO=true` emenda a NF-e; `BLING_RASTREIO_CRON=true` consulta o
@@ -214,14 +265,17 @@ rastreio de hora em hora (minuto 30, pedidos dos últimos 60 dias).
   uso) ou foi usado fora deste processo (outra máquina/rodada local com o
   mesmo token: o rodízio invalida o daqui). Refaça a seção 2.
 - **`SKU "x" não está cadastrado no Bling`** → seção 3. O pedido segue
-  normal na loja; ressincronize depois de cadastrar.
+  normal na loja; depois de cadastrar o SKU lá, clique em **Sincronizar**
+  naquele pedido (fila de `/dashboard/bling`, filtro *Sem pedido de venda*).
 - **NF-e recusa com erro de natureza de operação/série/certificado** →
   seção 4; a mensagem do Bling vem inteira na resposta 502.
 - **"A nota foi GERADA no Bling mas NÃO transmitida"** → a emissão tem dois
   atos, e o segundo (a transmissão à SEFAZ) falhou — quase sempre por causa da
-  seção 4. A nota existe lá, **pendente**, e o pedido guarda o id dela: corrija
-  o que a mensagem apontou e **emita de novo pelo painel da loja** — a
-  retentativa RETRANSMITE a mesma nota, não gera outra. Se a retransmissão
+  seção 4. A nota existe lá, **pendente**, e o pedido guarda o id dela. No
+  painel esse pedido aparece em laranja como **"NF-e &lt;n&gt; não
+  transmitida"** (filtro *Sem NF-e autorizada*): corrija o que a mensagem
+  apontou e clique em **Emitir NF-e** de novo — a retentativa RETRANSMITE a
+  mesma nota, não gera outra. Se a retransmissão
   falhar de novo, a resposta diz *"nota gerada mas não transmitida —
   retransmita pelo painel do Bling"*: vá em **Vendas → Notas fiscais**, abra a
   nota pendente daquele pedido e clique em **Enviar** lá. Enquanto a nota não
@@ -229,10 +283,14 @@ rastreio de hora em hora (minuto 30, pedidos dos últimos 60 dias).
   a chave de acesso, que só existe depois da autorização da SEFAZ.
 - **`504` / "O Bling não respondeu"** → o Bling passou do teto de espera (15s
   por chamada) ou a sincronização inteira passou de 8 minutos e foi abortada de
-  propósito. Nada foi criado pela metade; clique de novo mais tarde.
+  propósito. Nada foi criado pela metade; clique no mesmo botão do painel de
+  novo mais tarde.
 - **"Pedido redigido pela LGPD não vai ao ERP" (422)** → o titular pediu a
   exclusão dos dados e o endereço/CPF daquele pedido foi apagado daqui
   (`docs/seguranca-dados-pessoais.md`). Não há o que sincronizar: se a nota
   precisa sair, emita-a no painel do Bling.
-- **Nada sincroniza e nada no log** → `BLING_ATIVO` não está `true` literal
-  (confira com `GET /bling/status`, campo `ativo`).
+- **Nada sincroniza e nada no log** → `BLING_ATIVO` não está `true` literal.
+  Confira em **`/dashboard/bling`**: com a integração desligada, o cartão de
+  status mostra *Integração: desligado* e o aviso azul com o que ligar (e os
+  três botões da fila ficam desabilitados, para não prometerem o que a rota
+  recusaria com 503).

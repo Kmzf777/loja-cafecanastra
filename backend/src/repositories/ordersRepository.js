@@ -180,6 +180,29 @@ class OrderRepository {
      *
      * O e-mail vem de `auth.users`: é o GoTrue quem o guarda desde a F2. O
      * pool conecta como dono do banco, que lê `auth` sem cerimônia.
+     *
+     * OS CAMPOS DO BLING (0012) ENTRAM AQUI, E SÓ AQUI. A tela de Bling do
+     * painel e o modal de detalhe de Pedidos leem a linha DESTA listagem —
+     * é ela que precisa dizer se o pedido já foi ao ERP, em que situação
+     * está lá e se a nota saiu. Sem isso, a fila do painel teria de fazer
+     * uma ida por pedido só para descobrir o que já está na mesma linha.
+     *
+     * Os nomes saem SEM alias de propósito: `bling_id`, `bling_situacao` e
+     * `nfe_*` são identificadores de OUTRO sistema — não têm tradução para
+     * o vocabulário da loja, e são exatamente as chaves que as rotas de
+     * `/bling` já devolvem no `pedido` da resposta (`COLUNAS_COM_BLING` em
+     * services/blingPedidos.js). Iguais dos dois lados, o painel mescla a
+     * resposta de uma ação na linha da lista sem mapa de conversão.
+     *
+     * `nfe_id` e `bling_claim_em` ficam de fora: são mecânica interna da
+     * retentativa e do claim de idempotência, não informação de gestão —
+     * quem os lê é o serviço, que consulta a tabela direto.
+     *
+     * `COLUNAS_DO_CONTRATO` (o detalhe de `/my-orders/:id` e o que o
+     * checkout devolve) NÃO ganhou os campos: aquele contrato é do CLIENTE,
+     * e nada na vitrine mostra ERP. Um dia que a vitrine queira exibir o
+     * DANFE ao comprador, entra lá — como decisão de produto, não como
+     * efeito colateral desta tela.
      */
     const { rows } = await pool.query(
       `SELECT
@@ -195,6 +218,12 @@ class OrderRepository {
          p.codigo_rastreio  AS tracking_code,
          p.cupom_codigo     AS coupon_code,
          p.desconto         AS discount,
+         p.bling_id,
+         p.bling_situacao,
+         p.bling_sincronizado_em,
+         p.nfe_numero,
+         p.nfe_chave,
+         p.nfe_url,
          COALESCE(c.nome, 'Cliente removido') AS user_name,
          COALESCE(u.email, '—')               AS user_email,
          c.cpf                                AS user_cpf

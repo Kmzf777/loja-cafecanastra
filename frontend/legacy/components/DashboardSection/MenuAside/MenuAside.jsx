@@ -12,6 +12,7 @@ import {
   TicketPercent,
   Star,
   Repeat,
+  FileText,
 } from "lucide-react";
 import PropTypes from "prop-types";
 import { useEffect } from "react";
@@ -66,6 +67,16 @@ function MenuAside({ isOpen }) {
           <Link className="link" to={"/dashboard/assinaturas"}>
             <Repeat size={18} />
             <li>Assinaturas do Clube</li>
+          </Link>
+
+          {/* Bling fica em "Gestão de pedidos" e não numa seção própria: o
+              gestor chega aqui vindo de um PEDIDO ("a nota daquela venda não
+              saiu"), não de uma vontade de administrar uma integração. Ícone
+              de documento porque o que se resolve nesta tela, no dia a dia, é
+              nota fiscal. */}
+          <Link className="link" to={"/dashboard/bling"}>
+            <FileText size={18} />
+            <li>Bling: NF-e e rastreio</li>
           </Link>
         </DivMenu>
 

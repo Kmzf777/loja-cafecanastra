@@ -33,6 +33,13 @@ import {
 } from "../Clients/RegisteredClients/RegisteredClients.style";
 import authContext from "../../../contexts/loginContext/createAuthContext";
 import Loading from "../../Loading/Loading";
+import {
+  ACOES_BLING,
+  estadoDoBling,
+  mesclarPedido,
+  pedidoPodeIrAoBling,
+} from "../Bling/blingContrato";
+import { useBlingAcoes } from "../Bling/useBlingAcoes";
 
 /**
  * CÓPIA LOCAL do vocabulário de status — a fonte é
@@ -197,6 +204,36 @@ function Orders() {
   useEffect(() => {
     fetchOrders();
   }, [fetchOrders]);
+
+  /**
+   * BLING NO MODAL DE DETALHE — porque é AQUI que o gestor está quando
+   * percebe o problema.
+   *
+   * A tela dedicada (`/dashboard/bling`) é para trabalhar a fila; esta é para
+   * o momento em que ele abriu um pedido para conferir e viu que a nota não
+   * saiu. Mandá-lo trocar de tela e reencontrar o pedido pelos últimos seis
+   * dígitos seria transformar um clique em uma busca.
+   *
+   * As três chamadas NÃO estão duplicadas: `useBlingAcoes` é o mesmo hook das
+   * duas telas — trava de duplo clique, carregamento por linha e a frase do
+   * servidor repassada inteira vêm de um lugar só.
+   */
+  const aoAtualizarPedidoDoBling = useCallback((orderId, pedido) => {
+    setOrders((atuais) =>
+      atuais.map((o) => (o.order_id === orderId ? mesclarPedido(o, pedido) : o)),
+    );
+    // O modal guarda uma CÓPIA da linha (`setSelectedOrder(order)`), então
+    // atualizar só a lista deixaria o que está na frente dos olhos velho.
+    setSelectedOrder((atual) =>
+      atual && atual.order_id === orderId ? mesclarPedido(atual, pedido) : atual,
+    );
+  }, []);
+
+  const { acaoEmAndamento, acionar: acionarBling } = useBlingAcoes({
+    authFetch,
+    aoAtualizarPedido: aoAtualizarPedidoDoBling,
+    aoFalhar: setErro,
+  });
 
   const handlePageChange = (newPage) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -378,6 +415,14 @@ function Orders() {
       ))}
     </select>
   );
+
+  // Derivados do pedido aberto no modal — calculados aqui para o JSX lá
+  // embaixo ficar sem lógica (o resto do arquivo segue a mesma regra).
+  const estadoBling = selectedOrder ? estadoDoBling(selectedOrder) : null;
+  const acaoBlingEmAndamento = selectedOrder
+    ? acaoEmAndamento(selectedOrder.order_id)
+    : null;
+  const selecionadoVaiAoBling = pedidoPodeIrAoBling(selectedOrder);
 
   if (loading) return <Loading />;
 
@@ -832,6 +877,102 @@ function Orders() {
                 </p>
               )}
             </div>
+          </div>
+
+          {/* BLING / NF-e — a situação no ERP e as três ações, no lugar onde
+              o gestor descobre que algo ficou para trás. A tela cheia da fila
+              é /dashboard/bling. */}
+          <div
+            style={{
+              borderTop: "1px solid #eee",
+              paddingTop: "10px",
+              marginBottom: "20px",
+            }}
+          >
+            <h4 style={{ fontSize: "0.9rem", color: "#666", margin: 0 }}>
+              Bling (ERP e NF-e)
+            </h4>
+            <p
+              style={{
+                margin: "6px 0 0",
+                color: estadoBling.cor,
+                fontWeight: "bold",
+              }}
+            >
+              {estadoBling.rotulo}
+            </p>
+            <p style={{ margin: "2px 0 0", fontSize: "0.85rem", color: "#666" }}>
+              {estadoBling.detalhe}
+            </p>
+
+            {selectedOrder.nfe_url && (
+              <p style={{ margin: "6px 0 0", fontSize: "0.85rem" }}>
+                <a
+                  href={selectedOrder.nfe_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#1976d2" }}
+                >
+                  Abrir DANFE
+                  {selectedOrder.nfe_numero
+                    ? ` da NF-e ${selectedOrder.nfe_numero}`
+                    : ""}
+                </a>
+              </p>
+            )}
+
+            {selecionadoVaiAoBling ? (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "8px",
+                  marginTop: "10px",
+                }}
+              >
+                {ACOES_BLING.map((acao) => {
+                  const semPedidoDeVenda =
+                    acao.precisaDeSincronia && !selectedOrder.bling_id;
+                  const travado =
+                    Boolean(acaoBlingEmAndamento) || semPedidoDeVenda;
+                  return (
+                    <button
+                      key={acao.chave}
+                      type="button"
+                      // Uma ação em voo tranca as três: as três mexem na
+                      // mesma linha do pedido.
+                      disabled={travado}
+                      title={
+                        semPedidoDeVenda
+                          ? "Sincronize o pedido com o Bling primeiro."
+                          : acao.titulo
+                      }
+                      onClick={() => acionarBling(selectedOrder.order_id, acao.chave)}
+                      style={{
+                        padding: "8px 14px",
+                        background: travado ? "#eee" : "#e5e7eb",
+                        color: travado ? "#999" : "#333",
+                        border: "none",
+                        borderRadius: 4,
+                        fontWeight: 500,
+                        cursor: travado ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {acaoBlingEmAndamento === acao.chave
+                        ? acao.rotuloOcupado
+                        : acao.rotulo}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p
+                style={{ margin: "8px 0 0", fontSize: "0.85rem", color: "#888" }}
+              >
+                Só pedidos pagos (aprovado, enviado, entregue) vão ao ERP —
+                venda não confirmada não vira pedido de venda nem nota.
+              </p>
+            )}
           </div>
 
           <h4
