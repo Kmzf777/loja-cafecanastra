@@ -178,23 +178,48 @@ test("o que 0005 abre para anon: promocoes e config, nunca pedidos", async () =>
   // da barra de aviso (`config_loja`) e das promocoes ativas, entao essas duas
   // levam GRANT explicito. `pedidos` guarda endereco e itens comprados de cada
   // cliente e fica fora — se um dia aparecer aqui, e este teste que grita.
+  //
+  // `config_loja` MUDOU DE FORMA EM 0012, e este teste mudou junto, de
+  // proposito: a coluna `bling_refresh_token` (credencial do ERP) fez a tabela
+  // trocar o GRANT de TABELA pelo GRANT de COLUNA — o mesmo desenho do `custo`
+  // em `produtos` (0006). Por isso `anon_le` (privilegio de tabela) agora e
+  // FALSE e quem diz que a vitrine continua lendo e `anon_le_colunas`: as
+  // colunas publicas seguem abertas, so o segredo fica de fora (conferido
+  // coluna a coluna logo abaixo).
   const { rows } = await bd.pool.query(`
     SELECT
       t.tabela,
       has_table_privilege('anon', 'canastra.' || t.tabela, 'SELECT') AS anon_le,
+      has_any_column_privilege('anon', 'canastra.' || t.tabela, 'SELECT') AS anon_le_colunas,
       has_table_privilege('anon', 'canastra.' || t.tabela, 'UPDATE') AS anon_escreve
     FROM (VALUES ('pedidos'), ('promocoes'), ('config_loja')) AS t(tabela)
     ORDER BY t.tabela
   `);
 
   assert.deepEqual(rows, [
-    { tabela: "config_loja", anon_le: true, anon_escreve: false },
-    { tabela: "pedidos", anon_le: false, anon_escreve: false },
-    { tabela: "promocoes", anon_le: true, anon_escreve: false },
+    { tabela: "config_loja", anon_le: false, anon_le_colunas: true, anon_escreve: false },
+    { tabela: "pedidos", anon_le: false, anon_le_colunas: false, anon_escreve: false },
+    { tabela: "promocoes", anon_le: true, anon_le_colunas: true, anon_escreve: false },
   ]);
+
+  // A outra metade da trava de 0012: o que a vitrine PRECISA continua saindo,
+  // e a credencial do Bling nao sai por papel nenhum do PostgREST.
+  const { rows: colunas } = await bd.pool.query(`
+    SELECT
+      has_column_privilege('anon', 'canastra.config_loja', 'titulo_site', 'SELECT') AS titulo_anon,
+      has_column_privilege('anon', 'canastra.config_loja', 'frete_gratis_minimo_centavos', 'SELECT') AS frete_anon,
+      has_column_privilege('anon', 'canastra.config_loja', 'bling_refresh_token', 'SELECT') AS segredo_anon,
+      has_column_privilege('authenticated', 'canastra.config_loja', 'bling_refresh_token', 'SELECT') AS segredo_auth
+  `);
+  assert.deepEqual(colunas[0], {
+    titulo_anon: true,
+    frete_anon: true,
+    segredo_anon: false,
+    segredo_auth: false,
+  });
 });
 
-test("a escrita de promocoes e config voltou para authenticated; a de `pedidos` e por COLUNA", async () => {
+test("a escrita de promocoes e config voltou para authenticated; pedidos E config_loja sao por COLUNA", async () => {
   // ESTE TESTE MUDOU DE LADO EM 0006, gemeo do de catalogo.test.js e pelo mesmo
   // motivo. 0005 revogou a escrita de `authenticated` em `promocoes` e
   // `config_loja` porque, sem politica nenhuma, uma politica ampla demais
@@ -203,14 +228,22 @@ test("a escrita de promocoes e config voltou para authenticated; a de `pedidos` 
   // com o Supabase, e admin autentica como `authenticated` igual a todo mundo.
   // Quem prova que a troca foi paga e test/rls.test.js.
   //
-  // `pedidos` ENTRA NA LISTA AGORA, e por uma razao que nao existia antes: e a
-  // unica tabela do schema com privilegio de COLUNA. A politica de RLS autoriza
+  // `pedidos` ENTRA NA LISTA AGORA, e por uma razao que nao existia antes: era
+  // a unica tabela do schema com privilegio de COLUNA. A politica de RLS autoriza
   // a admin a mexer NA LINHA do pedido, mas nao sabe dizer quais colunas — e
   // reescrever `total` ou `itens` de uma venda paga e exatamente o achado de
   // auditoria que esta fase fecha. Entao 0006 tira o UPDATE de tabela e devolve
   // so `status`, `codigo_rastreio`, `metodo_envio` e `atualizado_em`. E por isso
   // que `altera` e false e `altera_colunas` e true: as duas linhas juntas SAO a
   // trava, e uma sozinha nao diz nada.
+  //
+  // `config_loja` FEZ A MESMA TROCA EM 0012 ("era a unica" ficou no passado):
+  // a coluna `bling_refresh_token` e credencial de servico, e o pacote de
+  // tabela de 0006 (INSERT/UPDATE/SELECT) alcancaria a coluna nova inteira.
+  // 0012 desce os tres para lista de colunas — todas MENOS o segredo — entao
+  // as tres colunas de tabela viram false e `altera_colunas` segue true. O
+  // DELETE continua de tabela (nao ha coluna a esconder num DELETE, e a RLS
+  // `eh_admin()` continua decidindo a linha).
   const { rows } = await bd.pool.query(`
     SELECT
       t.tabela,
@@ -225,10 +258,10 @@ test("a escrita de promocoes e config voltou para authenticated; a de `pedidos` 
   assert.deepEqual(rows, [
     {
       tabela: "config_loja",
-      insere: true,
-      altera: true,
+      insere: false,
+      altera: false,
       altera_colunas: true,
-      le: true,
+      le: false,
     },
     {
       // `insere: false` por DUAS razoes independentes, e e de proposito que sejam
@@ -266,4 +299,15 @@ test("a escrita de promocoes e config voltou para authenticated; a de `pedidos` 
     [],
     "estas colunas de pedidos nao podem ser alteraveis por authenticated",
   );
+
+  // E a metade de 0012 em config_loja: o painel segue salvando o que sempre
+  // salvou (titulo, aviso, frete gratis), e o segredo do Bling fica fora do
+  // UPDATE tambem — quem o escreve e SO o servico Node, como dono do banco.
+  const { rows: configColunas } = await bd.pool.query(`
+    SELECT
+      has_column_privilege('authenticated', 'canastra.config_loja', 'titulo_site', 'UPDATE') AS titulo,
+      has_column_privilege('authenticated', 'canastra.config_loja', 'frete_gratis_minimo_centavos', 'UPDATE') AS frete,
+      has_column_privilege('authenticated', 'canastra.config_loja', 'bling_refresh_token', 'UPDATE') AS segredo
+  `);
+  assert.deepEqual(configColunas[0], { titulo: true, frete: true, segredo: false });
 });
