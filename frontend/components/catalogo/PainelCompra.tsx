@@ -9,7 +9,7 @@ import {
   formatarPreco,
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
-import { Botao } from "@/components/ui/Botao";
+import { Botao, BotaoLink } from "@/components/ui/Botao";
 import { useSacola } from "@/lib/sacola/sacola";
 import { eventoAddToCart } from "@/lib/analytics";
 
@@ -51,9 +51,6 @@ export function PainelCompra({ lote }: { lote: Lote }) {
   const [peso, setPeso] = useState<PesoGramas>(inicial?.pesoGramas ?? 250);
   const [pacotes, setPacotes] = useState<number>(inicial?.pacotes ?? 1);
   const [assinando, setAssinando] = useState(false);
-  const [frequencia, setFrequencia] = useState(
-    lote.assinatura?.frequenciasDias[1] ?? 30,
-  );
   const [quantidade, setQuantidade] = useState(1);
 
   const { adicionar } = useSacola();
@@ -227,31 +224,18 @@ export function PainelCompra({ lote }: { lote: Lote }) {
         </p>
       )}
 
+      {/* Até a Onda 3J esta aba FINGIA a compra: mostrava o preço com -10% e
+          um seletor de frequência, mas o "Adicionar" cobrava o preço cheio de
+          uma compra avulsa — exatamente o tipo de botão-que-mente que este
+          projeto veio consertar. Agora a aba é a PORTA do Clube real: o botão
+          leva ao wizard de /clube (que pré-seleciona café e moagem pela
+          query) e é lá que frequência, endereço e a autorização no Mercado
+          Pago acontecem. */}
       {assinando && lote.assinatura ? (
-        <fieldset className="mt-4 border border-fuligem-20 p-4">
-          <legend className="px-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
-            A cada
-          </legend>
-          <div className="flex flex-wrap gap-2">
-            {lote.assinatura.frequenciasDias.map((dias) => (
-              <button
-                key={dias}
-                onClick={() => setFrequencia(dias)}
-                aria-pressed={frequencia === dias}
-                className={`border px-3 py-2 font-dado text-[13px] transition-colors ${
-                  frequencia === dias
-                    ? "border-fuligem bg-fuligem text-cal"
-                    : "border-fuligem-20 hover:border-fuligem"
-                }`}
-              >
-                {dias} dias
-              </button>
-            ))}
-          </div>
-          <p className="mt-3 text-[13px] text-fuligem-55">
-            Cancele quando quiser, sem multa.
-          </p>
-        </fieldset>
+        <p className="mt-4 border border-fuligem-20 p-4 text-[14px] leading-relaxed text-fuligem-80">
+          A cada 15, 30 ou 45 dias, com a entrega incluída. Você escolhe a
+          frequência no Clube e cancela quando quiser, sem multa.
+        </p>
       ) : null}
 
       {/* ── §5.5 Moagem ────────────────────────────────────────────────────── */}
@@ -339,6 +323,19 @@ export function PainelCompra({ lote }: { lote: Lote }) {
       ) : null}
 
       {/* ── Quantidade e CTA ───────────────────────────────────────────────── */}
+      {/* No modo assinatura não há sacola: quantidade, frequência e endereço
+          são do wizard. O link carrega café e moagem já escolhidos aqui. */}
+      {assinando ? (
+        <div ref={ctaRef} className="mt-8">
+          <BotaoLink
+            href={`/clube?cafe=${lote.slug}&moagem=${moagem}`}
+            variante="primario"
+            className="w-full"
+          >
+            Montar minha assinatura
+          </BotaoLink>
+        </div>
+      ) : (
       <div ref={ctaRef} className="mt-8 flex flex-wrap items-stretch gap-3">
         <div className="flex items-center border border-fuligem-20">
           <button
@@ -377,6 +374,7 @@ export function PainelCompra({ lote }: { lote: Lote }) {
               : "Adicionar à sacola"}
         </Botao>
       </div>
+      )}
 
       {/* aria-live: quem usa leitor de tela precisa ouvir que o item entrou —
           a mudança do rótulo do botão sozinha não é anunciada. */}
@@ -425,15 +423,26 @@ export function PainelCompra({ lote }: { lote: Lote }) {
               {formatarPreco(preco)}
             </p>
           </div>
-          <Botao
-            variante="primario"
-            disabled={indisponivel}
-            onClick={aoAdicionar}
-            tabIndex={ctaVisivel ? -1 : undefined}
-            className="shrink-0 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
-          >
-            {indisponivel ? "Esgotado" : adicionado ? "✓" : "Adicionar"}
-          </Botao>
+          {assinando ? (
+            <BotaoLink
+              href={`/clube?cafe=${lote.slug}&moagem=${moagem}`}
+              variante="primario"
+              tabIndex={ctaVisivel ? -1 : undefined}
+              className="shrink-0"
+            >
+              Assinar
+            </BotaoLink>
+          ) : (
+            <Botao
+              variante="primario"
+              disabled={indisponivel}
+              onClick={aoAdicionar}
+              tabIndex={ctaVisivel ? -1 : undefined}
+              className="shrink-0 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
+            >
+              {indisponivel ? "Esgotado" : adicionado ? "✓" : "Adicionar"}
+            </Botao>
+          )}
         </div>
       </div>
     </div>

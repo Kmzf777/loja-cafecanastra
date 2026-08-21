@@ -143,6 +143,63 @@ async function sendAdminNewOrderEmail(order) {
 }
 
 /**
+ * O AVISO QUE PEDE DECISÃO: uma cobrança do Clube virou pedido SEM o café ter
+ * saído da prateleira (estoque insuficiente na hora do débito, ou o SKU saiu
+ * do catálogo). O dinheiro já saiu do cliente e o pedido nasce 'aprovado' —
+ * então o e-mail rotineiro de "Novo Pedido Recebido" seria indistinguível de
+ * um pedido com o café separado, que é exatamente como o rombo passava
+ * despercebido. Assunto próprio, SKU e quantidade no corpo, e as duas saídas
+ * possíveis ditas com todas as letras: torrar/separar, ou estornar no MP.
+ *
+ * Engole erro como os outros senders do arquivo: a cobrança já aconteceu e o
+ * pedido já está gravado — o provedor de e-mail fora não pode virar retry do
+ * webhook do Mercado Pago. O rombo, de qualquer forma, já está gritado no log
+ * do ClubeController.
+ */
+async function sendAdminClubeSemEstoqueEmail({ pedido, sku, quantidade, motivo }) {
+  try {
+    const numero = String(pedido?.order_id || "").slice(0, 8);
+    const subject = `⚠️ Clube: cobrança sem estoque — pedido #${numero} precisa de decisão`;
+
+    await resend.emails.send({
+      from: REMETENTE.sistema,
+      to: [EMAIL_ADMIN],
+      subject,
+      html: `
+        <div style="font-family: Arial, sans-serif; color: #333;">
+          <h2 style="color: #b71c1c;">Cobrança do Clube sem café separado</h2>
+          <p>
+            Uma cobrança recorrente do Clube da Canastra foi debitada e virou
+            pedido, mas o estoque <strong>não</strong> foi baixado. O pedido
+            existe (o dinheiro já saiu do cliente) e está esperando uma decisão
+            sua.
+          </p>
+          <hr/>
+          <p><strong>Pedido:</strong> ${escaparHtml(String(pedido?.order_id || "—"))}</p>
+          <p><strong>SKU:</strong> ${escaparHtml(String(sku || "—"))}</p>
+          <p><strong>Quantidade do envio:</strong> ${Number(quantidade) || 0}</p>
+          <p><strong>Motivo:</strong> ${escaparHtml(String(motivo || "Baixa de estoque não aplicada."))}</p>
+          <hr/>
+          <p>
+            Duas saídas: <strong>separar/torrar o café</strong> e acertar o
+            estoque no painel, ou <strong>estornar a cobrança</strong> no painel
+            do Mercado Pago (o pedido então volta a 'reembolsado' pelo webhook).
+          </p>
+          <a href="${URL_LOJA}/dashboard/orders" style="background-color: #000; color: #fff; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
+            Abrir o painel de pedidos
+          </a>
+        </div>
+      `,
+    });
+    console.log(
+      `📧 Alerta do Clube (cobrança sem estoque) enviado para o Admin (${EMAIL_ADMIN}).`,
+    );
+  } catch (err) {
+    console.error("Erro na API Resend (alerta do Clube):", err);
+  }
+}
+
+/**
  * O corpo do lembrete de carrinho abandonado, PURO — separado do envio para o
  * teste afirmar assunto e conteúdo sem tocar o Resend.
  *
@@ -219,6 +276,7 @@ async function sendCartReminderEmail({ email, nome, itens }) {
 module.exports = {
   sendStatusEmail,
   sendAdminNewOrderEmail,
+  sendAdminClubeSemEstoqueEmail,
   sendCartReminderEmail,
   conteudoDoLembreteDeCarrinho,
 };

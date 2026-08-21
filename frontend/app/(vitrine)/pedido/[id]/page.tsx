@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { BotaoLink } from "@/components/ui/Botao";
+import { AvaliarPedido } from "@/components/conta/AvaliarPedido";
 import { API_BASE, recuperarSessao, type Sessao } from "@/lib/conta/sessao";
 import { formatarPreco } from "@/lib/catalogo/repositorio";
 
@@ -298,6 +299,19 @@ export default function PaginaPedido() {
           </a>{" "}
           <span className="text-fuligem-55">(abre nos Correios)</span>
         </p>
+      ) : null}
+
+      {/* ── Avaliar (só depois da ENTREGA — a mesma regra da RLS de 0014;
+             antes disso o formulário só colheria um 42501) ─────────────── */}
+      {pedido.status === "entregue" ? (
+        <AvaliarPedido
+          itens={pedido.items
+            .filter((item) => typeof item.product_id === "string" && item.product_id)
+            .map((item) => ({
+              productId: String(item.product_id),
+              nome: texto(item.name) || "Item do pedido",
+            }))}
+        />
       ) : null}
 
       <div className="mt-12 grid gap-12 lg:grid-cols-[1fr_360px]">

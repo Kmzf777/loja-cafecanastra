@@ -10,7 +10,13 @@ const {
   GRUPO_CANCELADO,
   traduzirStatusMp,
 } = require("../utils/statusDePedido");
-const { ordenarPorProduto } = require("../utils/estoque");
+const {
+  ordenarPorProduto,
+  lerItensDoPedido,
+  aplicarTransicaoDeEstoque,
+  DEVOLVEU,
+  REBAIXOU,
+} = require("../utils/estoque");
 // `precoComPromocao` morou aqui até a F6; foi para utils/preco.js quando o
 // POST /cupons/validar virou o terceiro chamador — o histórico e o porquê
 // estão no próprio módulo.
@@ -22,6 +28,10 @@ const {
   sendStatusEmail,
   sendAdminNewOrderEmail,
 } = require("../utils/emailSender");
+// Bling (onda 3G): o gatilho `aoAprovarPedido` é quem decide se age — ele
+// mesmo confere BLING_ATIVO e roda fora da resposta, com catch (o padrão dos
+// e-mails). Daqui só sai a CHAMADA, sempre depois do commit.
+const blingPedidos = require("../services/blingPedidos");
 
 /** Tolerancia de centavo ao comparar o frete recalculado com o enviado. */
 const TOLERANCIA_FRETE = 0.01;
@@ -869,6 +879,17 @@ class PaymentController {
         await limparCarrinho();
       }
 
+      /**
+       * BLING (3G): o pagamento APROVADO na resposta sincrona vai ao ERP.
+       * Nao bloqueante e depois de todo commit — uma falha do Bling vira log
+       * e `bling_id` nulo, nunca erro num pagamento que ja aconteceu; o
+       * painel ressincroniza (POST /bling/pedidos/:id/sincronizar). Quando o
+       * webhook vence a corrida (statusAplicado null), o gatilho e DELE.
+       */
+      if (statusAplicado === "aprovado") {
+        blingPedidos.aoAprovarPedido(newOrder.order_id);
+      }
+
       // E-mail e efeito colateral: se o provedor estiver fora, o pedido esta
       // pago e gravado do mesmo jeito e a resposta nao pode virar erro.
       Promise.allSettled([
@@ -1007,34 +1028,26 @@ class PaymentController {
       }
 
       if (pedido.status !== statusPt) {
-        const eraAtivo = GRUPO_ATIVO.includes(pedido.status);
-        const ficouCancelado = GRUPO_CANCELADO.includes(statusPt);
-        const eraCancelado = GRUPO_CANCELADO.includes(pedido.status);
-        const ficouAtivo = GRUPO_ATIVO.includes(statusPt);
+        const items = lerItensDoPedido(pedido.items, "Webhook");
 
-        let items = pedido.items;
-        if (typeof items === "string") {
-          try {
-            items = JSON.parse(items);
-          } catch (e) {
-            console.error("Webhook: itens do pedido ilegíveis:", e);
-            items = [];
-          }
-        }
+        /**
+         * A MOVIMENTAÇÃO em si mora em utils/estoque.js desde a revisão da
+         * 3J: era um bloco copiado aqui e no webhook do Clube, e um status
+         * novo em GRUPO_* obrigava a acertar os dois. O helper decide a
+         * travessia (ativo↔cancelado), itera em ordem canônica — um webhook e
+         * um checkout tocando os mesmos produtos em ordens opostas seria
+         * deadlock 40P01 — e diz o que fez. O que sobra AQUI é o que é só
+         * deste webhook: o uso do cupom.
+         */
+        const movimento = await aplicarTransicaoDeEstoque(
+          client,
+          items,
+          pedido.status,
+          statusPt,
+        );
 
-        // Ordem canonica nas travas de estoque (ver utils/estoque.js): um
-        // webhook e um checkout tocando os mesmos produtos em ordens opostas
-        // seria deadlock 40P01.
-        if (eraAtivo && ficouCancelado && Array.isArray(items)) {
-          console.log(`🔄 Devolvendo estoque do pedido ${pedido.order_id}...`);
-          for (const item of ordenarPorProduto(items)) {
-            await client.query(
-              `UPDATE canastra.produtos
-                  SET quantidade = quantidade + $1
-                WHERE produto_id = $2`,
-              [Number(item.quantity), item.product_id],
-            );
-          }
+        if (movimento === DEVOLVEU) {
+          console.log(`🔄 Estoque devolvido do pedido ${pedido.order_id}.`);
 
           /**
            * O USO DO CUPOM VOLTA JUNTO COM O ESTOQUE, na mesma transacao: a
@@ -1073,20 +1086,11 @@ class PaymentController {
               );
             }
           }
-        } else if (eraCancelado && ficouAtivo && Array.isArray(items)) {
-          // O caminho de volta (um rejeitado que o MP reprocessa e aprova):
-          // o estoque que a devolucao repos sai de novo. GREATEST(0, ...)
-          // porque a prateleira pode ja ter vendido a unidade nesse meio
-          // tempo — estoque negativo mentiria pior que zero.
-          console.log(`🔄 Rebaixando estoque do pedido ${pedido.order_id}...`);
-          for (const item of ordenarPorProduto(items)) {
-            await client.query(
-              `UPDATE canastra.produtos
-                  SET quantidade = GREATEST(0, quantidade - $1)
-                WHERE produto_id = $2`,
-              [Number(item.quantity), item.product_id],
-            );
-          }
+        } else if (movimento === REBAIXOU) {
+          // O caminho de volta (um rejeitado que o MP reprocessa e aprova): o
+          // estoque que a devolucao repos saiu de novo (com GREATEST(0, ...),
+          // ver utils/estoque.js).
+          console.log(`🔄 Estoque rebaixado de novo no pedido ${pedido.order_id}.`);
 
           /**
            * O caminho de volta NAO re-reserva o uso do cupom, de proposito.
@@ -1133,6 +1137,17 @@ class PaymentController {
       sendStatusEmail(pedido, statusPt).catch((e) =>
         console.error("Falha ao enviar e-mail de status:", e.message),
       );
+      /**
+       * BLING (3G): pedido que ENTROU em 'aprovado' pelo webhook vai ao ERP.
+       * So quando `mudou` — o reenvio do MP com o mesmo status nao entra aqui,
+       * entao o gatilho dispara UMA vez por transicao (e `sincronizarPedido` e
+       * idempotente por `bling_id` de qualquer forma). Depois do COMMIT e fora
+       * da resposta: falha do Bling e log + campo nulo, nunca 500 — um 500
+       * aqui poria o MP em retry de uma transicao ja aplicada.
+       */
+      if (statusPt === "aprovado") {
+        blingPedidos.aoAprovarPedido(pedido.order_id);
+      }
       console.log(`✅ Pedido ${pedido.order_id} atualizado para: ${statusPt}`);
     }
 

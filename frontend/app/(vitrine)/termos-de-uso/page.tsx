@@ -58,18 +58,39 @@ export default function TermosDeUso() {
         </li>
       </ul>
 
-      {/* Honestidade primeiro: o Clube de assinatura ainda não foi lançado
-          (é onda futura do projeto). Prometer regras de cancelamento de um
-          serviço que não existe seria o mesmo defeito do botão que não faz
-          nada. Quando o Clube abrir, esta seção volta com as regras reais. */}
-      <h2>Assinatura</h2>
+      {/* O Clube abriu na Onda 3J e esta seção descreve as regras REAIS.
+          Texto pleno, sem condicional de env (diferente do cartão logo
+          acima): o wizard de /clube e o backend existem em todo build — o que
+          depende de credencial é o Mercado Pago aceitar a criação da
+          assinatura, e nesse caso a própria tela recusa com erro claro na
+          hora, antes de qualquer promessa virar cobrança. Termos condicionais
+          a segredo de servidor não seriam verificáveis por quem os lê. */}
+      <h2>Assinatura — Clube da Canastra</h2>
       <p>
-        Hoje toda compra no site é <strong>compra única</strong> — o Clube de
-        assinatura ainda não está disponível. Quando abrir, estes termos serão
-        atualizados com as regras de cobrança recorrente e cancelamento, e a
-        assinatura poderá ser cancelada a qualquer momento, sem multa e sem
-        carência.
+        O Clube da Canastra é uma assinatura com <strong>cobrança
+        recorrente</strong> processada pelo Mercado Pago: você autoriza uma
+        única vez, na página do próprio Mercado Pago, e o valor de cada envio é
+        debitado automaticamente na frequência escolhida (a cada 15, 30 ou 45
+        dias).
       </p>
+      <ul>
+        <li>
+          O preço de cada envio é o do café no momento da adesão, com 10% de
+          desconto e a entrega incluída — e fica <strong>travado</strong>:
+          reajustes futuros de catálogo não alteram assinaturas já ativas.
+        </li>
+        <li>
+          Você pode <strong>cancelar a qualquer momento</strong>, sem multa e
+          sem carência, na sua conta (Minha conta → Minha assinatura). O
+          cancelamento interrompe as próximas cobranças na hora; envios já
+          cobrados são entregues normalmente.
+        </li>
+        <li>
+          Cada cobrança confirmada gera um pedido com os mesmos prazos de
+          torra e envio das compras avulsas: torramos na terça, enviamos na
+          quarta.
+        </li>
+      </ul>
 
       <h2>Contato</h2>
       <p>

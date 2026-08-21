@@ -11,6 +11,12 @@ import {
   type Sessao,
 } from "@/lib/conta/sessao";
 import { formatarPreco } from "@/lib/catalogo/repositorio";
+import {
+  STATUS_DA_ASSINATURA,
+  cancelarAssinatura,
+  listarAssinaturas,
+  type AssinaturaDaConta,
+} from "@/lib/clube";
 
 /**
  * Área da conta.
@@ -63,6 +69,20 @@ export default function PaginaConta() {
   const [pedidos, setPedidos] = useState<Pedido[] | null>(null);
   const [carregando, setCarregando] = useState(true);
 
+  // Clube (Onda 3J): as assinaturas do dono, e o retorno do Mercado Pago.
+  const [assinaturas, setAssinaturas] = useState<AssinaturaDaConta[] | null>(null);
+  const [cancelando, setCancelando] = useState<string | null>(null);
+  const [erroDoClube, setErroDoClube] = useState<string | null>(null);
+  const [voltouDoMp, setVoltouDoMp] = useState(false);
+
+  // `?assinatura=confirmada` é o back_url do preapproval — a pessoa acabou de
+  // autorizar a cobrança no MP. Lido do location (e não de useSearchParams)
+  // para não exigir Suspense numa página client-only.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("assinatura") === "confirmada") setVoltouDoMp(true);
+  }, []);
+
   useEffect(() => {
     let vivo = true;
     recuperarSessao().then((s) => {
@@ -94,6 +114,50 @@ export default function PaginaConta() {
       vivo = false;
     };
   }, [sessao]);
+
+  useEffect(() => {
+    if (!sessao) return;
+    let vivo = true;
+    listarAssinaturas(sessao.accessToken)
+      .then((lista) => vivo && setAssinaturas(lista))
+      // Lista vazia, não tela quebrada — mesma postura do histórico de pedidos.
+      .catch(() => vivo && setAssinaturas([]));
+    return () => {
+      vivo = false;
+    };
+  }, [sessao]);
+
+  const aoCancelarAssinatura = useCallback(
+    async (assinatura: AssinaturaDaConta) => {
+      if (!sessao) return;
+      /**
+       * Confirmação explícita, com a MESMA frase dos termos de uso e do aviso
+       * abaixo da lista. Não é preciosismo de copy: a versão anterior dizia
+       * que "os envios param", e os termos prometem que um envio já cobrado é
+       * entregue — duas promessas diferentes sobre a mesma ação, e a que o
+       * cliente lê na hora de decidir era a errada.
+       */
+      const confirmou = window.confirm(
+        `Cancelar a assinatura de ${assinatura.nome_cafe}? Cancelar interrompe ` +
+          "as próximas cobranças na hora; um envio já cobrado é entregue " +
+          "normalmente. Sem multa.",
+      );
+      if (!confirmou) return;
+      setErroDoClube(null);
+      setCancelando(assinatura.id);
+      try {
+        await cancelarAssinatura(sessao.accessToken, assinatura.id);
+        setAssinaturas(await listarAssinaturas(sessao.accessToken));
+      } catch (e) {
+        setErroDoClube(
+          e instanceof Error ? e.message : "Não foi possível cancelar agora.",
+        );
+      } finally {
+        setCancelando(null);
+      }
+    },
+    [sessao],
+  );
 
   const aoSair = useCallback(async () => {
     await sair();
@@ -139,6 +203,73 @@ export default function PaginaConta() {
           Sair
         </Botao>
       </div>
+
+      {/* O retorno do MP: a autorização aconteceu lá; aqui é a boa notícia.
+          O status na lista abaixo pode levar alguns segundos para virar
+          "Ativa" — é o webhook do MP quem confirma, não este redirect. */}
+      {voltouDoMp ? (
+        <p
+          role="status"
+          className="mt-10 max-w-[62ch] border-l-2 border-mata bg-cal-puro px-4 py-3 text-[15px] leading-relaxed"
+        >
+          Assinatura autorizada no Mercado Pago. Bem-vindo ao Clube da
+          Canastra — o primeiro envio entra na próxima torra, e o status
+          aparece abaixo assim que o pagamento confirmar.
+        </p>
+      ) : null}
+
+      {/* Minha assinatura (Onda 3J): só aparece para quem assina — a página
+          da conta é dos pedidos; o convite ao Clube mora em /clube. */}
+      {assinaturas && assinaturas.length > 0 ? (
+        <section className="mt-16">
+          <h2 className="titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
+            Minha assinatura
+          </h2>
+          {erroDoClube ? (
+            <p role="alert" className="mt-4 text-[14px] text-vermelho">
+              {erroDoClube}
+            </p>
+          ) : null}
+          <ul className="mt-6 border-t border-fuligem-20">
+            {assinaturas.map((a) => (
+              <li
+                key={a.id}
+                className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2 border-b border-fuligem-20 py-4"
+              >
+                <div className="min-w-0">
+                  <p className="text-[15px] font-semibold">
+                    {a.quantidade > 1 ? `${a.quantidade} × ` : ""}
+                    {a.nome_cafe}
+                  </p>
+                  <p className="mt-1 font-dado text-[13px] text-fuligem-55">
+                    a cada {a.frequencia_dias} dias ·{" "}
+                    {formatarPreco(a.preco_centavos)} por envio
+                  </p>
+                </div>
+                <div className="flex items-baseline gap-4">
+                  <span className="text-[14px]">
+                    {STATUS_DA_ASSINATURA[a.status] ?? a.status}
+                  </span>
+                  {a.status !== "cancelada" ? (
+                    <Botao
+                      variante="texto"
+                      onClick={() => aoCancelarAssinatura(a)}
+                      disabled={cancelando === a.id}
+                    >
+                      {cancelando === a.id ? "Cancelando…" : "Cancelar"}
+                    </Botao>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-4 text-[14px] text-fuligem-55">
+            Cancelar interrompe as próximas cobranças na hora; um envio já
+            cobrado é entregue normalmente. Sem multa. O preço de cada
+            assinatura fica travado no valor da adesão.
+          </p>
+        </section>
+      ) : null}
 
       <section className="mt-16">
         <h2 className="titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
