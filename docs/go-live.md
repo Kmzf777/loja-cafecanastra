@@ -26,7 +26,8 @@ Cada bloco depende do anterior. Pular etapa aqui custa caro depois.
 | 4 | Revisão comercial do catálogo | o gestor | vende o que não tem |
 | 5 | Bling (`bling.md`) | você + contador | vende sem nota |
 | 6 | Medição (GA4) e WhatsApp | você | vende às cegas |
-| 7 | LGPD: reescrever o histórico | quem administra o repositório | risco jurídico aberto |
+| 7 | Revisão jurídica dos textos (§7) | um advogado | a loja publica que seus termos não valem |
+| 8 | LGPD: reescrever o histórico | quem administra o repositório | risco jurídico aberto |
 
 ---
 
@@ -152,7 +153,36 @@ venda, que é registro fiscal. O que falta é de quem administra o repositório:
 
 ---
 
-## 7. Backup — antes de vender, não depois
+## 7. Os textos legais — a porteira que só você pode abrir
+
+Hoje, `/termos-de-uso` e `/politica-de-privacidade` exibem **ao cliente** um aviso
+dizendo, com todas as letras, que o texto é provisório e não passou por revisão
+jurídica. O aviso é honesto: os textos foram escritos junto com o código, não por
+um advogado.
+
+Isso é uma porteira de go-live, e a decisão é do dono da loja:
+
+- **O caminho certo:** um advogado revisa os dois textos (eles precisam refletir
+  o que a loja realmente faz — e agora fazem bastante coisa: cartão, assinatura
+  recorrente, cookies de medição, avaliações, prazo de troca). Com a revisão
+  feita, remove-se o componente `AvisoJuridico` das duas páginas
+  (`frontend/components/layout/PaginaTexto.tsx` é quem o define).
+- **O que não dá:** ir ao ar com o aviso. Uma loja cujos próprios termos anunciam
+  que não valem é pior do que uma loja sem termos.
+
+Não removi o aviso por conta própria de propósito: apagá-lo não torna o texto
+válido, só esconde do cliente que ele não foi revisado — e esta loja passou a
+entrega inteira fechando promessas falsas, não criando novas.
+
+**Enquanto isso:** confira também que o canal de contato prometido nas duas
+páginas existe de verdade. Elas mandam o cliente exercer direitos de LGPD e
+pedir troca "pelo canal do rodapé", que hoje é o botão de WhatsApp — e ele só
+aparece se `NEXT_PUBLIC_WHATSAPP` estiver preenchida. Sem ela, a promessa fica
+sem porta. Preencha a variável ou publique um e-mail de contato nos textos.
+
+---
+
+## 8. Backup — antes de vender, não depois
 
 Supabase self-hosted **não tem backup automático nem PITR**. O script está
 pronto (`scripts/backup-banco.sh`, com verificação do dump embutida e retenção),
@@ -165,7 +195,7 @@ e o runbook explica o agendamento. Falta:
 
 ---
 
-## 8. Verificação final
+## 9. Verificação final
 
 ```bash
 npm --prefix backend test      # banco, RLS, pagamento, cupons, Bling, LGPD, Clube
@@ -181,7 +211,7 @@ E o checklist de conferência pós-deploy está em `deploy.md` §11.
 
 ---
 
-## 9. O que mudou de verdade nesta entrega
+## 10. O que mudou de verdade nesta entrega
 
 Para quem vem da leitura antiga do repositório, o resumo honesto:
 

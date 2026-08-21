@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Botao, BotaoLink } from "@/components/ui/Botao";
+import { EncerrarConta } from "@/components/conta/EncerrarConta";
 import {
   API_BASE,
   recuperarSessao,
@@ -74,6 +75,11 @@ export default function PaginaConta() {
   const [cancelando, setCancelando] = useState<string | null>(null);
   const [erroDoClube, setErroDoClube] = useState<string | null>(null);
   const [voltouDoMp, setVoltouDoMp] = useState(false);
+
+  // A conta acabou de ser excluída (LGPD art. 18, VI — ver EncerrarConta).
+  // A partir daqui NADA nesta página funciona: o token morreu junto com a
+  // conta, e cada botão que sobrasse na tela responderia 401 ou 403.
+  const [contaExcluida, setContaExcluida] = useState(false);
 
   // `?assinatura=confirmada` é o back_url do preapproval — a pessoa acabou de
   // autorizar a cobrança no MP. Lido do location (e não de useSearchParams)
@@ -164,6 +170,60 @@ export default function PaginaConta() {
     router.replace("/");
     router.refresh();
   }, [router]);
+
+  /**
+   * Depois da exclusão: derrubar a sessão local e ir para a home.
+   *
+   * `sair()` é o MESMO que o botão "Sair" usa — nada é reimplementado aqui. Ele
+   * ainda importa depois de a conta ter sumido do GoTrue: o cookie do Supabase
+   * continua no navegador e o `supabase-js` seguiria tentando renovar um
+   * refresh token de uma conta que não existe mais, e o cache de perfil do
+   * módulo ainda guardaria o nome de quem acabou de pedir para desaparecer.
+   *
+   * A NAVEGAÇÃO ESPERA a confirmação ser lida: seis segundos na tela sóbria e
+   * então a home. Redirecionar na hora faria a única prova de que deu certo
+   * piscar e sumir — e esta é a ação de que a pessoa mais precisa de recibo. O
+   * link "Voltar para a loja" está ali para quem não quiser esperar.
+   */
+  useEffect(() => {
+    if (!contaExcluida) return;
+    void sair();
+    const relogio = setTimeout(() => {
+      router.replace("/");
+      router.refresh();
+    }, 6000);
+    return () => clearTimeout(relogio);
+  }, [contaExcluida, router]);
+
+  if (contaExcluida) {
+    return (
+      <div className="mx-auto max-w-[1440px] px-4 py-24 md:px-10">
+        <div className="max-w-[62ch]">
+          <h1 className="font-titulo text-[clamp(2rem,4vw,3rem)] leading-[1.05] tracking-[-0.015em]">
+            Sua conta foi excluída.
+          </h1>
+          <p
+            role="status"
+            className="mt-5 text-[17px] leading-relaxed text-fuligem-80"
+          >
+            Seu acesso, seus endereços e seus dados pessoais saíram da loja. As
+            assinaturas do Clube foram canceladas e seu e-mail saiu da
+            newsletter. Os pedidos antigos continuam guardados por obrigação
+            fiscal, sem o seu nome.
+          </p>
+          <p className="mt-4 text-[15px] leading-relaxed text-fuligem-55">
+            Obrigado pelo café que você tomou com a gente. Levamos você de volta
+            para a loja em instantes.
+          </p>
+          <div className="mt-8">
+            <BotaoLink href="/" variante="secundario">
+              Voltar para a loja
+            </BotaoLink>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (carregando || !sessao) {
     return (
@@ -322,6 +382,16 @@ export default function PaginaConta() {
           </ul>
         )}
       </section>
+
+      {/* A porta do direito de eliminação (LGPD art. 18, VI). Fica por último e
+          discreta de propósito — ver o cabeçalho do componente. Antes disto, a
+          rota `DELETE /auth/users/me` existia sem nenhum chamador vivo e a
+          política de privacidade mandava o cliente escrever um e-mail para
+          exercer um direito que a loja já sabia cumprir sozinha. */}
+      <EncerrarConta
+        accessToken={sessao.accessToken}
+        aoConcluir={() => setContaExcluida(true)}
+      />
 
       <p className="mt-16 text-[14px] text-fuligem-55">
         <Link href="/" className="text-vermelho underline underline-offset-4">

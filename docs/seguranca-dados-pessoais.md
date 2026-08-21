@@ -116,15 +116,72 @@ Mitigações em vigor:
 - **RLS ligada sem política + REVOKE** na tabela: a lista não é legível por
   PostgREST com chave nenhuma; só o serviço Node a lê.
 
+## Atualização 2026-08-21 (Onda 4) — a SAÍDA da lista passou a existir
+
+A captação nasceu sem saída: havia `POST /newsletter` e nada mais. Duas coisas
+que a loja já prometia por escrito não tinham implementação nenhuma, e as duas
+foram fechadas nesta onda:
+
+1. **`POST /newsletter/descadastrar`** — rota pública, `{ email }`, resposta
+   sempre `{ ok: true }` para e-mail válido (a MESMA disciplina
+   anti-enumeração do cadastro: distinguir "apaguei" de "não estava lá"
+   transformaria a saída no oráculo que a entrada recusa ser). E-mail
+   malformado continua sendo o único 400, porque fala do FORMATO, não da
+   lista. Casa por `lower(email)` dos dois lados, como a exportação do titular
+   — o UNIQUE de 0011 é sensível a caixa e o e-mail não é. Teto próprio de
+   10/min por IP, em **balde separado** do cadastro: com balde único, um laço
+   de inscrições esgotaria o limite e quem estivesse atrás do mesmo IP perderia
+   o direito de SAIR por causa do abuso alheio.
+   A superfície é o formulário na `/politica-de-privacidade`
+   (`frontend/components/layout/FormDescadastroNewsletter.tsx`), ao lado da
+   frase que promete a retirada — mesmo desenho do "Rever cookies".
+2. **A exclusão de conta apaga a inscrição** — `conta.routes.js`, nas duas
+   rotas (`DELETE /auth/users/me` e `DELETE /auth/users/:id`), como passo 5 da
+   ordem, ANTES do DELETE no GoTrue. A tabela não tem `user_id`: o vínculo é o
+   e-mail, e o e-mail mora em `auth.users`, que é o que o GoTrue apaga —
+   depois dele ninguém mais consegue dizer de quem era aquela linha, e o
+   endereço de quem pediu para sumir do banco ficaria na lista para sempre. É
+   a mesma mecânica do pedido irredigível, com a mesma disciplina: falha
+   aborta a exclusão (500) e nada é apagado. Titular sem e-mail (a segunda
+   tentativa de uma exclusão que falhou no fim) não é erro — não há o que
+   casar, e travar ali impediria a exclusão de terminar.
+
+### A decisão sobre o token de descadastro, e o risco que ela carrega
+
+O padrão de mercado é descadastro por **link assinado** no rodapé de cada
+campanha: só quem recebeu o e-mail o descadastra, e ninguém tira terceiro da
+lista. A rota simples aceita qualquer e-mail de qualquer pessoa — **um script
+pode descadastrar todo endereço que conheça**. Ela foi escolhida assim mesmo,
+por três razões escritas aqui para poderem ser contestadas depois:
+
+- **Não há campanha saindo.** Só o transacional sai da loja (status de pedido,
+  lembrete de sacola); a lista existe e não é usada para envio. Não existe,
+  hoje, e-mail em que o link assinado pudesse viajar — o token nasceria sem
+  portador.
+- **O dano é simétrico ao do single opt-in já assumido acima.** Lá se inscreve
+  terceiro, aqui se descadastra terceiro; nos dois casos o desfecho é uma linha
+  a mais ou a menos numa tabela que não dispara nada. O lado do descadastro é
+  ainda o menos gravoso: ninguém recebe comunicação que não pediu.
+- **O remédio é o mesmo trabalho.** A tarefa que ligar campanha tem de fazer
+  double opt-in E link assinado de descadastro em todo envio (obrigatório de
+  qualquer forma) — é lá que o token nasce, junto do e-mail que o carrega.
+
+Mitigação em vigor enquanto isso: o teto de 10/min por IP no balde próprio.
+Aceito porque um descadastro indevido é reversível pela própria pessoa (o
+formulário do rodapé), diferente de um vazamento.
+
 ## Pendência recomendada (para a tarefa que ligar o envio de campanhas)
 
 **Double opt-in** assim que houver domínio verificado no Resend: e-mail de
 confirmação com token, coluna `confirmado_em` (nova migração — a 0011 não se
-edita depois de aplicada), e campanha só para confirmados. Junto dele, link de
-descadastro em toda campanha (obrigatório de qualquer forma) e a limpeza dos
-nunca-confirmados após prazo curto. Enquanto a lista não recebe campanha
-nenhuma — que é o estado atual — o risco fica limitado a existir uma linha a
-mais na tabela.
+edita depois de aplicada), e campanha só para confirmados. Junto dele, **link
+de descadastro assinado em toda campanha** — que é onde a rota
+`POST /newsletter/descadastrar` deixa de bastar sozinha: com campanha no ar,
+ela precisa passar a aceitar TAMBÉM um token por e-mail, e o formulário aberto
+vira o caminho secundário. Fecham o pacote a limpeza dos nunca-confirmados após
+prazo curto. Enquanto a lista não recebe campanha nenhuma — que é o estado
+atual — o risco fica limitado a existir uma linha a mais (ou a menos) na
+tabela.
 
 ---
 
@@ -178,6 +235,9 @@ o pedido perde o vínculo — não há mais como saber de quem era, e o dado fic
    - *Nunca apagar sem cancelar*: `assinaturas.user_id` é ON DELETE SET NULL,
      e um preapproval órfão continua **cobrando o cartão** de quem pediu para
      sumir do banco, sem dono para cancelá-lo.
+   - *Atualização da Onda 4*: a ordem ganhou um passo antes do DELETE —
+     **apagar a inscrição na newsletter** (o vínculo daquela tabela é o
+     e-mail, que some com `auth.users`). Ver a seção da newsletter acima.
    - *O troco assumido*: se o GoTrue falhar no fim, sobra conta viva com
      assinaturas canceladas e pedidos redigidos — reversível no que importa
      (assinar de novo é um clique) e re-executável (a redação repetida é no-op

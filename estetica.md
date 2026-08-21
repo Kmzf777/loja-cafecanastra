@@ -817,10 +817,24 @@ Aprender (blog + guias de preparo) · Avaliações · Área da conta · Onde com
 
 ### Critérios de aceite antes do go-live
 
+> As Fases 2 e 3 saíram parcialmente do papel: **Clube da Canastra**, **Avaliações**
+> e **Área da conta** existem e vendem. Continuam por fazer "Aprender"
+> (blog + guias) e "Onde comprar / Atacado".
+>
+> Nenhum item abaixo é pendência de código de outra área — são checagens de
+> frontend. O que já virou ação humana no resto do projeto (credenciais, VPS,
+> catálogo, backup) está em **`docs/go-live.md`**; esta lista é a metade de
+> design da mesma pergunta, e as duas precisam fechar antes de abrir a loja.
+
+- [x] Nenhuma combinação de cor proibida (teste automatizado) — `frontend/lib/cor.test.ts`
+      codifica as duas proibições de §4.1 e está amarrado ao `@theme` de
+      `globals.css` por `lib/tokens.test.ts`, então mudar o token quebra o teste.
+      **Ressalva honesta:** ele prova os *tokens*, não varre as telas — uma
+      combinação errada escrita à mão numa página passaria.
 - [ ] Lighthouse ≥ 90 em Performance e ≥ 95 em Acessibilidade, **em mobile**
 - [ ] Fluxo completo de compra operável só pelo teclado
-- [ ] Nenhuma combinação de cor proibida em produção (teste automatizado)
-- [ ] `prefers-reduced-motion` respeitado em todas as animações listadas em §9
+- [ ] `prefers-reduced-motion` respeitado em todas as animações listadas em §9 —
+      **nada no código consulta essa media query hoje**
 - [ ] Site funcional com JS desabilitado até a etapa de checkout
 - [ ] Zoom 200% sem quebra
 - [ ] Revisão de copy contra §11 em 100% das telas — incluindo erros e estados vazios

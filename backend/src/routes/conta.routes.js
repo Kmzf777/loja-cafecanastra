@@ -76,10 +76,11 @@ const MENSAGEM_ULTIMO_ADMIN =
  *                                          conseguiria apagar;
  *   3. CANCELAR AS ASSINATURAS VIVAS ...... `cancelarAssinaturasAntesDeApagar`;
  *   4. REDIGIR ............................ `redigirAntesDeApagar`;
- *   5. DELETE no GoTrue ................... a cascata leva `clientes`, e
+ *   5. APAGAR A INSCRIÇÃO NA NEWSLETTER ... `apagarInscricaoAntesDeApagar`;
+ *   6. DELETE no GoTrue ................... a cascata leva `clientes`, e
  *                                          `pedidos`/`assinaturas`/`avaliacoes`
  *                                          ficam órfãos (ON DELETE SET NULL) —
- *                                          por isso 3 e 4 vêm antes.
+ *                                          por isso 3, 4 e 5 vêm antes.
  *
  * 3 ANTES DE 4 e não o contrário: a redação da 0016 só toca assinatura
  * `cancelada` (enquanto a entrega recorrente existe, o endereço é necessário à
@@ -88,15 +89,26 @@ const MENSAGEM_ULTIMO_ADMIN =
  * Cancelando antes, elas chegam `cancelada` e a mesma passagem da redação as
  * alcança.
  *
+ * 5 ANTES DE 6 pelo MESMO motivo que 4: `newsletter_inscritos` não tem
+ * `user_id` — o vínculo com a pessoa é o E-MAIL, e o e-mail mora em
+ * `auth.users`, que é justamente o que o passo 6 apaga. Depois do DELETE não há
+ * mais como saber qual linha daquela tabela era de quem: a inscrição vira órfã
+ * de fato, exatamente como o pedido irredigível, e o e-mail de quem pediu para
+ * sumir do banco fica lá para sempre. Por isso o e-mail é LIDO e a linha é
+ * APAGADA antes, na mesma requisição, e a falha aborta a exclusão.
+ *
  * O TROCO ASSUMIDO, escrito para quem for depurar um caso real: se o GoTrue
- * falhar no passo 5, sobra uma conta VIVA com as assinaturas já canceladas e os
- * pedidos já redigidos. É o lado certo do erro — reversível no que importa (a
- * pessoa segue cliente, com endereços salvos e cadastro intactos; assinar de
- * novo é um clique, e o Clube nunca prometeu que cancelar é irreversível) e
- * re-executável (a redação repetida é no-op por `redigido_em`, o cancelamento
- * repetido devolve `[]`, e a segunda tentativa conclui no GoTrue). O troco
- * inverso — apagar primeiro — não é reversível em NADA: o pedido órfão fica
- * irredigível para sempre e o preapproval segue cobrando um cartão de alguém
+ * falhar no passo 6, sobra uma conta VIVA com as assinaturas já canceladas, os
+ * pedidos já redigidos e a inscrição na newsletter já apagada. É o lado certo
+ * do erro — reversível no que importa (a pessoa segue cliente, com endereços
+ * salvos e cadastro intactos; assinar de novo é um clique, e o Clube nunca
+ * prometeu que cancelar é irreversível; reinscrever-se na newsletter é o mesmo
+ * formulário do rodapé) e re-executável (a redação repetida é no-op por
+ * `redigido_em`, o cancelamento repetido devolve `[]`, o DELETE da inscrição
+ * repetido casa com zero linhas sem erro, e a segunda tentativa conclui no
+ * GoTrue). O troco inverso — apagar primeiro — não é reversível em NADA: o
+ * pedido órfão fica irredigível para sempre, o e-mail fica na lista sem dono
+ * que se possa identificar, e o preapproval segue cobrando um cartão de alguém
  * que já não existe no banco.
  */
 
@@ -211,6 +223,66 @@ async function redigirAntesDeApagar(conexao, alvoUserId, res, mensagem) {
 }
 
 /**
+ * APAGAR A INSCRIÇÃO NA NEWSLETTER ANTES DE APAGAR A CONTA.
+ *
+ * O furo que esta função fecha: a Onda 2 criou a captação do rodapé
+ * (`canastra.newsletter_inscritos`, 0011) e a Onda 3 criou a exclusão de conta
+ * com redação — e as duas nunca se encontraram. Excluir a conta apagava tudo
+ * MENOS o e-mail da pessoa, que continuava na lista da loja indefinidamente,
+ * enquanto a política de privacidade prometia o contrário.
+ *
+ * POR QUE ANTES DO DELETE NO GOTRUE, e não depois: a tabela não tem `user_id`
+ * (a inscrição do rodapé não exige conta — o vínculo é o E-MAIL, como a
+ * exportação do titular em `lgpd.routes.js` já assumia). O e-mail só existe em
+ * `auth.users`, que é o que o GoTrue apaga: passado o DELETE, ninguém mais
+ * consegue dizer qual linha da lista era daquela pessoa. É o mesmo mecanismo do
+ * pedido irredigível, e por isso a mesma ordem e a mesma disciplina de falha.
+ *
+ * `lower(email)` DOS DOIS LADOS, como a exportação: o UNIQUE de 0011 é sensível
+ * a caixa e o e-mail não é — quem se inscreveu por um caminho que não passou
+ * pela normalização da rota tem de ser alcançado aqui do mesmo jeito.
+ *
+ * TITULAR SEM E-MAIL NÃO É ERRO: a conta pode já não existir no GoTrue (a
+ * segunda tentativa de uma exclusão que falhou no fim, um cliente cuja conta
+ * foi apagada por fora). Sem e-mail não há o que casar, e insistir aqui
+ * travaria uma exclusão que só quer terminar. Segue em frente.
+ *
+ * Devolve `true` se já respondeu (falha) — o chamador retorna sem apagar.
+ */
+async function apagarInscricaoAntesDeApagar(conexao, alvoUserId, res, mensagem) {
+  try {
+    const { rows } = await conexao.query(
+      "SELECT email FROM auth.users WHERE id = $1",
+      [alvoUserId],
+    );
+    const email = rows[0]?.email;
+    if (!email) return false;
+
+    const { rowCount } = await conexao.query(
+      "DELETE FROM canastra.newsletter_inscritos WHERE lower(email) = lower($1)",
+      [email],
+    );
+    // O e-mail NÃO entra no log: registra-se que a inscrição saiu, não quem
+    // saiu — a linha de log recriaria, fora da tabela e em texto claro, o dado
+    // que esta exclusão acabou de apagar. O `user_id` basta para auditar, e ele
+    // deixa de existir em seguida de qualquer forma.
+    if (rowCount) {
+      console.log(
+        `Exclusão de conta ${alvoUserId}: inscrição na newsletter apagada.`,
+      );
+    }
+    return false;
+  } catch (erro) {
+    console.error(
+      `Newsletter: falha ao apagar a inscrição de ${alvoUserId}; exclusão abortada:`,
+      erro,
+    );
+    res.status(500).json({ message: mensagem });
+    return true;
+  }
+}
+
+/**
  * Exclui a conta de QUEM ESTA CHAMANDO, e de mais ninguem.
  *
  * O `user_id` vem de `req.user`, preenchido por `isAuthenticated` a partir do
@@ -284,6 +356,20 @@ async function excluirMinhaConta(
       "Não foi possível excluir sua conta agora. Nada foi apagado; tente de novo.",
     );
     if (abortou) return;
+
+    // Passo 5. Ver `apagarInscricaoAntesDeApagar`: o vínculo da lista é o
+    // e-mail, e o e-mail some com `auth.users` no passo seguinte — depois dele
+    // a inscrição fica sem dono identificável, na lista, para sempre.
+    if (
+      await apagarInscricaoAntesDeApagar(
+        conexao,
+        userId,
+        res,
+        "Não foi possível excluir sua conta agora. Nada foi apagado; tente de novo.",
+      )
+    ) {
+      return;
+    }
 
     const resposta = await buscar(`${base}/auth/v1/admin/users/${userId}`, {
       method: "DELETE",
@@ -431,8 +517,9 @@ async function excluirClientePeloAdmin(
     }
 
     // A MESMA ordem da exclusão própria, passo a passo (o bloco de ordem lá em
-    // cima vale para as duas rotas): cancelar as assinaturas vivas, depois
-    // redigir, e só então apagar. Falha em qualquer um dos dois aborta.
+    // cima vale para as duas rotas): cancelar as assinaturas vivas, redigir,
+    // apagar a inscrição na newsletter, e só então apagar a conta. Falha em
+    // qualquer um dos três aborta.
     if (await cancelarAssinaturasAntesDeApagar(id, res, cancelarAssinaturas)) {
       return;
     }
@@ -444,6 +531,17 @@ async function excluirClientePeloAdmin(
       "Não foi possível excluir o cliente agora. Nada foi apagado; tente de novo.",
     );
     if (abortou) return;
+
+    if (
+      await apagarInscricaoAntesDeApagar(
+        conexao,
+        id,
+        res,
+        "Não foi possível excluir o cliente agora. Nada foi apagado; tente de novo.",
+      )
+    ) {
+      return;
+    }
 
     const resposta = await buscar(`${base}/auth/v1/admin/users/${id}`, {
       method: "DELETE",

@@ -4,12 +4,13 @@ Guia operacional do Café Canastra na VPS: o que existe, o que subir, em que
 ordem, e as falhas que acontecem **em silêncio** — que é para isso que este
 documento serve.
 
-> **Leia isto antes de qualquer coisa: a loja ainda NÃO sobe inteira.**
-> A fundação de dados (F1) e a autenticação (F2) estão prontas, e **nada foi
-> aplicado na VPS ainda**. O que dá para fazer hoje é criar o schema `canastra`
-> num Postgres Supabase, semear o catálogo e cadastrar/entrar pelo GoTrue. O
-> catálogo do banco, as imagens no Storage, o serviço Node enxuto e o painel novo
-> não existem. O desenho completo está em
+> **Leia isto antes de qualquer coisa: a loja vende de ponta a ponta, e nada
+> disso foi aplicado na VPS ainda.** O código está pronto e coberto por teste —
+> catálogo do banco, sacola, checkout por Pix e cartão, pedido idempotente,
+> webhook transacional, e-mail de status, ERP/NF-e, assinatura e avaliações. O
+> que falta não é código: é credencial, acesso ao servidor e decisão comercial,
+> e está listado em **`docs/go-live.md`**. Para subir na VPS passo a passo,
+> **`docs/deploy.md`**. O desenho da migração continua em
 > `docs/superpowers/specs/2026-08-17-supabase-selfhosted-design.md`.
 
 ---
@@ -20,42 +21,57 @@ documento serve.
 |---|---|---|
 | **F1** | Schema `canastra`, migrações versionadas, RLS provada por teste positivo **e** negativo, `clientes`/`admins`, RPC `fundir_sacola`, seed contra o GoTrue | **pronta**, não aplicada na VPS |
 | **F2** | GoTrue assume cadastro, login, confirmação e reset; `@supabase/ssr`; RPC `garantir_cliente`; fusão da sacola no login; Express deixa de emitir token | **pronta**, não aplicada na VPS |
-| **F4** (antecipada) | Vitrine e sacola lendo e escrevendo o PostgREST direto; Express fica só com pagamento, webhook, frete e e-mail | **próxima** |
-| F3 | Bucket `canastra-produtos` no Storage; saída do Cloudinary | não existe |
-| F5 | Serviço Node enxuto, transação e idempotência no webhook | não existe |
-| F6 | Painel novo em App Router; `frontend/legacy/` apagado; CSP fechado | não existe |
-| F7 | Proxy reverso, backup agendado, verificação ponta a ponta | não existe |
+| **F4** | Express inteiro reescrito contra `canastra.*` mantendo o contrato JSON; vitrine lendo preço e estoque do banco; checkout gravando `canastra.pedidos` com chave de idempotência; rotas de clientes do painel recriadas | **pronta**, não aplicada na VPS |
+| F3 | Bucket `canastra-produtos` no Storage; saída do Cloudinary | **não existe** — as imagens continuam no Cloudinary |
+| **F5** | Serviço Node enxuto, transação e idempotência no webhook | **parcial** — ver abaixo |
+| F6 | Painel novo em App Router; `frontend/legacy/` apagado; CSP fechado | **não existe** — o painel continua sendo a ilha legada |
+| **F7** | Docker/PM2, nginx de mesma origem, backup agendado, CI, verificação ponta a ponta | **pronta**, não aplicada na VPS |
 
-**A F4 passou na frente da F3, e o motivo importa.** Durante a F2 descobriu-se
-que **os oito repositories do Express estão mortos contra o banco migrado**: eles
-consultam as tabelas antigas em inglês (`orders`, `products`, `users`,
-`addresses`, `carts`, `store_config`, `promotions`, `product_options`) e as
-migrações só criam `canastra.*`, em português. Não é um endpoint: é o serviço
-inteiro. Consertar aquele SQL seria escrever ~1.000 linhas que a própria F4
-apaga. Registrado no fim de
-`docs/superpowers/plans/2026-08-18-supabase-f2-autenticacao.md`.
+**A F4 passou na frente da F3, e o motivo continua valendo como registro.**
+Durante a F2 descobriu-se que os oito repositories do Express estavam **mortos**
+contra o banco migrado: consultavam as tabelas antigas em inglês (`orders`,
+`products`, `users`, `addresses`, `carts`, `store_config`, `promotions`,
+`product_options`) e as migrações só criam `canastra.*`, em português. Não era um
+endpoint: era o serviço inteiro. Isso foi refeito na F4 — hoje todo repository
+fala `canastra.*` e o contrato JSON que o painel legado consome é preservado por
+`AS` no SELECT, não por tabela em inglês. Registrado no fim de
+`docs/superpowers/plans/2026-08-18-supabase-f2-autenticacao.md` e resolvido em
+`docs/superpowers/plans/2026-08-20-f4-backend-canastra.md`.
 
 ### 1.1 O que NÃO funciona hoje, dito sem rodeio
 
 Vale a pena ler antes de abrir um chamado — nada abaixo é bug novo:
 
-- **O painel autentica e não mostra dado nenhum.** O login passou a ser do
-  GoTrue e funciona; a decisão de administrador vem de `canastra.admins` e
-  funciona. O que não funciona é o que vem depois: `GET /dashboard`,
-  `GET /orders` e `GET /promotions` consultam tabelas que não existem e
-  respondem **500 (`42P01`, "relation does not exist")**. O painel fica de pé e
-  vazio. Fecha na F4/F6.
-- **A vitrine mostra preço e estoque do JSON versionado**
-  (`data/catalogo-canastra.json`), e não do banco — pelo mesmo `GET /dashboard`
-  morto. **Isso é a degradação graciosa funcionando**, não um defeito: "loja
-  fechada é pior que preço de ontem". Mas significa que **mudar o preço pelo
-  painel não muda a vitrine hoje.** Fecha na F4.
-- **A sacola de quem está logado vive em dois lugares.** A fusão do login grava
-  em `canastra.carrinho_itens` (RPC `fundir_sacola`); a vitrine desenha a partir
-  do `localStorage`. Enquanto a F4 não chega, a ponte é o `fusao.ts` reler a
-  conta na primeira fusão de cada aparelho. Fecha na F4.
-- **As imagens continuam no Cloudinary.** F3.
-- **O webhook do Mercado Pago continua sem transação nem idempotência.** F5.
+- **O painel continua sendo a ilha legada.** `/dashboard` é uma página
+  client-only (`ssr: false`) que carrega `frontend/legacy/` inteiro: React
+  Router, styled-components e contextos do projeto original. Ele **mostra dado**
+  desde a F4 e ganhou as telas que faltavam (cupons, avaliações, assinaturas,
+  rastreio, SKU, exportação CSV), mas continua fora do App Router. Duas
+  consequências operacionais seguem de pé, e as duas são a F6:
+  - o **CSP tem `unsafe-inline` e `unsafe-eval`** no `script-src`, que existem só
+    por causa do styled-components do painel;
+  - o **bundle do painel é servido a qualquer visitante** e o guard é de
+    cliente. Não vaza dado — a API está protegida rota a rota e a RLS não
+    depende do navegador —, vaza só código.
+- **As imagens continuam no Cloudinary.** F3. O upload do painel sobe para lá e
+  o banco guarda a URL absoluta.
+- **A F5 ficou pela metade, e a metade que importava está feita.** O webhook do
+  Mercado Pago é **transacional e idempotente**, e responde **500** quando
+  falha, para o MP reenviar — o 200 silencioso acabou. O pedido nasce no banco
+  **antes** da cobrança, com chave de idempotência. `PUT /config` virou
+  atualização parcial de verdade (campo ausente não vira NULL). O que **sobrou**:
+  - `PUT /promotions/:id` continua sobrescrevendo com NULL o que não veio no
+    corpo e continua respondendo 200 sem checar `rowCount` — editar uma promoção
+    inexistente "dá certo";
+  - `axios` continua nas dependências do backend;
+  - `pgPool.js` continua com `rejectUnauthorized: false` em produção.
+- **Não há trilha de auditoria.** Ninguém registra quem mudou preço, estoque ou
+  status de pedido. Não tem fase.
+- **Metade dos recursos nasce desligada, e isso não é defeito.** Cartão, Bling,
+  NF-e, rastreio automático, GA4, WhatsApp e carrinho abandonado só existem com a
+  credencial correspondente preenchida; sem ela o processo sobe igual e o recurso
+  não aparece. A tabela de o-que-liga-o-quê está em `docs/go-live.md` §2 e no
+  `README.md`; as consequências operacionais dos crons e do Clube, na §5.8.
 
 **O que a F2 tirou do `.env`:** `JWT_SECRET`, `JWT_SECRET_REFRESH`,
 `ACCESS_TOKEN_EXPIRY` e `REFRESH_TOKEN_EXPIRY_DAYS`. O Express **não emite mais
@@ -120,6 +136,13 @@ start` é barulhento e barato; descobrir depois, não.
 | `SUPABASE_SERVICE_ROLE_KEY` | chave `service_role`; é com ela que o serviço fala com a **Admin API do GoTrue** | idem |
 | `CORS_ORIGIN` | origem da vitrine | o painel não fala com a API |
 | `MP_WEBHOOK_SECRET`, `MP_ACCESS_TOKEN` | Mercado Pago | nenhum pedido sai de "pendente" |
+
+**`WEBHOOK_URL` NÃO está nessa lista, e vale saber por quê.** O processo sobe sem
+ela e a loja vende por Pix e cartão do mesmo jeito — o webhook de pagamento
+avulso é cadastrado no painel do Mercado Pago, não derivado dela. Mas o **Clube**
+usa `WEBHOOK_URL` para montar a `notification_url` de cada `preapproval`, e sem
+isso a cobrança recorrente não vira pedido, **sem erro em lugar nenhum**. Se for
+vender assinatura, ela é obrigatória na prática: §5.8.
 
 **`SUPABASE_JWT_SECRET` saiu da tabela: ela é CONDICIONAL.** Depende de como a
 sua instância assina o token — e as duas formas são reais.
@@ -240,7 +263,7 @@ Há dois jeitos de levantar este banco, e eles servem a momentos diferentes.
 2.  backend/db/instalacao-completa.sql
 ```
 
-O arquivo de instalação já registra as oito versões em `canastra.migracoes`, então
+O arquivo de instalação já registra as 16 versões em `canastra.migracoes`, então
 um `npm run db:migrar` depois dele responde "Nada pendente." — é isso que permite
 começar pelo editor SQL e seguir com o runner daí para frente.
 
@@ -331,10 +354,10 @@ sempre. O servidor SMTP embutido do stack self-hosted não entrega para fora.
 
 ---
 
-## 4. Duas invariantes que só o TESTE protege
+## 4. Três invariantes que só o TESTE protege
 
-O banco não impede nenhuma das duas. `npm --prefix backend test` reprova as
-duas. Confira depois de qualquer mudança de schema feita fora das migrações.
+O banco não impede nenhuma das três. `npm --prefix backend test` reprova as
+três. Confira depois de qualquer mudança de schema feita fora das migrações.
 
 ### 4.1 Nenhuma tabela de `canastra` pode ter `FORCE ROW LEVEL SECURITY`
 
@@ -385,13 +408,52 @@ As 14 públicas: `produto_id`, `nome`, `tamanho`, `categoria`, `preco`, `imagem`
 O teste "a lista pública de colunas de `produtos` é exatamente a projeção da
 view" afirma a igualdade. O banco, não.
 
-**Efeito colateral conhecido e barulhento:** `canastra.produtos` é a única
-relação do schema com privilégio de `SELECT` **por coluna**, então um `select=*`
-cru nela responde `42501` em vez de devolver dados. No `supabase-js` isso alcança
-qualquer `.insert(x).select()` sem `RETURNING` escrito à mão — vira `select=*` no
-PostgREST. Na tela de CRUD de produto do painel, liste as colunas:
+**Efeito colateral conhecido e barulhento:** onde há privilégio de `SELECT` **por
+coluna**, um `select=*` cru responde `42501` em vez de devolver dados. No
+`supabase-js` isso alcança qualquer `.insert(x).select()` sem `RETURNING` escrito
+à mão — vira `select=*` no PostgREST. Liste as colunas:
 `.select('produto_id, nome, preco, ...')`. Erra na hora, nunca entrega dado
 errado.
+
+**São três relações hoje, e o motivo de cada uma é o mesmo.** A técnica de 0006
+virou o padrão do schema para "coluna que não pode sair":
+
+| Relação | Coluna escondida | Por quê |
+|---|---|---|
+| `canastra.produtos` (0006) | `custo`, `criado_em`, `tsv` | `custo` é margem de lucro |
+| `canastra.config_loja` (0012) | `bling_refresh_token` | credencial que emite nota fiscal e mexe em estoque — ver §4.3 |
+| `canastra.avaliacoes` (0014) | para `anon`: `user_id`, `moderado_em` | o `user_id` daria linkabilidade gratuita entre a avaliação e as outras tabelas da instância |
+
+Nas três, o `42501` do `select=*` é **de propósito**: barulhento, nunca vazado.
+
+### 4.3 `canastra.config_loja` é uma tabela PÚBLICA com uma credencial dentro
+
+Esta é a armadilha que a integração com o Bling criou, e ela não é óbvia.
+
+`config_loja` é lida por `anon` desde 0005 — banner, título e piso do frete
+grátis **são** informação pública, e a política de leitura é `USING (true)`. A
+migração 0012 acrescentou ali `bling_refresh_token`, que é o refresh token
+rotativo do ERP: **a credencial que emite nota fiscal e movimenta estoque.**
+
+**Uma coluna nova nessa tabela nasceria legível por qualquer chave anônima da
+instância**, via PostgREST, sem erro em lugar nenhum. Por isso 0012 revoga o
+`SELECT` de tabela e devolve a lista explícita de colunas — todas menos o token
+—, e faz o mesmo com `INSERT`/`UPDATE` de `authenticated`: **a política decide a
+LINHA, o GRANT decide as COLUNAS**, e nem o administrador escreve o token pelo
+PostgREST. Quem o escreve é só o serviço Node, que conecta como dono do banco e
+não passa por GRANT nenhum.
+
+**Sintoma da divergência:** se alguém acrescentar coluna a `config_loja` por
+migração e esquecer de estendê-la no `GRANT`, a vitrine deixa de enxergar aquele
+campo (`42501` ou coluna faltando no `GET /config`); se alguém devolver o
+`GRANT SELECT` de tabela "para simplificar", **o refresh token do Bling passa a
+sair pelo PostgREST para qualquer visitante**, calado. O teste que grita é o de
+`backend/test/pedidos.test.js` ("o que 0005 abre para anon…"), que confere
+coluna a coluna que `titulo_site` e `frete_gratis_minimo_centavos` saem e que
+`bling_refresh_token` **não** sai nem para `anon` nem para `authenticated`.
+
+**Regra prática:** coluna nova em `config_loja` entra no `GRANT` explicitamente,
+ou não é lida. Segredo novo **não** entra nessa tabela sem repetir o recorte.
 
 ---
 
@@ -469,6 +531,58 @@ O mínimo:
 Sem isso, a loja está a um disco de distância de perder tudo: catálogo, pedidos,
 clientes e imagens.
 
+O que existe hoje é `scripts/backup-banco.sh` (dump com verificação embutida e
+retenção) e `scripts/backup-banco.cron.exemplo`. **Agendar e testar a restauração
+continua sendo trabalho de gente** — `docs/go-live.md` §7.
+
+### 5.7 O Bling exige INSTÂNCIA ÚNICA, e escalar horizontalmente quebra tudo
+
+**O refresh token do Bling é rotativo:** a cada renovação o Bling **invalida** o
+token usado e devolve outro. O serviço grava o novo em
+`canastra.config_loja.bling_refresh_token` e passa a usá-lo; a variável
+`BLING_REFRESH_TOKEN` do `.env` vale só como semente da **primeira**
+autorização.
+
+**Com duas instâncias, as duas renovam, cada rotação invalida a da outra, e a
+integração entra em `invalid_grant` permanente** — sem parar a loja, sem parar o
+checkout, sem nada além de erro no log e nota fiscal que deixou de sair.
+
+`deploy/ecosystem.config.cjs` já fixa `instances: 1` por causa disto. Se algum
+dia a API for escalada (mais réplicas no compose, cluster do PM2, dois
+contêineres atrás do nginx), **releia `docs/bling.md` antes** — o resto do
+serviço aguenta réplica; esta integração, não.
+
+Quando o Bling recusa a renovação com `invalid_grant`, o cliente **esquece o
+token da memória** de propósito, para a próxima tentativa recomeçar pelo que
+estiver gravado no banco (o do gestor, colado à mão pelo SQL do runbook). Isso é
+rede de recuperação, não permissão para rodar dois processos.
+
+### 5.8 Os crons nascem desligados — e o Clube não tem cron nenhum
+
+Toda integração nova nasce desligada, e o processo sobe idêntico ao de antes
+quando a chave não está lá. São **dois** crons, ambos no serviço Node:
+
+| Cron | Liga com | Quando roda |
+|---|---|---|
+| Carrinho abandonado | `ABANDONO_ATIVO=true` **literal** | de hora em hora (minuto 0). Sem a variável o `node-cron` nem é carregado |
+| Rastreio do Bling | `BLING_ATIVO=true` **e** `BLING_RASTREIO_CRON=true` | minuto 30, de propósito fora do outro |
+
+**O Clube da Canastra NÃO tem cron**, e essa é a parte que surpreende quem
+procura um. A cobrança recorrente é do Mercado Pago: cada assinatura vira um
+`preapproval` cuja `notification_url` aponta para
+`/webhook/mercadopago/assinaturas`, e é a notificação de cada cobrança que vira
+pedido no banco.
+
+**Consequência operacional:** sem `WEBHOOK_URL` pública e alcançável por HTTPS,
+o preapproval **nasce sem `notification_url`** — a assinatura é criada, o cliente
+autoriza, o cartão é cobrado pelo MP, e **nenhum pedido aparece na loja**. Não há
+erro na subida e não há erro no checkout da assinatura; o sintoma é assinatura
+ativa sem entrega. Assinatura **exige** essa variável em produção.
+
+Não é preciso cadastrar o webhook de assinaturas no painel do Mercado Pago: a
+URL por preapproval basta. Se cadastrar também não há mal — a validação HMAC usa
+o **mesmo** `MP_WEBHOOK_SECRET`.
+
 ---
 
 ## 6. Sintoma → causa
@@ -491,14 +605,18 @@ Tabela de busca. Se está caçando um problema às 2h da manhã, comece por aqui
 | **O cliente clica no e-mail de confirmação e cai na HOME**, sem erro nenhum | a URL de redirecionamento não está na allow-list e foi trocada em silêncio pela Site URL | §3.5.1 |
 | **O link do e-mail falha só quando aberto em OUTRO aparelho** | modelo usando `{{ .ConfirmationURL }}` (PKCE) em vez de `{{ .TokenHash }}` | §3.5.2 |
 | **Cadastro e recuperação de senha param, e a tela fica esperando** | SMTP não configurado. O erro só existe no log do GoTrue | §3.5.3 |
-| **O painel entra e não mostra dado nenhum** (500, `42P01`) | não é a autenticação: os repositories do Express consultam as tabelas antigas em inglês. Fecha na F4 | §1.1 |
-| **Preço mudado no painel não aparece na vitrine** | a vitrine lê o JSON versionado porque `GET /dashboard` está morto — é a degradação graciosa, não um bug | §1.1 |
+| **Preço mudado no painel não aparece na vitrine** | a vitrine guarda a resposta de `GET /dashboard` por **60 s** (`frontend/lib/catalogo/repositorio.ts`). Se passar disso, a API está fora e a vitrine caiu para o JSON versionado — é a degradação graciosa, não um bug: o preço fica velho, a loja continua vendendo, e o checkout reconfere no servidor antes de cobrar | §1.1 |
 | **A sacola do cliente dobra a cada visita** | a base `cart:na_conta` do `localStorage` se perdeu; a RPC `fundir_sacola` soma por desenho e quem impede a segunda soma é ela | `frontend/lib/sacola/fusao.ts` |
+| **Bling parou de sincronizar e o log diz `invalid_grant`** | o refresh token rotativo foi usado por outro processo — quase sempre uma segunda instância da API. Confira `instances: 1` antes de gerar token novo | §5.7 |
+| **Assinatura ativa, cartão cobrado, e nenhum pedido na loja** | `WEBHOOK_URL` ausente ou ilegível: o preapproval nasceu sem `notification_url` e a cobrança não tem para onde avisar | §5.8 |
+| **O carrinho abandonado / o rastreio do Bling nunca dispara** | os crons nascem desligados; só o valor **literal** `true` liga | §5.8 |
 | **404 numa tabela nova**, com RLS correta | tabela criada fora das migrações, sem `GRANT` | §5.2 |
 | **Painel do admin vazio e cliente sem ver o próprio endereço, sem erro** | `FORCE ROW LEVEL SECURITY` ligado em `admins`/`clientes` | §4.1 |
 | **`42501` citando "row-level security policy for table admins"** | a mesma, já denunciada pelo `SET row_security = off` | §4.1 |
 | **`42501` ao ler o catálogo na vitrine** | coluna na view sem `GRANT` correspondente | §4.2 |
-| **`42501` num `.insert(...).select()` do painel** | `select=*` alcança coluna sem privilégio em `produtos` | §4.2 |
+| **`42501` num `select=*` ou `.insert(...).select()`** | a relação tem privilégio por COLUNA — `produtos`, `config_loja` ou `avaliacoes`. Liste as colunas; é o erro fazendo o trabalho dele | §4.2 |
+| **Campo novo de `config_loja` não aparece no `GET /config`** | a coluna entrou por migração e ficou fora do `GRANT` explícito de 0012 | §4.3 |
+| **O `bling_refresh_token` sai pelo PostgREST** | alguém devolveu `GRANT SELECT` de TABELA em `config_loja`. É vazamento de credencial fiscal, não bug de tela | §4.3 |
 | **`23505` em `canastra.migracoes_pkey`** | dois `db:migrar` ao mesmo tempo | §5.3 |
 | **`42P07` ("relation already exists") no meio do deploy** | migração já aplicada foi renomeada | §5.4 |
 | **`db:migrar` diz "Nada pendente." e a mudança não está no banco** | arquivo registrado vazio (não deveria acontecer: o runner recusa) ou versão renomeada | §5.4, §5.5 |
@@ -545,8 +663,9 @@ escreve nessa tabela.
 Depois de qualquer mudança em migração, schema ou seed:
 
 ```bash
-npm --prefix backend test   # 174 testes: regras de pagamento + banco (RLS, migrações, seed, RPCs)
-npm test                    # 185 testes da vitrine (vitest)
+npm --prefix backend test   # 366 testes: pagamento, banco (RLS, migrações, seed, RPCs),
+                            # cupons, Bling, LGPD, avaliações e Clube
+npm test                    # 317 testes da vitrine (vitest)
 ```
 
 Os testes de banco sobem um Postgres embutido, aplicam as migrações de verdade e
@@ -593,7 +712,7 @@ Depois de aplicar na VPS, confira à mão:
 
 - [ ] `npm run db:migrar` rodado uma segunda vez responde "Nada pendente.".
 - [ ] `SELECT versao, aplicada_em FROM canastra.migracoes ORDER BY versao;` lista
-      as 8 migrações.
+      as 16 migrações.
 - [ ] `SELECT count(*) FROM canastra.produtos;` devolve os 29 SKUs.
 - [ ] Uma requisição anônima à instância lê `canastra.produtos_publicos` e **não**
       lê `canastra.clientes`.
@@ -604,10 +723,25 @@ Depois de aplicar na VPS, confira à mão:
 - [ ] Um cadastro novo, de ponta a ponta, num navegador limpo: formulário →
       e-mail → link → conta com linha em `canastra.clientes`.
 
-`npm run verifica` (37 checagens num Chromium real) cobre a loja **antiga**,
-contra o Express e o painel legado, e **boa parte dele já não vale**: ele exerce
-o login do Express e as rotas de carrinho, que a F2 apagou. Ele só volta a valer
-para a arquitetura nova na F7, quando for reescrito.
+O checklist completo de pós-deploy (nginx, TLS, healthcheck, webhook) está em
+`docs/deploy.md` §11.
+
+### 8.2 `npm run verifica` — fumaça num Chromium real
+
+São **37 checagens** (`frontend/scripts/verifica-fluxo.mjs`) e elas exercem a
+arquitetura **atual**, não a antiga: guard do `/dashboard` sem sessão, login pela
+página do GoTrue, as rotas do painel legado, os 29 SKUs pela API, a busca
+full-text, PLP, PDP, sacola e checkout. Exige backend (3333), Next (3000) e banco
+no ar ao mesmo tempo.
+
+Duas ressalvas antes de rodar:
+
+- **O caminho do Chromium está fixo no script** (`executablePath` apontando para
+  um Linux), e as credenciais de login também. É script de máquina de
+  desenvolvimento; ajuste os dois antes.
+- **Ele não cobre as superfícies mais novas**: cupom, cartão, Clube, avaliações e
+  `/pedido/[id]` só têm cobertura nas suítes de `npm test` e
+  `npm --prefix backend test`. Passar aqui não é passar em tudo.
 
 ---
 
@@ -676,73 +810,104 @@ dados hoje, em qualquer clone. Ver `docs/seguranca-dados-pessoais.md`: exige
 feito automaticamente porque reescrever histórico quebra o clone de todo mundo —
 é decisão de quem administra o repositório.
 
-### 9.4 LGPD: apagar cliente não apaga o dado pessoal dele
+### 9.4 LGPD: apagar cliente não apagava o dado pessoal dele — agora redige antes
 
-`canastra.pedidos.user_id` é `ON DELETE SET NULL`, e não `CASCADE` — a única
-exceção entre as chaves estrangeiras do schema. É deliberado: apagar um cliente
-não pode apagar a venda, que é registro fiscal e contábil.
+`canastra.pedidos.user_id` é `ON DELETE SET NULL`, e não `CASCADE`. É deliberado:
+apagar um cliente não pode apagar a venda, que é registro fiscal e contábil.
 
-**Mas o nome, o CPF e o endereço da pessoa sobrevivem** em
-`canastra.pedidos.endereco_json` e nos itens do pedido, que são cópias
-congeladas no momento da compra. Um pedido de eliminação de dados sob a LGPD
-exige um passo de **redação** desses campos que **não existe ainda**. Se um
-titular pedir hoje, apagar a linha de `clientes` não cumpre o pedido.
+**O problema era o efeito colateral disso:** nome, CPF, telefone e endereço
+sobrevivem em `canastra.pedidos.endereco_json`, cópia congelada no momento da
+compra. Apagar a linha de `clientes` não cumpria um pedido de eliminação sob a
+LGPD — e, pior, deixava o pedido **órfão e irredigível**, porque sem o vínculo
+ninguém mais sabe de quem ele era.
+
+**As migrações 0013 e 0016 criaram o passo que faltava**, e a exclusão de conta
+(`backend/src/routes/conta.routes.js`) passou a executá-lo **antes** do DELETE no
+GoTrue, abortando a exclusão se a redação falhar. A ordem importa e é essa de
+propósito. A redação alcança as três fotografias de dado pessoal do schema:
+`pedidos.endereco_json`, `assinaturas.endereco_json` e `avaliacoes.nome_exibicao`
+(que é público — a PDP exibe). Antes de redigir, o fluxo **cancela no Mercado
+Pago** toda assinatura viva do titular: apagar a conta deixando um `preapproval`
+cobrando alguém que já não existe seria pior que não apagar.
+
+**O que a redação PRESERVA, e por quê:** cidade e UF (estatística de venda por
+região, não identificam sozinhas), o prefixo do CEP (região de distribuição,
+nunca a porta da casa), e total, status e itens do pedido — a venda, que é a
+obrigação fiscal. O endereço sai por **whitelist**, não denylist: um campo novo
+do checkout de amanhã vira `[redigido]` em vez de vazar por omissão.
+
+**Dois limites que continuam de pé:**
+
+- **Pedido JÁ órfão é irredigível por titular** — o vínculo se foi. Órfãos
+  criados antes da 0013 só têm redação **manual, em massa**; o SQL pronto está em
+  `docs/seguranca-dados-pessoais.md`, e rodá-lo uma vez em produção é item de
+  `docs/go-live.md` §6.
+- **O histórico do Git continua com os CSVs** (§9.3).
+
+Para atendimento a titular sem exclusão de conta, há `GET /lgpd/titulares/:userId/dados`
+e `POST /lgpd/titulares/:userId/redigir`, ambos só para admin.
 
 ---
 
 ## 10. Em aberto
 
-Ordenado por urgência. Cada item diz qual fase o fecha, ou que não há fase.
+Esta seção lista o que **falta em código**. O que virou ação humana — credencial,
+acesso à VPS, decisão comercial, conversa com o contador — saiu daqui e mora em
+**`docs/go-live.md`**, que é o documento a ler antes de abrir a loja.
 
-### 10.1 Fechado pelas fases planejadas
+### 10.1 Fechado pelas fases que faltam
 
-- **Webhook do Mercado Pago sem transação nem idempotência** — entregas repetidas
-  da mesma notificação podem inflar o estoque, e o MP reenvia por desenho. **F5.**
-- **A cobrança acontece antes de o pedido existir no banco**, sem chave de
-  idempotência: uma queda entre as duas coisas deixa pagamento sem pedido. **F5.**
-- **`PUT /promotions/:id` e `PUT /config`** sobrescrevem com NULL os campos
-  ausentes e respondem 200 sem checar `rowCount`. Esses endpoints deixam de
-  existir; a escrita passa a ser `PATCH` via PostgREST, parcial por natureza.
-  **F5.**
-- **`axios` (advisory)** — sai com o serviço enxuto. **F5.**
-- **CSP com `unsafe-inline` e `unsafe-eval` no `script-src`** — existem só por
-  causa do styled-components do painel legado. **F6.**
-- **O bundle do painel é servido a qualquer visitante** e o guard é de cliente. A
-  API está protegida rota a rota, então não há vazamento de dado — só de código.
-  O guard vira server-side no App Router. **F6.**
+- **`PUT /promotions/:id`** sobrescreve com NULL os campos ausentes e responde
+  200 sem checar `rowCount` — editar promoção inexistente "dá certo". `PUT
+  /config` já foi consertado (atualização parcial de verdade); este ficou. **F5.**
+- **`axios` (advisory)** — continua nas dependências do backend. **F5.**
 - **Conexão com o Postgres sem validar o certificado TLS**
   (`rejectUnauthorized: false` em `pgPool.js`). Com Postgres e serviço Node na
-  mesma VPS a exposição muda de natureza, mas a linha continua lá e precisa
-  sair. **F5.**
+  mesma VPS a exposição muda de natureza, mas a linha continua lá. **F5.**
+- **CSP com `unsafe-inline` e `unsafe-eval` no `script-src`** — existem só por
+  causa do styled-components do painel legado. O caminho é nonce via middleware.
+  **F6.**
+- **O bundle do painel é servido a qualquer visitante** e o guard é de cliente. A
+  API está protegida rota a rota e a RLS não depende do navegador, então não há
+  vazamento de dado — só de código. O guard vira server-side no App Router. **F6.**
+- **As imagens continuam no Cloudinary**, e `CLOUDINARY_*` continua no `.env`.
+  **F3.**
 
 ### 10.2 Sem fase que os feche
 
 - **Sem trilha de auditoria**: não há registro de quem mudou preço, estoque ou
   status de pedido. Numa loja oficial com mais de um administrador, é o primeiro
   pedido de quem investiga uma divergência.
-- **Redação de dado pessoal em pedidos** (§9.4).
-- **Backup** (§5.6) — precisa ser definido por quem opera a VPS, não por código.
-- **Pagamento com cartão**: o checkout aceita só Pix. Falta tokenizar o número no
-  navegador com o SDK do Mercado Pago e `NEXT_PUBLIC_MP_PUBLIC_KEY`; o backend já
-  aceita cartão pelo mesmo endpoint assim que `formData.token` chegar.
-- **Política de Privacidade e Termos de Uso** ainda atribuem a loja à Shopnaw.
-- **Sem `sitemap.ts`/`robots.ts`**; `/account` e `/dashboard` são indexáveis.
+- **A loja depende de três passos manuais no painel do Supabase** (§3.5) que nada
+  em código verifica. Um script de verificação de configuração do GoTrue seria o
+  fecho; hoje o que existe é a lista de conferência da §8.
+- **`npm run verifica` não cobre as superfícies novas** e tem caminho de Chromium
+  e credenciais fixos no script (§8.2).
 - **Acervo fotográfico**: `estetica.md` §8 pede três famílias de foto (sabor,
-  território, produto) em 4:5. Hoje existem quatro pack shots quadrados
-  (500×500) e a "foto de sabor" é o próprio pacote repetido, então o crossfade do
-  card não aparece. É produção fotográfica, não código — e o §8 estima isso como
-  ~60% da percepção de qualidade do site.
-- **Dados de catálogo por conferir**: os SKUs marcados como `pesquisa-web` ou
-  `inferido` em `data/catalogo-canastra.json` merecem conferência contra a loja
-  real antes de campanha — preço do Canastra Canela avulso, preços das cápsulas e
-  dos drip coffees (todos esgotados nas capturas, a loja não exibia valor) e foto
-  própria do Néctar de Minas, que hoje reusa a arte do Clássico.
+  território, produto) em 4:5. Hoje existem pack shots quadrados e a "foto de
+  sabor" é o próprio pacote repetido, então o crossfade do card não aparece. É
+  produção fotográfica, não código — e o §8 estima isso como ~60% da percepção de
+  qualidade do site.
 
-**Fechado na F1:** "sem migrações versionadas". `schema.sql` não existe mais;
-cada alteração de schema é um arquivo em `backend/db/migrations/`, aplicado uma
-vez e registrado.
+### 10.3 Passou a ser ação humana — está em `go-live.md`
 
-**Fechado na F2:**
+Nenhum destes é pendência de código; todos têm o passo a passo lá:
+
+| O que era | Onde está agora |
+|---|---|
+| Backup (§5.6) | `go-live.md` §7 — o script existe; falta agendar e **testar a restauração** |
+| Redação dos pedidos já órfãos (§9.4) | `go-live.md` §6 — SQL pronto em `seguranca-dados-pessoais.md` |
+| Reescrever o histórico do Git (§9.3) | `go-live.md` §6 — `scripts/reescrever-historico.sh`, pronto e **nunca executado** |
+| Dados de catálogo por conferir | `go-live.md` §5 — decisão comercial: 13 SKUs com estoque zero, 11 com preço zero |
+| Ligar o Bling e a NF-e | `go-live.md` §4 e `docs/bling.md` — exige app no Bling, 29 SKUs cadastrados lá e configuração fiscal com o contador |
+
+### 10.4 Fechado
+
+**Na F1:** "sem migrações versionadas". `schema.sql` não existe mais; cada
+alteração de schema é um arquivo em `backend/db/migrations/`, aplicado uma vez e
+registrado.
+
+**Na F2:**
 
 - "refresh token gravado em texto puro" — o Express não emite mais token nenhum,
   e a sessão do GoTrue não passa por aqui;
@@ -751,7 +916,33 @@ vez e registrado.
 - "senha da loja em `bcrypt` num banco nosso" — quem guarda credencial agora é o
   GoTrue.
 
-**Nasceu na F2 e não tem fase:** a loja depende de **três passos manuais no
-painel do Supabase** (§3.5) que nada em código verifica. Um script de verificação
-de configuração do GoTrue seria o fecho; hoje o que existe é a lista de conferência
-da §8.
+**Na F4:**
+
+- "os repositories do Express estão mortos contra o banco migrado" — todos falam
+  `canastra.*`, e o contrato JSON do painel legado é preservado por `AS` no
+  SELECT;
+- "a vitrine mostra preço e estoque do JSON versionado" — o comercial vem do
+  banco, com o JSON como degradação (§6);
+- "a sacola de quem está logado vive em dois lugares".
+
+**Na F5, a metade que importava:**
+
+- "webhook do Mercado Pago sem transação nem idempotência" — ele é transacional,
+  idempotente, e responde **500** para o MP reenviar em vez do 200 silencioso;
+- "a cobrança acontece antes de o pedido existir no banco" — o pedido nasce
+  primeiro, com chave de idempotência;
+- "`PUT /config` sobrescreve com NULL os campos ausentes".
+
+**Na F7:** proxy reverso de mesma origem, Dockerfiles e compose, PM2, script de
+backup com verificação do dump, CI com as duas suítes mais o build de produção, e
+o runbook `docs/deploy.md`.
+
+**Fora de fase, nas ondas 2 e 3:**
+
+- "pagamento com cartão: o checkout aceita só Pix" — o cartão é tokenizado no
+  navegador pelo SDK do MP, atrás de `NEXT_PUBLIC_MP_PUBLIC_KEY`;
+- "Política de Privacidade e Termos de Uso ainda atribuem a loja à Shopnaw";
+- "sem `sitemap.ts`/`robots.ts`; `/account` e `/dashboard` são indexáveis" — os
+  dois existem, e o `robots.ts` barra `/dashboard`, `/account`, `/checkout` e
+  `/sacola`;
+- "redação de dado pessoal em pedidos" — migrações 0013 e 0016 (§9.4).
