@@ -81,12 +81,24 @@ export default function PaginaConta() {
   // conta, e cada botão que sobrasse na tela responderia 401 ou 403.
   const [contaExcluida, setContaExcluida] = useState(false);
 
+  /**
+   * `?painel=negado` — a pessoa tentou abrir /dashboard e o guard de servidor
+   * (`lib/conta/painel-servidor.ts`) a mandou para cá.
+   *
+   * NÃO HÁ PERMANÊNCIA NENHUMA AQUI, e isso é deliberado: é o aviso desta
+   * visita, não um estado guardado. Gravar "já foi negado" em storage criaria
+   * uma marca que sobreviveria à promoção da conta a gestor — e a pessoa leria
+   * "sem acesso" no dia em que passasse a ter.
+   */
+  const [painelNegado, setPainelNegado] = useState(false);
+
   // `?assinatura=confirmada` é o back_url do preapproval — a pessoa acabou de
   // autorizar a cobrança no MP. Lido do location (e não de useSearchParams)
   // para não exigir Suspense numa página client-only.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("assinatura") === "confirmada") setVoltouDoMp(true);
+    if (params.get("painel") === "negado") setPainelNegado(true);
   }, []);
 
   useEffect(() => {
@@ -263,6 +275,22 @@ export default function PaginaConta() {
           Sair
         </Botao>
       </div>
+
+      {/* Chegou aqui empurrado pelo guard do painel. A frase diz o que
+          aconteceu e o que fazer — nunca "acesso negado" seco, que soa a
+          acusação e não oferece saída. A condição do papel existe porque um
+          gestor com este parâmetro na URL (link colado, histórico) leria uma
+          informação falsa sobre a própria conta. */}
+      {painelNegado && usuario.role !== "admin" ? (
+        <p
+          role="status"
+          className="mt-10 max-w-[62ch] border-l-2 border-alerta bg-cal-puro px-4 py-3 text-[15px] leading-relaxed"
+        >
+          Esta conta não tem acesso à área de gestão da loja. O painel é
+          liberado conta a conta — se o acesso deveria ser seu, fale com quem
+          administra a loja.
+        </p>
+      ) : null}
 
       {/* O retorno do MP: a autorização aconteceu lá; aqui é a boa notícia.
           O status na lista abaixo pode levar alguns segundos para virar

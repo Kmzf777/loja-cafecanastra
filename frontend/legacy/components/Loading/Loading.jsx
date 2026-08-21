@@ -1,7 +1,29 @@
 import styled from "styled-components";
 import { motion } from "framer-motion";
-import { ShoppingBag } from "lucide-react";
-import logo from "../../assets/novalogo.jpeg";
+
+/**
+ * A tela de carregamento DO PAINEL.
+ *
+ * O QUE ELA DIZIA ANTES. Este arquivo veio inteiro da Shopnaw, a loja de
+ * camisetas de onde o painel foi herdado: `alt="Shop NAW Logo"`, a logo
+ * `assets/novalogo.jpeg` e a frase "Carregando produtos para você" — a tela de
+ * espera de uma LOJA, exibida para o gestor do Café Canastra toda vez que o
+ * `AdminRoutes` conferia a sessão. Era a marca errada, na hora em que a pessoa
+ * só olha para a tela.
+ *
+ * A logo vem de `/logo-canastra.png`, servida de `public/` pelo mesmo Next que
+ * serve esta ilha — mesmo caminho que `pages/dashboard/Dashboard.jsx` já usa
+ * para o cabeçalho do painel. Ela é 3508×2481 (paisagem), então NÃO cabe no
+ * medalhão circular de 60×60 da versão antiga: aquele enquadramento era de um
+ * selo quadrado, e forçar a Canastra ali a espremeria. Por isso a composição é
+ * a logo inteira, centrada, com a proporção preservada.
+ *
+ * AS CORES VÊM DOS TOKENS DA CASA, e isto funciona aqui apesar de o painel ser
+ * styled-components: `app/globals.css` declara os tokens em `@theme static`, que
+ * força a emissão de todas as variáveis no `:root`, e aquele arquivo é carregado
+ * pelo layout raiz — o mesmo que envolve /dashboard. Uma cópia de hex aqui seria
+ * a quarta do projeto, e a que ninguém lembraria de atualizar.
+ */
 
 const Container = styled.div`
   display: flex;
@@ -10,36 +32,25 @@ const Container = styled.div`
   justify-content: center;
   height: 100vh;
   width: 100vw;
-  background-color: #ffffff;
+  background-color: var(--color-cal-puro);
   position: fixed;
   top: 0;
   left: 0;
   z-index: 9999;
 `;
 
-const IconWrapper = styled(motion.div)`
-  position: relative;
-  padding: 2rem;
-  background-color: #f1f5f9;
-  border-radius: 50%;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.05);
-`;
-
-const LogoImage = styled(motion.img)`
-  position: absolute;
-  top: -20px;
-  left: 25%;
-  transform: translateX(-50%);
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
+const Marca = styled(motion.img)`
+  width: 160px;
+  height: auto;
+  object-fit: contain;
 `;
 
 const LoadingMessage = styled(motion.p)`
   margin-top: 2rem;
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   font-weight: 500;
-  color: #4b5563;
+  letter-spacing: 0.02em;
+  color: var(--color-fuligem-80);
 `;
 
 const DotWrapper = styled.div`
@@ -51,35 +62,31 @@ const DotWrapper = styled.div`
 const Dot = styled(motion.span)`
   width: 0.5rem;
   height: 0.5rem;
-  background-color: #82858b;
+  background-color: var(--color-fuligem-55);
   border-radius: 50%;
 `;
 
 export default function Loading() {
   return (
-    <Container>
-      <IconWrapper
-        initial={{ scale: 0 }}
-        animate={{ scale: [0, 1.1, 1] }}
-        transition={{ duration: 0.8 }}
-      >
-        <LogoImage
-          src={logo.src}
-          alt="Shop NAW Logo"
-          animate={{ y: [0, -10, 0] }}
-          transition={{ duration: 1.5, repeat: Infinity }}
-        />
-        <ShoppingBag size={48} color="#82858b" />
-      </IconWrapper>
+    // `role="status"` e `aria-live` não existiam aqui: para quem usa leitor de
+    // tela, a espera era silêncio absoluto entre a navegação e o painel.
+    <Container role="status" aria-live="polite">
+      <Marca
+        src="/logo-canastra.png"
+        alt="Café Canastra"
+        initial={{ opacity: 0, scale: 0.96 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.5 }}
+      />
 
       <LoadingMessage
-        animate={{ opacity: [0.5, 1, 0.5] }}
+        animate={{ opacity: [0.55, 1, 0.55] }}
         transition={{ duration: 1.8, repeat: Infinity }}
       >
-        Carregando produtos para você
+        Carregando o painel
       </LoadingMessage>
 
-      <DotWrapper>
+      <DotWrapper aria-hidden="true">
         {[0, 0.2, 0.4].map((delay, i) => (
           <Dot
             key={i}
