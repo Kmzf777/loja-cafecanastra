@@ -10,6 +10,8 @@ import {
   Settings2,
   BadgeDollarSign,
   TicketPercent,
+  Star,
+  Repeat,
 } from "lucide-react";
 import PropTypes from "prop-types";
 import { useEffect } from "react";
@@ -60,6 +62,11 @@ function MenuAside({ isOpen }) {
             <ShoppingCart size={18} />
             <li>Pedidos realizados</li>
           </Link>
+
+          <Link className="link" to={"/dashboard/assinaturas"}>
+            <Repeat size={18} />
+            <li>Assinaturas do Clube</li>
+          </Link>
         </DivMenu>
 
         {/*--------------------------*/}
@@ -69,6 +76,16 @@ function MenuAside({ isOpen }) {
           <Link className="link" to={"/dashboard/clients/registeredClients"}>
             <CircleUser size={18} />
             <li>Clientes cadastrados</li>
+          </Link>
+        </DivMenu>
+
+        {/*--------------------------*/}
+
+        <DivMenu>
+          <span>Avaliações</span>
+          <Link className="link" to={"/dashboard/avaliacoes"}>
+            <Star size={18} />
+            <li>Moderar avaliações</li>
           </Link>
         </DivMenu>
 

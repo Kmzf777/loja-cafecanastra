@@ -57,6 +57,11 @@ no GitHub. Para fechar de verdade, é preciso, nesta ordem:
    refaça o clone. Por ser destrutivo e afetar quem mais estiver no repositório,
    **não foi executado automaticamente** — é decisão de quem administra.
 
+   > **Atualização 2026-08-20:** o roteiro acima virou script pronto, com
+   > clone espelho, guarda interativa dupla e conferência pós-reescrita:
+   > `scripts/reescrever-historico.sh`. Continua **não executado** — ver a
+   > seção "LGPD — Onda 3H" no fim deste documento.
+
 2. **Invalidar o que vazou**, porque o histórico ficou público enquanto existiu.
    Enquanto o item 1 não for feito, `git show <commit>:usuarios.csv` continua
    devolvendo os dados hoje, em qualquer clone:
@@ -120,3 +125,182 @@ descadastro em toda campanha (obrigatório de qualquer forma) e a limpeza dos
 nunca-confirmados após prazo curto. Enquanto a lista não recebe campanha
 nenhuma — que é o estado atual — o risco fica limitado a existir uma linha a
 mais na tabela.
+
+---
+
+# LGPD — Onda 3H: redação de dados nos pedidos e preparo da reescrita
+
+Data: 2026-08-20
+
+## O problema que esta onda fechou
+
+Apagar um cliente (`DELETE /auth/users/me` → GoTrue → cascade em
+`canastra.clientes`) preserva a venda de propósito (`pedidos.user_id` vira NULL
+— ON DELETE SET NULL, 0005: pedido é registro fiscal), mas **nome, CPF,
+telefone e endereço completos sobreviviam congelados em
+`pedidos.endereco_json`**. "Excluir a conta" nunca excluía os dados da pessoa,
+e um pedido de titular (LGPD art. 18) não era atendível. Pior: uma vez órfão,
+o pedido perde o vínculo — não há mais como saber de quem era, e o dado fica
+**irredigível para sempre**.
+
+## O que foi entregue
+
+1. **Redação no banco** — migração `0013_redacao_lgpd.sql`:
+   `canastra.redigir_dados_do_titular(uuid)` redige, em todos os pedidos do
+   titular, tudo que identifica a pessoa (por **whitelist**: só cidade, UF e o
+   prefixo do CEP — 3 dígitos + `xxxxx` — sobrevivem, para estatística de
+   venda por região; total, status e itens de produto ficam, porque são a
+   venda). Cobre os dois vocabulários de chave que já passaram pela loja
+   (inglês da vitrine atual, português do legado). Idempotente e auditável:
+   coluna nova `pedidos.redigido_em` carimba a primeira redação e impede a
+   segunda de mover o carimbo. Titular NULL é **erro**, nunca no-op — ver o
+   cabeçalho da migração.
+2. **A redação alcança TUDO que congela dado pessoal** — migração
+   `0016_redacao_ampliada.sql`: as ondas irmãs criaram mais duas fotografias
+   que a 0013 não via. `assinaturas.endereco_json` (0015, o endereço congelado
+   na adesão do Clube) passa a ser redigido — **só nas assinaturas
+   `cancelada`**, porque enquanto a entrega recorrente existe o endereço é o
+   que executa o contrato (art. 16, I); e `avaliacoes.nome_exibicao` (0014, o
+   nome do autor, **público na PDP**) vira `Cliente Canastra` — nota e texto
+   ficam, que são prova social, não dado pessoal. A whitelist de endereço
+   virou a função `canastra.redigir_endereco(jsonb)`, uma só para os dois
+   consumidores e para o SQL manual do fim deste documento.
+3. **A exclusão de conta CANCELA, REDIGE e só então APAGA** — `conta.routes.js`
+   (as duas rotas: `/auth/users/me` e `/auth/users/:id`), nesta ordem:
+   trava do último admin → credencial do GoTrue → **cancelar as assinaturas
+   vivas** (`ClubeController.cancelarAssinaturasDoTitular`: cancela no Mercado
+   Pago e marca `cancelada`) → **redigir** → DELETE no GoTrue. **Falha em
+   qualquer um dos dois passos do meio aborta a exclusão e nada é apagado**
+   (502 na recusa do MP, 500 na falha da redação).
+   - *Cancelar antes de redigir* não é ordem arbitrária: a redação só alcança
+     assinatura `cancelada`, então cancelar primeiro é o que a faz chegar ao
+     endereço da assinatura na mesma passagem.
+   - *Nunca apagar sem cancelar*: `assinaturas.user_id` é ON DELETE SET NULL,
+     e um preapproval órfão continua **cobrando o cartão** de quem pediu para
+     sumir do banco, sem dono para cancelá-lo.
+   - *O troco assumido*: se o GoTrue falhar no fim, sobra conta viva com
+     assinaturas canceladas e pedidos redigidos — reversível no que importa
+     (assinar de novo é um clique) e re-executável (a redação repetida é no-op
+     por `redigido_em`, o cancelamento repetido devolve lista vazia, e a
+     segunda tentativa conclui). O troco inverso não é reversível em nada.
+4. **Atendimento a titular pelo painel** — `backend/src/routes/lgpd.routes.js`
+   (admin): `GET /lgpd/titulares/:userId/dados` (acesso/portabilidade — conta,
+   cadastro, endereços, pedidos, assinaturas, avaliações e a inscrição na
+   newsletter, esta casada por e-mail; a completude é o requisito do art. 18,
+   e a próxima tabela com dado pessoal tem de entrar nessa lista) e
+   `POST /lgpd/titulares/:userId/redigir` (eliminação parcial: redige SEM
+   apagar a conta; quem disparou fica no log). 404 uniforme para quem não é
+   cliente desta loja — o endpoint não é oráculo sobre o `auth.users`
+   compartilhado.
+5. **Script de reescrita do histórico pronto** —
+   `scripts/reescrever-historico.sh`: clone espelho fresco,
+   `git filter-repo --invert-paths` com os 11 caminhos (conferidos contra o
+   histórico real: todos na raiz, commit `5ddcb71`; `.dumps-antigos/` nunca
+   foi commitado), guarda interativa dupla (digitar o nome do repositório, e
+   de novo para o push), conferência pós-reescrita e o checklist de
+   invalidação impresso por `trap` (sai mesmo se o push falhar — é quando ele
+   mais faz falta). O push empurra `refs/heads/*` e `refs/tags/*` explícitos,
+   nunca `--mirror`: um clone espelho do GitHub traz as refs de pull request,
+   que são *hidden refs* do lado de lá e fariam o push inteiro ser recusado.
+   **Não foi executado.**
+6. **Testes** — `backend/test/f7_lgpd.test.js` (20 casos): o que fica, o que
+   sai, as formas inesperadas de `endereco_json` (lista, escalar, `{}`, JSON
+   null, SQL NULL, CEP impresentável), idempotência, recusa do NULL, a ordem
+   cancelar→redigir→apagar, o aborto na recusa do MP e na falha da redação, o
+   retry depois de um GoTrue caído, a exportação completa e os 404 uniformes.
+
+## O que SEGUE pendente — ação de quem administra (humana, fora do repo)
+
+1. **Executar a reescrita**: `bash scripts/reescrever-historico.sh` (exige
+   `git filter-repo` instalado e credencial de push). Depois: todo mundo
+   reclona; se for GitHub, pedir ao suporte a limpeza de objetos órfãos e
+   caches de forks/PRs.
+   **E fechar a porta de volta**: enquanto alguém ainda tiver o clone antigo,
+   um `git push` de branch baseada no histórico pré-reescrita **devolve todos
+   os blobs ao servidor** e desfaz o trabalho sem ninguém perceber. Proteja os
+   branches / bloqueie push até que todos confirmem ter reclonado, e quem
+   tiver trabalho local transplanta com
+   `git rebase --onto <novo-main> <base-antiga> <branch-local>` (nunca `pull`
+   nem `merge`).
+2. **Invalidar o que vazou** (o script imprime o mesmo checklist):
+   `JWT_SECRET_REFRESH` da loja antiga, redefinição de senha das 2 contas de
+   `usuarios.csv`, tokens de `password_resets.csv`.
+3. **Se o repositório foi público em algum momento**: comunicar os titulares
+   e avaliar comunicação à ANPD (art. 48).
+
+## Órfãos pré-existentes: decisão e SQL pronto
+
+A redação por titular NÃO alcança a linha que **já** estava órfã antes desta
+onda (o vínculo se foi junto com a conta — `user_id` NULL não pertence a
+ninguém, e a função exige um titular). Se o banco de **produção** tiver
+alguma, é redação manual, única, em massa — como `postgres`, no editor SQL.
+
+Duas tabelas entram aqui: `pedidos` (o caso antigo, que existe desde 2024) e
+`avaliacoes` (0014 — `nome_exibicao` é o nome **público na PDP**, e uma
+avaliação de conta já apagada continuaria estampando o nome de alguém na
+vitrine). `assinaturas` não tem órfão pré-existente — a tabela nasceu nesta
+mesma leva, e daqui pra frente a exclusão de conta cancela e redige antes de
+apagar.
+
+```sql
+-- 1. Medir os pedidos órfãos. Se vier 0, pule para o passo 4.
+SELECT count(*) AS orfaos_nao_redigidos
+  FROM canastra.pedidos
+ WHERE user_id IS NULL AND redigido_em IS NULL;
+
+-- 2. Olhar os itens antes (no formato atual só há produto; se aparecer campo
+--    pessoal dentro de um item, redigi-lo com a mesma denylist da 0013):
+SELECT pedido_id, itens
+  FROM canastra.pedidos
+ WHERE user_id IS NULL AND redigido_em IS NULL;
+
+-- 3. Redigir os endereços e carimbar. `canastra.redigir_endereco` (0016) é a
+--    MESMA função que o fluxo por titular usa — chamá-la aqui, em vez de
+--    copiar a whitelist para dentro deste documento, é o que garante que o
+--    órfão e o não-órfão sejam redigidos pela mesma regra para sempre:
+UPDATE canastra.pedidos p
+   SET endereco_json = CASE
+         WHEN p.endereco_json IS NULL THEN p.endereco_json
+         ELSE canastra.redigir_endereco(p.endereco_json)
+       END,
+       redigido_em   = now(),
+       atualizado_em = now()
+ WHERE p.user_id IS NULL
+   AND p.redigido_em IS NULL;
+
+-- 4. AVALIAÇÕES ÓRFÃS — `avaliacoes.nome_exibicao` (0014) é o nome congelado
+--    no INSERT e PÚBLICO: `anon` tem GRANT de SELECT nessa coluna e a PDP a
+--    exibe. Uma avaliação de conta já apagada continua estampando o nome da
+--    pessoa na vitrine da loja, indefinidamente. Medir e redigir:
+SELECT count(*) AS avaliacoes_orfas_com_nome
+  FROM canastra.avaliacoes
+ WHERE user_id IS NULL AND nome_exibicao <> 'Cliente Canastra';
+
+--    O placeholder é 'Cliente Canastra' e não "[redigido]" pelo mesmo motivo
+--    da 0016: a coluna é vitrine, e um colchete técnico no lugar do autor
+--    viraria curiosidade pública. Nota e texto NÃO são tocados (prova social),
+--    e `moderado_em` também não — redação não é moderação. O próprio predicado
+--    é a idempotência: rodar duas vezes não acha linha na segunda.
+UPDATE canastra.avaliacoes
+   SET nome_exibicao = 'Cliente Canastra'
+ WHERE user_id IS NULL
+   AND nome_exibicao <> 'Cliente Canastra';
+```
+
+Daqui pra frente o caso não se repete: a exclusão de conta cancela, redige e
+só então apaga, então **todo órfão novo já nasce redigido**.
+
+### O limite conhecido: assinatura cancelada DEPOIS de uma redação parcial
+
+A redação só alcança assinatura `cancelada` (o endereço de uma assinatura viva
+é o que executa o contrato). Então há uma janela: titular que pede a
+eliminação parcial (`POST /lgpd/titulares/:id/redigir`) hoje, com assinatura
+ativa, e cancela a assinatura amanhã fica com o endereço da adesão em
+`assinaturas.endereco_json` até a **próxima** redação daquele titular. Não é
+órfão — o vínculo continua lá, e qualquer nova redação (parcial ou pela
+exclusão de conta) fecha a pendência. Se o atendimento a um titular específico
+exigir fechar a janela na hora, basta repetir o `POST .../redigir` depois do
+cancelamento. Uma varredura periódica seria a solução definitiva; não foi
+escrita porque o volume de assinaturas ainda não a justifica — quando
+justificar, ela é um `SELECT` por `status = 'cancelada' AND redigido_em IS
+NULL` chamando a mesma função.

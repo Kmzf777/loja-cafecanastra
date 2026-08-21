@@ -52,7 +52,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 
 -- ----------------------------------------------------------------------------
--- 1. Estrutura: as 11 migrações, na ordem do runner
+-- 1. Estrutura: as 16 migrações, na ordem do runner
 -- ----------------------------------------------------------------------------
 
 -- Identico ao BOOTSTRAP de db/migrar.js — inclusive os REVOKE em
@@ -2374,6 +2374,1045 @@ ALTER TABLE canastra.carrinhos
 -- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
 -- primeiro CREATE de objeto ja existente.
 INSERT INTO canastra.migracoes (versao) VALUES ('0011_newsletter_e_abandono')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0012_bling
+-- ----------------------------------------------------------------------------
+
+-- Bling/NF-e (onda 3G): o rastro do ERP no pedido, e o refresh token rotativo
+-- do OAuth na configuracao da loja.
+--
+-- O gestor opera o fiscal e o estoque no Bling, e vem da Tray, onde pedido
+-- aprovado virava pedido de venda + NF-e sozinho. Esta migracao da ao schema o
+-- que o servico (src/services/blingPedidos.js) precisa para reproduzir isso:
+-- saber SE um pedido ja foi ao Bling (idempotencia), COMO ele esta la, e o que
+-- a NF-e emitida devolveu. Tudo NULL por padrao: a integracao nasce desligada
+-- (BLING_ATIVO, decisao 5 do plano mestre) e um banco sem Bling nenhum e
+-- exatamente igual ao de ontem.
+
+-- `bling_id` e TEXTO, nao inteiro, pela mesma lente de `pagamento_id_mp` (0005):
+-- e um identificador OPACO de outro sistema — nao se soma, nao se ordena por
+-- valor, e o dia em que o Bling mudar o formato nao pode ser uma migracao aqui.
+--
+-- `bling_situacao` guarda a ultima situacao conhecida no Bling ('sincronizando'
+-- enquanto a criacao esta em voo — e o claim atomico da idempotencia, ver o
+-- servico — e depois o que o Bling disser). E cache informativo para o painel,
+-- nunca fonte de decisao de dinheiro: quem manda no status da LOJA continua
+-- sendo `status`, com o CHECK de 0009.
+--
+-- `bling_claim_em` e o RELOGIO DO CLAIM, e existe separado de propósito. O
+-- corte que desfaz um claim orfao ("faz mais de 10 minutos que alguem disse
+-- 'sincronizando' e nunca voltou") precisa de um carimbo que so o claim mexa.
+-- `atualizado_em` nao serve: QUALQUER escritor o carimba — o webhook do MP, a
+-- mudanca de status pelo painel, a redacao da LGPD. Com ele, um pedido travado
+-- em 'sincronizando' cuja linha fosse tocada por outro fluxo teria o relogio
+-- do claim zerado sem que o claim tivesse recomecado, e a auto-cura ficaria
+-- adiada indefinidamente — o botao do painel responderia "ja esta
+-- sincronizando" para sempre.
+--
+-- Os `nfe_*` sao a fotografia da nota emitida: o id da nota DENTRO do Bling
+-- (`nfe_id`, guardado assim que ela e gerada), numero (com serie), chave de
+-- acesso (a identidade fiscal do documento, 44 digitos) e o link do DANFE que
+-- o Bling publica. Fotografia, como `cupom_codigo` em 0010: a nota e um
+-- documento fiscal imutavel — se amanha a conta Bling for outra, o que foi
+-- emitido continua registrado aqui.
+--
+-- `nfe_id` E O QUE SEPARA "GERADA" DE "TRANSMITIDA". A emissao tem dois
+-- passos no Bling (gerar a nota a partir do pedido; envia-la a SEFAZ), e o
+-- segundo falha sozinho — configuracao fiscal ausente e o caso classico. Sem
+-- guardar o id, a nota gerada ficava orfa no Bling e a retentativa geraria
+-- OUTRA. Com ele, a retentativa retransmite a MESMA. Quem responde "ja
+-- emitida" e `nfe_chave`, que so e gravada depois da transmissao aceita.
+ALTER TABLE canastra.pedidos
+  ADD COLUMN bling_id              text,
+  ADD COLUMN bling_situacao        text,
+  ADD COLUMN bling_claim_em        timestamptz,
+  ADD COLUMN bling_sincronizado_em timestamptz,
+  ADD COLUMN nfe_id                text,
+  ADD COLUMN nfe_numero            text,
+  ADD COLUMN nfe_chave             text,
+  ADD COLUMN nfe_url               text;
+
+-- A trava que impede um MESMO pedido de venda do Bling de ser dado como
+-- origem de dois pedidos da loja: o segundo estoura 23505 em vez de virar um
+-- vinculo cruzado em silencio (dois pedidos apontando para a mesma venda, e a
+-- conferencia do gestor sem saber qual e qual).
+--
+-- ATENCAO AO QUE ELE **NAO** FAZ: ele nao impede duas vendas serem criadas no
+-- Bling para o MESMO pedido da loja — nesse caso os dois `bling_id` sao
+-- diferentes e o indice aceita os dois de bom grado. Contra o dobro no ERP
+-- quem trabalha e o claim do servico (`bling_situacao = 'sincronizando'` +
+-- `bling_claim_em`), o prazo agregado que aborta antes de o claim envelhecer,
+-- e a busca por `numeroLoja` no Bling antes de criar quando o claim foi
+-- herdado de um processo morto. PARCIAL (WHERE ... IS NOT NULL)
+-- como os indices de 0005: quase todo pedido vive com bling_id nulo (integracao
+-- desligada, ou pedido anterior a ela) e um indice total recusaria o segundo
+-- NULL... nao recusa (NULL nunca conflita), mas indexaria toda a tabela para
+-- proteger um punhado de linhas.
+CREATE UNIQUE INDEX pedidos_bling_id_idx
+  ON canastra.pedidos (bling_id)
+  WHERE bling_id IS NOT NULL;
+
+-- O refresh token do OAuth do Bling e ROTATIVO: cada renovacao INVALIDA o token
+-- usado e devolve um novo. Guarda-lo so no .env mataria a integracao no
+-- primeiro restart depois da primeira renovacao — o processo subiria com um
+-- token ja queimado e nenhum log de renovacao explicaria o 400 do Bling. Por
+-- isso ele mora no banco, atualizado a cada renovacao pelo servico
+-- (src/services/blingClient.js); a env BLING_REFRESH_TOKEN vira so a semente
+-- da primeira autorizacao. Em `config_loja` porque e configuracao de UMA loja,
+-- linha unica — criar tabela nova para um campo seria cerimonia sem ganho.
+ALTER TABLE canastra.config_loja
+  ADD COLUMN bling_refresh_token text;
+
+-- E AQUI ESTA O PONTO DE SEGURANCA DA MIGRACAO: `config_loja` e PUBLICA por
+-- desenho — GRANT SELECT para `anon` (0005), politica de leitura USING (true)
+-- (0006) — porque banner, titulo e piso de frete gratis SAO informacao publica.
+-- Um segredo em coluna nova desta tabela nasceria legivel por qualquer chave
+-- anonima da instancia via PostgREST, e refresh token do Bling e credencial
+-- que emite nota fiscal e mexe em estoque.
+--
+-- A tranca e a mesma do `custo` em `produtos` (0006): privilegio de COLUNA.
+-- Revoga-se o privilegio de tabela e devolve-se a lista explicita — todas as
+-- colunas MENOS `bling_refresh_token`. O UPDATE/INSERT de `authenticated`
+-- (0006) vira lista tambem: a politica `config_loja_admin_escreve` decide a
+-- LINHA, o GRANT decide as COLUNAS, e nem o admin escreve o token pelo
+-- PostgREST — quem o escreve e SO o servico Node, que conecta como dono do
+-- banco e nao passa por GRANT nenhum.
+--
+-- Consequencia conhecida, a mesma medida em 0006 para `produtos`: `select=*`
+-- (e `RETURNING *`) de PostgREST nesta tabela passa a responder 42501. Medido
+-- que ninguem faz isso hoje: vitrine e painel leem a configuracao pelo Express
+-- (`GET /config`), que projeta as colunas pelo nome.
+REVOKE SELECT ON canastra.config_loja FROM anon, authenticated;
+REVOKE INSERT, UPDATE ON canastra.config_loja FROM authenticated;
+
+GRANT SELECT (id, banner_desktop, banner_mobile, titulo_site, whatsapp,
+              barra_de_aviso, frete_gratis_minimo_centavos, atualizado_em)
+  ON canastra.config_loja TO anon, authenticated;
+
+GRANT INSERT (id, banner_desktop, banner_mobile, titulo_site, whatsapp,
+              barra_de_aviso, frete_gratis_minimo_centavos, atualizado_em),
+      UPDATE (banner_desktop, banner_mobile, titulo_site, whatsapp,
+              barra_de_aviso, frete_gratis_minimo_centavos, atualizado_em)
+  ON canastra.config_loja TO authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0012_bling')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0013_redacao_lgpd
+-- ----------------------------------------------------------------------------
+
+-- LGPD: redação dos dados do titular nos pedidos.
+--
+-- POR QUE ESTA MIGRACAO EXISTE
+-- 0005 deixou a divida escrita no proprio cabecalho de `pedidos`: o ON DELETE
+-- SET NULL preserva a VENDA quando o cliente e apagado (faturamento e registro
+-- fiscal), mas `endereco_json` e uma fotografia congelada — nome, CPF, telefone
+-- e endereco completo sobrevivem intactos no pedido orfao. "Apagar o cliente"
+-- NUNCA foi apagar os dados da pessoa, e um pedido de exclusao de titular
+-- (LGPD art. 18, IV/VI) nao era atendivel. Esta migracao cria o passo que
+-- faltava: redigir o que identifica a pessoa, preservando o que a obrigacao
+-- fiscal e a estatistica de vendas pedem.
+--
+-- O QUE FICA E O QUE SAI, E POR QUE A LINHA E ESSA
+--   FICA  cidade + UF ........ estatistica de venda por regiao, nao identifica
+--                              uma pessoa sozinha;
+--   FICA  prefixo do CEP ..... 3 digitos + 'xxxxx': regiao de distribuicao,
+--                              nunca a porta da casa (o CEP completo, junto do
+--                              numero, e um endereco);
+--   FICA  total/status/itens de produto ... a VENDA, que 0005 preserva de
+--                              proposito — o que se vendeu, por quanto, quando;
+--   SAI   todo o resto do endereco, por WHITELIST e nao por denylist: chave
+--                              que a redacao nao conhece (um campo novo do
+--                              checkout de amanha) vira "[redigido]" em vez de
+--                              vazar por omissao. Denylist envelhece.
+--
+-- OS DOIS VOCABULARIOS SAO REAIS, nao paranoia: a vitrine atual grava chaves em
+-- ingles (`zip_code`, `street`, `city` — frontend/lib/sacola/checkout.ts), e o
+-- legado/loja anterior gravava em portugues (`nome`, `cpf`, `rua` — o exemplo
+-- literal do cabecalho de 0005). A whitelist cobre os dois; o que nao esta nela
+-- e redigido de qualquer forma.
+--
+-- O LIMITE CONHECIDO, ESCRITO PARA NAO SE PERDER: pedido JA orfao (user_id
+-- NULL) e IRREDIGIVEL por titular — o vinculo se foi, nao ha como saber de quem
+-- ele era. Por isso a redacao TEM de acontecer ANTES ou JUNTO da exclusao da
+-- conta (conta.routes.js chama esta funcao antes do DELETE no GoTrue e aborta a
+-- exclusao se ela falhar), e por isso o parametro NULL e ERRO e nao no-op — um
+-- no-op silencioso naquele fluxo "redigiria" nada e fabricaria o orfao
+-- irredigivel para sempre. Orfaos pre-existentes (criados antes desta migracao)
+-- so tem redacao MANUAL, em massa: o SQL pronto esta em
+-- docs/seguranca-dados-pessoais.md.
+
+-- NULL = nunca redigido; preenchida = quando a redacao aconteceu. E o carimbo
+-- de auditoria do atendimento ao titular (prova de que o pedido do art. 18 foi
+-- atendido, e quando) e o que torna a funcao abaixo idempotente: so pedidos
+-- com a coluna NULL sao alvo, entao repetir a chamada nao move o carimbo da
+-- PRIMEIRA redacao.
+ALTER TABLE canastra.pedidos
+  ADD COLUMN redigido_em timestamptz;
+
+/**
+ * POR QUE UMA FUNCAO NO BANCO, e nao SQL solto no Node: a redacao de todos os
+ * pedidos de um titular precisa ser ATOMICA (redigir metade e falhar deixaria
+ * um estado que nenhum retry entende) e precisa ser testavel isolada do
+ * Express. Uma funcao e as duas coisas de graca.
+ *
+ * NAO E SECURITY DEFINER, e a decisao e a mesma medida em 0007: quem chama e o
+ * pool do Express (o dono do banco, isento de RLS nas proprias tabelas) ou
+ * `service_role` (BYPASSRLS + ALL em tabelas de `canastra`, default privileges
+ * de 0001). Nao ha privilegio faltando a emprestar — DEFINER aqui so
+ * acrescentaria a superficie de bypass que 0006 gasta o arquivo inteiro
+ * fechando. O teste f7_lgpd.test.js afirma `prosecdef = false` no catalogo.
+ *
+ * `SET search_path` vai mesmo assim, pelo motivo pratico de 0007: todo nome no
+ * corpo esta qualificado, e o SET garante que continue resolvendo igual se um
+ * nome novo entrar sem qualificacao.
+ *
+ * NAO E STRICT, de proposito e com consequencia grave se mudar: STRICT faria
+ * `redigir_dados_do_titular(NULL)` devolver NULL SEM ENTRAR NO CORPO — um
+ * no-op silencioso exatamente no fluxo de exclusao de conta, que apagaria a
+ * conta sem redigir nada. O caso NULL e tratado dentro, como ERRO.
+ *
+ * RETORNA a contagem de pedidos redigidos: o endpoint de atendimento a titular
+ * responde com ela, e "0" depois de uma primeira chamada e a prova barata de
+ * idempotencia nos testes.
+ */
+CREATE FUNCTION canastra.redigir_dados_do_titular(alvo_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SET search_path = canastra, pg_temp
+AS $redigir$
+DECLARE
+  pedidos_redigidos integer;
+BEGIN
+  /**
+   * NULL e ERRO, nunca "nenhum pedido". Ver o cabecalho: pedido orfao perdeu o
+   * vinculo com o titular, entao nao existe "redigir os pedidos do titular
+   * NULL" — existiria "redigir TODOS os orfaos da tabela", que e outra
+   * operacao, manual e deliberada (docs/seguranca-dados-pessoais.md).
+   *
+   * ERRCODE 22004 (null_value_not_allowed): e o codigo que um STRICT
+   * implicitamente "usaria" se recusasse em vez de calar — quem chama trata um
+   * caso de contrato, nao um P0001 generico.
+   */
+  IF alvo_user_id IS NULL THEN
+    RAISE EXCEPTION 'A redação exige um titular: pedido órfão não tem redação por titular.'
+      USING ERRCODE = 'null_value_not_allowed',
+            HINT = 'Redija ANTES ou JUNTO da exclusão da conta — depois dela o vínculo já se foi.';
+  END IF;
+
+  UPDATE canastra.pedidos p
+     SET
+       /**
+        * O endereco, por WHITELIST. `jsonb_each` + `jsonb_object_agg` reescreve
+        * o objeto chave a chave:
+        *   - cidade/UF passam intactas (as duas grafias);
+        *   - CEP vira prefixo: so os digitos, 3 primeiros, resto 'xxxxx'. Um
+        *     CEP impresentavel (vazio, lixo) degrada para 'xxxxx' — perde a
+        *     estatistica, nunca vaza o dado;
+        *   - TODA outra chave vira "[redigido]", inclusive as que ainda nao
+        *     existem.
+        *
+        * O COALESCE para '{}' nao e enfeite: `jsonb_object_agg` sobre um objeto
+        * VAZIO agrega zero linhas e devolve NULL — e um endereco que era `{}`
+        * viraria NULL, mudando de tipo aos olhos de quem le.
+        *
+        * Endereco NULL (ou JSON null) fica como esta: nao ha dado a redigir e
+        * inventar um objeto onde nunca houve um mentiria sobre o pedido.
+        * Endereco que nao e objeto (escalar gravado por algum caminho torto)
+        * vira "[redigido]" inteiro: nao da para saber o que ha dentro de uma
+        * string livre, entao ela sai por inteiro.
+        */
+       endereco_json = CASE
+         WHEN p.endereco_json IS NULL OR jsonb_typeof(p.endereco_json) = 'null'
+           THEN p.endereco_json
+         WHEN jsonb_typeof(p.endereco_json) <> 'object'
+           THEN to_jsonb('[redigido]'::text)
+         ELSE (
+           SELECT COALESCE(
+             jsonb_object_agg(
+               e.chave,
+               CASE
+                 WHEN lower(e.chave) IN ('cidade', 'city')          THEN e.valor
+                 WHEN lower(e.chave) IN ('uf', 'estado', 'state')   THEN e.valor
+                 WHEN lower(e.chave) IN ('cep', 'zip_code', 'zipcode', 'postal_code')
+                   THEN to_jsonb(
+                     left(regexp_replace(COALESCE(e.valor #>> '{}', ''), '\D', '', 'g'), 3)
+                     || 'xxxxx'
+                   )
+                 ELSE to_jsonb('[redigido]'::text)
+               END
+             ),
+             '{}'::jsonb
+           )
+           FROM jsonb_each(p.endereco_json) AS e(chave, valor)
+         )
+       END,
+       /**
+        * Os itens, por DENYLIST — e aqui a denylist e a escolha certa, nao a
+        * preguicosa: o formato real gravado pelo checkout (validatedItems em
+        * PaymentController) e SO produto — product_id, name (nome do PRODUTO,
+        * que e registro fiscal do que se vendeu, nunca dado pessoal), image,
+        * price, quantity, size e dimensoes. Uma whitelist congelaria essa
+        * lista e apagaria o proximo campo de PRODUTO que o checkout gravasse —
+        * destruindo registro fiscal, que e exatamente o que 0005 preserva. A
+        * denylist aqui e defensiva contra formato historico/futuro que carregue
+        * dado pessoal DENTRO do item; hoje ela nao encontra nada.
+        *
+        * So listas sao processadas: e o unico formato que algum caminho de
+        * escrita da loja produz (JSON.stringify de um array, sempre). NULL e
+        * nao-lista ficam como estao.
+        */
+       itens = CASE
+         WHEN p.itens IS NULL OR jsonb_typeof(p.itens) <> 'array'
+           THEN p.itens
+         ELSE (
+           SELECT COALESCE(
+             jsonb_agg(
+               CASE
+                 WHEN jsonb_typeof(item.valor) <> 'object' THEN item.valor
+                 ELSE (
+                   SELECT COALESCE(
+                     jsonb_object_agg(
+                       i.chave,
+                       CASE
+                         WHEN lower(i.chave) IN (
+                           'cpf', 'email', 'telefone', 'phone', 'celular',
+                           'nome_cliente', 'destinatario', 'endereco', 'address'
+                         ) THEN to_jsonb('[redigido]'::text)
+                         ELSE i.valor
+                       END
+                     ),
+                     '{}'::jsonb
+                   )
+                   FROM jsonb_each(item.valor) AS i(chave, valor)
+                 )
+               END
+               -- A ordem dos itens e parte do registro da venda; sem o ORDER BY
+               -- a agregacao teria licenca para embaralha-la.
+               ORDER BY item.ordem
+             ),
+             '[]'::jsonb
+           )
+           FROM jsonb_array_elements(p.itens) WITH ORDINALITY AS item(valor, ordem)
+         )
+       END,
+       redigido_em = now(),
+       -- Regra de 0005: nao ha trigger de moddatetime, quem escreve carimba.
+       atualizado_em = now()
+   WHERE p.user_id = alvo_user_id
+     -- A idempotencia inteira esta neste predicado: pedido ja redigido nao e
+     -- alvo de novo, entao repetir a chamada devolve 0 e o carimbo da PRIMEIRA
+     -- redacao (a que atendeu o titular) fica intacto para a auditoria.
+     AND p.redigido_em IS NULL;
+
+  GET DIAGNOSTICS pedidos_redigidos = ROW_COUNT;
+  RETURN pedidos_redigidos;
+END;
+$redigir$;
+
+/**
+ * `proacl` nasce nulo = EXECUTE para PUBLIC, e PUBLIC inclui `anon`. O REVOKE
+ * primeiro e a lista explicita depois deixam escrito quem chama.
+ *
+ * SO `service_role`, e a ausencia dos outros dois e deliberada:
+ *   · `authenticated` NAO executa: redacao e gesto de SERVIDOR — o fluxo de
+ *     exclusao de conta e o atendimento a titular pelo admin, ambos no Express
+ *     (que conecta como dono do banco e nem precisa de GRANT). Dar EXECUTE a
+ *     `authenticated` deixaria qualquer token da instancia COMPARTILHADA
+ *     disparar redacao... de nada (a funcao so alcanca pedidos do proprio
+ *     user_id se combinada com RLS? NAO — ela e INVOKER mas recebe o alvo por
+ *     PARAMETRO, entao um token qualquer apontaria para o user_id que quisesse
+ *     e apagaria dados de endereco de pedidos ALHEIOS. E destruicao de dado
+ *     como servico, e fica fechada).
+ *   · `anon` idem, com menos cerimonia ainda.
+ *
+ * NOTA: o pool do Express conecta como o DONO do banco (docs/producao.md §5.1),
+ * que executa a propria funcao sem GRANT nenhum — o GRANT a `service_role`
+ * existe para o caminho PostgREST/scripts de operacao, nao para o Express.
+ */
+REVOKE EXECUTE ON FUNCTION canastra.redigir_dados_do_titular(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.redigir_dados_do_titular(uuid) TO service_role;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0013_redacao_lgpd')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0014_avaliacoes
+-- ----------------------------------------------------------------------------
+
+-- Avaliacoes de produto: quem RECEBEU o cafe avalia; o resto le.
+--
+-- O DESENHO EM UMA FRASE: a fronteira e a RLS (a vitrine fala PostgREST
+-- direto, sem servico no meio), e a pergunta "essa pessoa pode avaliar este
+-- cafe?" e respondida pelo proprio banco — pedido `entregue` do chamador cujo
+-- `itens` contem o SKU. Nenhum claim, nenhum campo vindo do navegador decide
+-- nada alem de nota, titulo e texto.
+--
+-- POR QUE `sku` TEXTO, E NAO FK PARA `produtos`
+-- A PDP agrupa por LINHA de cafe, e uma linha tem varios produtos no banco
+-- (um por peso/pacote) casados com o catalogo editorial pelo `produtos.sku`
+-- (`frontend/lib/catalogo/repositorio.ts`). O SKU e o vocabulario comum das
+-- duas pontas — e, como no carrinho (0004) e no cupom do pedido (0010), a
+-- avaliacao e uma fotografia: retirar um produto do catalogo nao pode apagar
+-- as opinioes ja publicadas sobre ele.
+--
+-- POR QUE `nome_exibicao` CONGELADO NO INSERT
+-- `user_id` e ON DELETE SET NULL (a avaliacao publicada sobrevive a exclusao
+-- da conta, como o pedido em 0005). Exibir o nome via join com `clientes`
+-- faria toda avaliacao de conta apagada aparecer sem autor — e um join da
+-- vitrine com uma tabela de dado pessoal seria superficie a mais. A trigger
+-- abaixo copia o nome UMA vez, no INSERT, e o navegador nao alcanca a coluna.
+
+CREATE TABLE canastra.avaliacoes (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- SET NULL, nunca CASCADE: apagar a conta nao apaga a prova social da loja.
+  -- O que a LGPD manda apagar e o DADO PESSOAL — e o unico aqui e o nome, que
+  -- o fluxo de exclusao pode redigir via service_role se o titular pedir.
+  user_id       uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
+
+  -- Preenchida SEMPRE pela trigger `avaliacoes_congelar_nome`, nunca por quem
+  -- insere (a coluna fica fora do GRANT de INSERT la embaixo): o cliente nao
+  -- assina como outra pessoa, e o nome nao depende do vinculo continuar vivo.
+  nome_exibicao text NOT NULL,
+
+  sku           text NOT NULL,
+
+  nota          integer NOT NULL
+                  CONSTRAINT avaliacoes_nota_valida CHECK (nota BETWEEN 1 AND 5),
+
+  -- Limites de tamanho no BANCO, nao so no formulario: o PostgREST aceita o
+  -- que o GRANT deixar, e um texto de 2 MB numa coluna lida pela PDP inteira
+  -- e um problema de todo mundo. 23514 citando a constraint e a recusa certa.
+  --
+  -- E O PISO TAMBEM: "nao informado" e NULL, nunca `''` nem `'   '`. A vitrine
+  -- decide se renderiza o titulo/texto por VERACIDADE (`avaliacao.titulo ?`),
+  -- e uma string de espacos e truthy — vira um <p> vazio empurrando o layout
+  -- da PDP sem nada dentro. O formulario ja normaliza (`.trim() || null` em
+  -- lib/avaliacoes/avaliacoes.ts), mas o formulario nao e a fronteira: o
+  -- PostgREST aceita o INSERT que o GRANT permitir, de qualquer cliente. Aqui
+  -- e onde a regra vale para todo mundo.
+  --
+  -- `~ '[^[:space:]]'` ("tem ao menos um caractere que nao e espaco") E NAO
+  -- `btrim(x) <> ''`, e a diferenca importa: o `btrim` de um argumento so tira
+  -- ESPACOS — `btrim(E' \n\t ')` devolve `E'\n\t'`, que nao e vazio e passaria
+  -- pela constraint. Um texto de quebras de linha renderiza o mesmo paragrafo
+  -- vazio que a regra existe para impedir. A classe POSIX cobre espaco, tab,
+  -- nova linha, CR, FF e VT de uma vez, e diz em SQL a frase que se quer.
+  titulo        text
+                  CONSTRAINT avaliacoes_titulo_tamanho
+                    CHECK (titulo IS NULL OR char_length(titulo) <= 80)
+                  CONSTRAINT avaliacoes_titulo_nao_vazio
+                    CHECK (titulo IS NULL OR titulo ~ '[^[:space:]]'),
+  texto         text
+                  CONSTRAINT avaliacoes_texto_tamanho
+                    CHECK (texto IS NULL OR char_length(texto) <= 2000)
+                  CONSTRAINT avaliacoes_texto_nao_vazio
+                    CHECK (texto IS NULL OR texto ~ '[^[:space:]]'),
+
+  -- `pendente` -> moderacao -> `aprovada` (publica) ou `oculta`. O DEFAULT e
+  -- a UNICA porta de entrada: `status` esta fora do GRANT de INSERT, entao
+  -- nenhuma avaliacao nasce publicada por conta propria.
+  status        text NOT NULL DEFAULT 'pendente'
+                  CONSTRAINT avaliacoes_status_valido
+                    CHECK (status IN ('pendente', 'aprovada', 'oculta')),
+
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  -- Escrita pelo painel JUNTO com o status (nao ha trigger de moddatetime
+  -- neste schema — a regra de 0005 vale aqui tambem).
+  moderado_em   timestamptz,
+
+  -- Uma avaliacao por cliente por cafe. Com `user_id` NULL (conta apagada) o
+  -- indice trata cada ausencia como distinta (NULLS DISTINCT, o padrao), que
+  -- e o desejado: duas contas apagadas nao colidem entre si.
+  CONSTRAINT avaliacoes_uma_por_cafe UNIQUE (user_id, sku)
+);
+
+-- A consulta da PDP: aprovadas de uma lista de SKUs, mais novas primeiro.
+CREATE INDEX avaliacoes_aprovadas_idx
+  ON canastra.avaliacoes (sku, criado_em DESC)
+  WHERE status = 'aprovada';
+
+/**
+ * "Quem esta pedindo RECEBEU este cafe?"
+ *
+ * SECURITY DEFINER pelo mesmo motivo de `eh_cliente()`/`eh_admin()` (0006):
+ * a funcao le `pedidos`, que esta sob RLS, e e chamada DE DENTRO de uma
+ * politica — como INVOKER ela enxergaria so o que a politica de `pedidos`
+ * mostra ao chamador (que aqui ate bastaria: o dono le os proprios pedidos),
+ * mas herdaria em silencio qualquer estreitamento futuro daquela politica.
+ * `SET row_security = off` tira a mudez do modo de falha com FORCE, como la.
+ * `SET search_path` obrigatorio em DEFINER; `pg_temp` por ultimo; `auth.uid()`
+ * qualificado porque `auth` nao esta no caminho.
+ *
+ * O FORMATO DE `itens` E O DO CHECKOUT (PaymentController.validatedItems):
+ * `[{product_id, name, image, price, quantity, size, weight, ...}]` — NAO ha
+ * chave `sku` nos itens. O SKU e resolvido pelo join com `canastra.produtos`
+ * via `product_id`. O preco disso esta escrito: produto APAGADO do catalogo
+ * deixa de ser avaliavel (o join nao casa mais), o que e aceitavel — a PDP
+ * dele tambem ja nao existe.
+ *
+ * DEFESAS, as duas medidas em test/f7_avaliacoes.test.js:
+ *   - `jsonb_typeof(...) = 'array'`: `itens` nulo ou um objeto legado nao
+ *     pode estourar 22023 ("cannot extract elements from a scalar") dentro
+ *     de TODO INSERT da tabela — vira simplesmente zero linhas.
+ *   - `pr.produto_id::text = item->>'product_id'`: a comparacao e em texto
+ *     para um `product_id` malformado num pedido antigo nao virar 22P02 de
+ *     cast de uuid no meio da politica.
+ *
+ * `alvo_sku` NULL responde FALSE (o EXISTS nao casa), nunca erro — e por isso
+ * a funcao nao e STRICT: STRICT devolveria NULL, que o WITH CHECK trata igual
+ * a FALSE, mas um boolean honesto poupa o proximo leitor da tabela-verdade.
+ */
+CREATE FUNCTION canastra.pode_avaliar(alvo_sku text) RETURNS boolean
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
+  SET row_security = off
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+      FROM canastra.pedidos p
+     CROSS JOIN LATERAL jsonb_array_elements(
+       CASE WHEN jsonb_typeof(p.itens) = 'array' THEN p.itens
+            ELSE '[]'::jsonb END
+     ) AS item
+      JOIN canastra.produtos pr
+        ON pr.produto_id::text = item->>'product_id'
+     WHERE p.user_id = auth.uid()
+       AND p.status = 'entregue'
+       AND pr.sku = alvo_sku
+  )
+$$;
+
+-- `proacl` nasce nulo (EXECUTE para PUBLIC): o REVOKE primeiro e a lista
+-- explicita depois, como em 0006/0008. `anon` ENTRA na lista pela regra de
+-- 0006 — hoje nenhuma politica que ele alcance chama a funcao (a leitura
+-- publica e `status = 'aprovada'` puro), mas o dia em que uma chamar, a falta
+-- de EXECUTE seria 42501 na vitrine parecendo recusa de politica.
+REVOKE EXECUTE ON FUNCTION canastra.pode_avaliar(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.pode_avaliar(text)
+  TO anon, authenticated, service_role;
+
+/**
+ * Congela o nome no INSERT — SEMPRE, sobrescrevendo qualquer valor que tenha
+ * chegado (o GRANT ja impede o navegador de mandar a coluna; a trigger cobre
+ * os caminhos que nao passam pelo GRANT, como o service_role e o proprio
+ * dono do banco num INSERT de manutencao).
+ *
+ * SECURITY DEFINER porque le `canastra.clientes`, que esta sob RLS, e o
+ * insersor comum (authenticated) so enxerga a PROPRIA linha — o que ate
+ * bastaria (a politica de INSERT exige `user_id = auth.uid()`), mas o DEFINER
+ * desacopla a trigger da politica de leitura de `clientes`, que e a mesma
+ * licao do `pode_avaliar` acima. `search_path` fixo, como manda 0006.
+ *
+ * O RAISE de 42501 cobre o insersor privilegiado que aponta para um uid sem
+ * cadastro: sem ele o sintoma seria 23502 na coluna `nome_exibicao`, uma
+ * mensagem sobre NOT NULL que manda procurar o erro no lugar errado. Para o
+ * `authenticated` este ramo e inalcancavel — o WITH CHECK com `eh_cliente()`
+ * ja teria recusado com o MESMO codigo.
+ *
+ * `SET row_security = off` PELO MOTIVO DE 0006, e nao por enfeite: e
+ * exatamente o RAISE acima que cria a mudez. Com `FORCE ROW LEVEL SECURITY`
+ * ligado em `clientes`, o dono deixa de ser isento, nenhuma politica daquela
+ * tabela e `TO` dono, o SELECT volta ZERO linhas — e toda avaliacao da loja,
+ * de qualquer cliente cadastrado, passa a ser recusada com "So quem tem
+ * cadastro nesta loja pode avaliar.". Uma frase que mente com confianca e
+ * manda procurar o erro no cadastro do cliente. Com o SET, a mesma situacao
+ * responde 42501 "query would be affected by row-level security policy for
+ * table clientes", que nomeia a tabela e a causa. No caminho saudavel e um
+ * no-op (o dono ja e isento). E o contrario de 0008, onde a ausencia e
+ * deliberada porque la o FORCE ja falharia sozinho, alto e nomeando a tabela.
+ */
+CREATE FUNCTION canastra.avaliacoes_congelar_nome() RETURNS trigger
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
+  SET row_security = off
+AS $congelar_nome$
+DECLARE
+  nome_do_cliente text;
+BEGIN
+  SELECT c.nome INTO nome_do_cliente
+    FROM canastra.clientes c
+   WHERE c.user_id = NEW.user_id;
+
+  IF nome_do_cliente IS NULL THEN
+    RAISE EXCEPTION 'Só quem tem cadastro nesta loja pode avaliar.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  NEW.nome_exibicao := nome_do_cliente;
+  RETURN NEW;
+END;
+$congelar_nome$;
+
+REVOKE EXECUTE ON FUNCTION canastra.avaliacoes_congelar_nome() FROM PUBLIC;
+
+CREATE TRIGGER avaliacoes_congela_nome
+  BEFORE INSERT ON canastra.avaliacoes
+  FOR EACH ROW
+  EXECUTE FUNCTION canastra.avaliacoes_congelar_nome();
+
+/* ------------------------------------------------------------------------- *
+ * Privilegios: REVOKE do pacote de 0001, GRANTs por coluna
+ * ------------------------------------------------------------------------- */
+
+-- 0001 deu `arwd` de tabela a `authenticated` por default. Aqui o recorte e
+-- por COLUNA nas tres operacoes, entao o pacote sai inteiro e volta so o que
+-- cada papel precisa. `service_role` nao e tocado: credencial de servidor.
+REVOKE ALL ON canastra.avaliacoes FROM anon, authenticated;
+
+-- LEITURA. `anon` NAO recebe `user_id` nem `moderado_em`: o visitante nao tem
+-- por que saber o uuid de quem avaliou (linkabilidade gratuita entre a
+-- avaliacao e as outras tabelas da instancia) nem o carimbo interno de
+-- moderacao. O preco e o mesmo do `custo` em 0006: um `select=*` de `anon`
+-- responde 42501 em vez de dados — barulhento, nunca vazado — e a vitrine
+-- lista colunas explicitas. `authenticated` le a tabela inteira: o dono
+-- filtra as SUAS por `user_id`, e o painel do admin modera com tudo a vista.
+GRANT SELECT (id, sku, nota, titulo, texto, nome_exibicao, status, criado_em)
+  ON canastra.avaliacoes TO anon;
+GRANT SELECT ON canastra.avaliacoes TO authenticated;
+
+-- ESCRITA DO CLIENTE: so o que e dele. Fora da lista, e de proposito:
+--   `status` ........ nasceria 'aprovada' por auto-servico;
+--   `nome_exibicao` .. assinatura e da trigger;
+--   `id`/`criado_em` . defaults;
+--   `moderado_em` .... carimbo do painel.
+GRANT INSERT (user_id, sku, nota, titulo, texto)
+  ON canastra.avaliacoes TO authenticated;
+
+-- MODERACAO: o mesmo desenho de `pedidos` em 0006 — a politica diz QUAL linha
+-- (eh_admin), o GRANT diz QUAIS colunas. O dono NAO edita a avaliacao depois
+-- de criada (decisao de simplicidade da onda 3I): nao ha politica de UPDATE
+-- de dono, entao este GRANT so ganha vida nas maos de um admin.
+GRANT UPDATE (status, moderado_em) ON canastra.avaliacoes TO authenticated;
+
+-- DELETE fica sem GRANT e sem politica: remover avaliacao e gesto de
+-- atendimento (service_role, que tem BYPASSRLS e o ALL de 0001), nao um
+-- clique de navegador — nem do admin, que OCULTA em vez de apagar.
+
+/* ------------------------------------------------------------------------- *
+ * Politicas
+ * ------------------------------------------------------------------------- */
+
+ALTER TABLE canastra.avaliacoes ENABLE ROW LEVEL SECURITY;
+
+-- A vitrine (logada ou nao) le o que passou pela moderacao. ATENCAO no
+-- consumidor logado: as politicas se somam com OR, entao um cliente ve tambem
+-- as proprias pendentes — a listagem publica da PDP FILTRA `status=eq.aprovada`
+-- na consulta para nao misturar as duas coisas.
+CREATE POLICY avaliacoes_aprovadas_publicas ON canastra.avaliacoes
+  FOR SELECT TO anon, authenticated
+  USING (status = 'aprovada');
+
+-- Regra 2 de 0006: dono e `eh_cliente() AND user_id = auth.uid()`, nunca a
+-- igualdade sozinha. E assim que a pessoa acompanha a propria avaliacao
+-- enquanto pendente (e ve que uma foi ocultada, em vez de "sumiu").
+CREATE POLICY avaliacoes_dono_le ON canastra.avaliacoes
+  FOR SELECT TO authenticated
+  USING (canastra.eh_cliente() AND user_id = auth.uid());
+
+CREATE POLICY avaliacoes_admin_le ON canastra.avaliacoes
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+-- A porta de entrada, com as tres condicoes somadas:
+--   eh_cliente() ......... token estrangeiro da instancia compartilhada nao
+--                          planta linha aqui (Regra 2 de 0006);
+--   user_id = auth.uid() . ninguem avalia EM NOME de outro uid;
+--   pode_avaliar(sku) .... so quem tem pedido `entregue` com o cafe.
+CREATE POLICY avaliacoes_cliente_envia ON canastra.avaliacoes
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    canastra.eh_cliente()
+    AND user_id = auth.uid()
+    AND canastra.pode_avaliar(sku)
+  );
+
+-- Moderar e mudar linha inteira? NAO — o GRANT de coluna acima ja recorta
+-- para (status, moderado_em). As duas camadas juntas sao a regra completa,
+-- exatamente como `pedidos_admin_atualiza` + GRANT de coluna em 0006.
+CREATE POLICY avaliacoes_admin_modera ON canastra.avaliacoes
+  FOR UPDATE TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0014_avaliacoes')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0015_assinaturas
+-- ----------------------------------------------------------------------------
+
+-- Clube da Canastra — assinaturas recorrentes (Onda 3J do plano mestre).
+--
+-- Uma linha = uma assinatura de UM cafe, com TUDO que a cobranca recorrente
+-- precisa CONGELADO na adesao: sku, quantidade, preco e endereco. O Mercado
+-- Pago (preapproval) cobra um valor fixo por ciclo e nao ha checkout a cada
+-- envio, entao o pedido que cada cobranca gera nao pode depender do catalogo
+-- do dia — depende desta fotografia. Reajustar o preco no painel muda as
+-- assinaturas NOVAS; as vivas seguem no valor da adesao, que e o que os
+-- termos de uso prometem ("preco travado").
+
+CREATE TABLE canastra.assinaturas (
+  id       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- ON DELETE SET NULL, como em `pedidos` (0005) e pela mesma razao: a
+  -- assinatura e historico comercial e a cobranca pode ja ter acontecido —
+  -- apagar o cliente (LGPD) nao pode apagar o registro do que foi vendido.
+  -- Uma assinatura orfa e cancelada no MP pelo fluxo de exclusao de conta;
+  -- aqui ela apenas perde o dono.
+  user_id  uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
+
+  -- O SKU do produto no catalogo (`canastra.produtos.sku`), TEXTO e nao FK —
+  -- a mesma licao do carrinho (0004) e do cupom no pedido (0010): fotografia
+  -- nao herda o ciclo de vida do catalogo. Um produto descontinuado nao pode
+  -- derrubar a assinatura de quem ja assina; quem decide encerra-la e o
+  -- gestor, cancelando no painel/MP.
+  sku      text NOT NULL,
+
+  quantidade integer NOT NULL DEFAULT 1
+             CONSTRAINT assinaturas_quantidade_positiva CHECK (quantidade > 0),
+
+  -- As tres frequencias que a loja vende (estetica.md §7.4). CHECK fechado de
+  -- proposito: o preapproval e criado com `frequency` = este numero, e um 20
+  -- gravado por engano viraria uma cobranca que nenhuma tela oferece.
+  frequencia_dias integer NOT NULL
+             CONSTRAINT assinaturas_frequencia_valida
+               CHECK (frequencia_dias IN (15, 30, 45)),
+
+  -- O valor de CADA cobranca, em CENTAVOS e inteiro (regra da casa para
+  -- dinheiro de decisao — 0009/0010), JA com os 10% do Clube:
+  -- Math.round(preco_reais * 0.9 * 100) * quantidade, calculado no SERVIDOR
+  -- na adesao. E o `transaction_amount` do preapproval e o `total` de cada
+  -- pedido gerado. Nunca recalculado a partir do catalogo.
+  preco_centavos integer NOT NULL
+             CONSTRAINT assinaturas_preco_positivo CHECK (preco_centavos > 0),
+
+  -- Entrega recorrente exige endereco proprio: o de `canastra.enderecos` e o
+  -- "endereco atual" do cliente e muda com a proxima compra avulsa — a
+  -- assinatura entrega onde foi contratada ate o cliente dizer o contrario.
+  -- Mesmo formato do `endereco_json` de pedidos (zip_code, street, ...).
+  endereco_json jsonb NOT NULL,
+
+  -- O id do preapproval no Mercado Pago. NULL enquanto a ida ao MP nao
+  -- respondeu (a linha nasce antes, para o `external_reference` existir);
+  -- UNIQUE porque e por ele que o webhook de assinaturas acha a linha, e duas
+  -- linhas com o mesmo preapproval seriam dois pedidos por cobranca.
+  preapproval_id text UNIQUE,
+
+  -- Vocabulario proprio, em portugues, traduzido do MP pelo servico:
+  --   pending -> pendente (criada, cliente ainda nao autorizou no MP)
+  --   authorized -> ativa | paused -> pausada | cancelled -> cancelada
+  status   text NOT NULL DEFAULT 'pendente'
+             CONSTRAINT assinaturas_status_valido
+               CHECK (status IN ('pendente', 'ativa', 'pausada', 'cancelada')),
+
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  -- MANTIDA POR QUEM ESCREVE, como em 0004/0005/0010: nao ha trigger de
+  -- moddatetime neste schema. Todo UPDATE do servico escreve now() junto.
+  atualizado_em timestamptz NOT NULL DEFAULT now(),
+  cancelada_em  timestamptz
+);
+
+-- A consulta da conta do cliente ("minhas assinaturas") e a do webhook (por
+-- preapproval_id, ja coberto pelo UNIQUE).
+CREATE INDEX assinaturas_cliente_idx ON canastra.assinaturas (user_id);
+
+/* --------------------------------------------------------------------------
+ * RLS — dono le as proprias, admin le todas, SO o servico escreve
+ * -------------------------------------------------------------------------- */
+
+ALTER TABLE canastra.assinaturas ENABLE ROW LEVEL SECURITY;
+
+-- Regra 2 de 0006: dono e `eh_cliente() AND user_id = auth.uid()`, nunca a
+-- igualdade sozinha — um token de outro projeto da instancia compartilhada
+-- nao pode virar "dono" de nada aqui dentro.
+CREATE POLICY assinaturas_dono_le ON canastra.assinaturas
+  FOR SELECT TO authenticated
+  USING (canastra.eh_cliente() AND user_id = auth.uid());
+
+CREATE POLICY assinaturas_admin_le ON canastra.assinaturas
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+-- NAO HA POLITICA DE ESCRITA, e a ausencia e o desenho: criar assinatura passa
+-- pelo Express (que valida o preco no servidor e fala com o MP), e transicao
+-- de status vem do webhook — nada disso e um INSERT/UPDATE de navegador. RLS
+-- ligada sem politica ja nega; o REVOKE abaixo e a segunda tranca, pelo mesmo
+-- argumento de `clientes`/`pedidos` em 0006: a ausencia de politica se perde
+-- com um CREATE POLICY distraido de outro dia, o privilegio de tabela nao.
+-- (O default de 0001 deu `arwd` a `authenticated` nesta tabela recem-nascida;
+-- fica so o SELECT, que e o que as politicas acima governam.)
+REVOKE INSERT, UPDATE, DELETE ON canastra.assinaturas FROM authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0015_assinaturas')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0016_redacao_ampliada
+-- ----------------------------------------------------------------------------
+
+-- LGPD: a redação alcança TUDO que congela dado pessoal — pedidos,
+-- assinaturas e avaliações.
+--
+-- POR QUE UMA MIGRACAO NOVA, E NAO UMA EDICAO DA 0013: migracao aplicada nao
+-- se edita (regra da casa desde 0011), e ha um motivo tecnico alem da regra —
+-- a 0013 roda ANTES de 0014/0015 na ordem do runner, entao a funcao dela nao
+-- pode citar `avaliacoes` nem `assinaturas` (plpgsql resolve nomes na primeira
+-- CHAMADA, e o teste chama; num banco parcialmente migrado seria 42P01). Esta
+-- migracao, criada DEPOIS das duas, pode.
+--
+-- O ACHADO QUE ELA FECHA (revisao da onda 3H): as ondas irmas criaram DUAS
+-- outras fotografias de dado pessoal que a redacao da 0013 nao alcancava:
+--
+--   `assinaturas.endereco_json` (0015) — endereco de entrega congelado na
+--       adesao, NOT NULL, com user_id ON DELETE SET NULL: a exclusao da conta
+--       deixaria o endereco orfao e irredigivel, o MESMO furo de `pedidos` que
+--       a 0013 acabou de fechar;
+--   `avaliacoes.nome_exibicao` (0014) — nome CONGELADO no INSERT e PUBLICO
+--       (a PDP exibe; `anon` tem GRANT de SELECT na coluna): depois da
+--       exclusao, o nome da pessoa continuaria estampado na vitrine.
+--
+-- E DEIXA REGISTRADO O QUE VIROU VERDADE NESTA ONDA: o comentario da 0015
+-- ("uma assinatura orfa e cancelada no MP pelo fluxo de exclusao de conta")
+-- descrevia um fluxo que NAO existia quando foi escrito. Ele passou a existir
+-- aqui: `conta.routes.js` cancela no MP e marca `cancelada` TODA assinatura
+-- viva do titular ANTES de redigir e de apagar a conta — e aborta a exclusao
+-- se o MP recusar, pelo mesmo padrao da redacao (nunca apagar deixando um
+-- preapproval vivo cobrando um cliente que ja nao existe).
+
+-- O carimbo de auditoria/idempotencia das assinaturas — mesmo papel do
+-- `pedidos.redigido_em` da 0013: NULL = nunca redigida; preenchida = quando.
+ALTER TABLE canastra.assinaturas
+  ADD COLUMN redigido_em timestamptz;
+
+/**
+ * A whitelist de endereco, agora com nome proprio.
+ *
+ * A 0013 tinha esta expressao inline; com DOIS consumidores (pedidos e
+ * assinaturas) e um terceiro fora do banco (o SQL manual de orfaos em
+ * docs/seguranca-dados-pessoais.md), a copia divergiria na primeira correcao.
+ * A regra e a MESMA da 0013, chave a chave:
+ *
+ *   FICA   cidade/city e uf/estado/state ........ estatistica por regiao;
+ *   VIRA PREFIXO  cep/zip_code/zipCode/postal_code -> 3 digitos + 'xxxxx'
+ *          (CEP impresentavel degrada para 'xxxxx' — perde a estatistica,
+ *          nunca vaza o dado);
+ *   SAI    toda outra chave -> "[redigido]" — whitelist, nao denylist: chave
+ *          que a redacao nao conhece cai para o lado seguro.
+ *
+ * Formas nao-objeto: SQL NULL -> NULL (STRICT), JSON null -> ele mesmo,
+ * `{}` -> `{}` (o COALESCE — `jsonb_object_agg` de zero linhas e NULL),
+ * escalar/lista -> "[redigido]" inteiro (nao ha como saber o que ha dentro).
+ *
+ * IMMUTABLE de verdade: so olha o argumento. E IDEMPOTENTE por construcao —
+ * redigir o ja redigido devolve byte a byte o mesmo jsonb ('379xxxxx' vira
+ * '379' + 'xxxxx' de novo) — mas a idempotencia OPERACIONAL de quem a usa vem
+ * do carimbo `redigido_em`, que evita ate o UPDATE vazio.
+ */
+CREATE FUNCTION canastra.redigir_endereco(endereco jsonb) RETURNS jsonb
+  LANGUAGE sql
+  IMMUTABLE
+  STRICT
+  SET search_path = canastra, pg_temp
+AS $redigir_endereco$
+  SELECT CASE
+    WHEN jsonb_typeof(endereco) = 'null' THEN endereco
+    WHEN jsonb_typeof(endereco) <> 'object' THEN to_jsonb('[redigido]'::text)
+    ELSE (
+      SELECT COALESCE(
+        jsonb_object_agg(
+          e.chave,
+          CASE
+            WHEN lower(e.chave) IN ('cidade', 'city')        THEN e.valor
+            WHEN lower(e.chave) IN ('uf', 'estado', 'state') THEN e.valor
+            WHEN lower(e.chave) IN ('cep', 'zip_code', 'zipcode', 'postal_code')
+              THEN to_jsonb(
+                left(regexp_replace(COALESCE(e.valor #>> '{}', ''), '\D', '', 'g'), 3)
+                || 'xxxxx'
+              )
+            ELSE to_jsonb('[redigido]'::text)
+          END
+        ),
+        '{}'::jsonb
+      )
+      FROM jsonb_each(endereco) AS e(chave, valor)
+    )
+  END
+$redigir_endereco$;
+
+-- Funcao pura sobre o proprio argumento — nao le tabela nenhuma —, mas a
+-- lista explicita e o padrao da casa (0007/0008/0013): quem chama fica
+-- escrito. `service_role` entra por causa do SQL manual de orfaos do runbook.
+REVOKE EXECUTE ON FUNCTION canastra.redigir_endereco(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.redigir_endereco(jsonb) TO service_role;
+
+/**
+ * A redacao do titular, versao completa. CREATE OR REPLACE sobre a assinatura
+ * EXATA da 0013 — mesmo nome, mesmo parametro, mesmo retorno — entao todo
+ * chamador existente (conta.routes.js, lgpd.routes.js) continua valendo.
+ *
+ * O CONTRATO DO RETORNO NAO MUDA: continua sendo a contagem de PEDIDOS
+ * redigidos (e o `pedidosRedigidos` que o endpoint de titular responde, e o
+ * "0 na segunda chamada" que prova a idempotencia). Assinaturas e avaliacoes
+ * sao redigidas no MESMO gesto, sem numero proprio no retorno — quem precisar
+ * de contagem por tabela le os carimbos.
+ *
+ * TRES DECISOES NOVAS, escritas aqui porque e aqui que se vai procurar:
+ *
+ * 1. ASSINATURA VIVA NAO E REDIGIDA — so as `cancelada`. Enquanto a entrega
+ *    recorrente existe, o endereco congelado e NECESSARIO a execucao do
+ *    contrato (LGPD art. 7º, V; art. 16, I): redigi-lo destruiria a entrega
+ *    de quem continua assinante — e o endpoint de eliminacao PARCIAL
+ *    (POST /lgpd/titulares/:id/redigir) roda exatamente nesse cenario. Na
+ *    exclusao TOTAL nada escapa por aqui: conta.routes.js cancela TODAS as
+ *    assinaturas vivas ANTES de chamar esta funcao, entao elas ja chegam
+ *    `cancelada`. Assinatura cancelada DEPOIS de uma redacao parcial fica com
+ *    o endereco ate a proxima redacao — limite conhecido, documentado tambem
+ *    no runbook.
+ *
+ * 2. `avaliacoes.nome_exibicao` VIRA 'Cliente Canastra', nao "[redigido]": a
+ *    coluna e PUBLICA na PDP, e um colchete tecnico no lugar do autor viraria
+ *    curiosidade de vitrine. O placeholder diz a unica coisa que importa —
+ *    foi um cliente de verdade (a RLS de 0014 so deixa avaliar quem recebeu o
+ *    cafe). Nota e texto ficam: sao a prova social, e a 0014 ja decidiu que
+ *    sobrevivem a exclusao; o dado PESSOAL da tabela e o nome. A idempotencia
+ *    aqui e o proprio predicado (`<> 'Cliente Canastra'`), sem coluna nova —
+ *    o segundo UPDATE nao acha linha.
+ *
+ * 3. `pedidos` continua identico a 0013 (denylist de itens inclusive), agora
+ *    escrito via `redigir_endereco` — comportamento medido antes e depois
+ *    pelo MESMO teste (f7_lgpd.test.js, casos das formas inesperadas).
+ *
+ * CREATE OR REPLACE preserva a ACL da 0013 (REVOKE PUBLIC + GRANT
+ * service_role — proacl fica na troca de corpo), mas NAO preserva atributos
+ * declarados: SECURITY INVOKER (default), o `SET search_path` e o nao-STRICT
+ * sao re-declarados aqui de proposito, com as MESMAS razoes da 0013 — INVOKER
+ * porque quem chama ja tem o privilegio (DEFINER so acrescentaria superficie
+ * de bypass), nao-STRICT porque NULL tem de ser ERRO e nunca no-op silencioso
+ * no fluxo de exclusao.
+ */
+CREATE OR REPLACE FUNCTION canastra.redigir_dados_do_titular(alvo_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SET search_path = canastra, pg_temp
+AS $redigir$
+DECLARE
+  pedidos_redigidos integer;
+BEGIN
+  -- Identico a 0013: NULL e erro de contrato (22004), nunca "nenhum alvo" —
+  -- um no-op silencioso no fluxo de exclusao fabricaria o orfao irredigivel.
+  IF alvo_user_id IS NULL THEN
+    RAISE EXCEPTION 'A redação exige um titular: pedido órfão não tem redação por titular.'
+      USING ERRCODE = 'null_value_not_allowed',
+            HINT = 'Redija ANTES ou JUNTO da exclusão da conta — depois dela o vínculo já se foi.';
+  END IF;
+
+  /**
+   * PEDIDOS — o comportamento da 0013, com o endereco delegado a
+   * `redigir_endereco`. A denylist de itens continua aqui (e um formato de
+   * ITEM, nao de endereco): o formato real do checkout so tem produto —
+   * product_id, name (nome do PRODUTO, registro fiscal), price, quantity... —
+   * e a denylist e defesa contra formato historico/futuro com dado pessoal
+   * dentro do item. So listas sao processadas: e o unico formato que algum
+   * caminho de escrita da loja produz.
+   */
+  UPDATE canastra.pedidos p
+     SET
+       endereco_json = CASE
+         WHEN p.endereco_json IS NULL THEN p.endereco_json
+         ELSE canastra.redigir_endereco(p.endereco_json)
+       END,
+       itens = CASE
+         WHEN p.itens IS NULL OR jsonb_typeof(p.itens) <> 'array'
+           THEN p.itens
+         ELSE (
+           SELECT COALESCE(
+             jsonb_agg(
+               CASE
+                 WHEN jsonb_typeof(item.valor) <> 'object' THEN item.valor
+                 ELSE (
+                   SELECT COALESCE(
+                     jsonb_object_agg(
+                       i.chave,
+                       CASE
+                         WHEN lower(i.chave) IN (
+                           'cpf', 'email', 'telefone', 'phone', 'celular',
+                           'nome_cliente', 'destinatario', 'endereco', 'address'
+                         ) THEN to_jsonb('[redigido]'::text)
+                         ELSE i.valor
+                       END
+                     ),
+                     '{}'::jsonb
+                   )
+                   FROM jsonb_each(item.valor) AS i(chave, valor)
+                 )
+               END
+               -- A ordem dos itens e parte do registro da venda.
+               ORDER BY item.ordem
+             ),
+             '[]'::jsonb
+           )
+           FROM jsonb_array_elements(p.itens) WITH ORDINALITY AS item(valor, ordem)
+         )
+       END,
+       redigido_em = now(),
+       -- Regra de 0005: sem trigger de moddatetime, quem escreve carimba.
+       atualizado_em = now()
+   WHERE p.user_id = alvo_user_id
+     AND p.redigido_em IS NULL;
+
+  GET DIAGNOSTICS pedidos_redigidos = ROW_COUNT;
+
+  /**
+   * ASSINATURAS — so as canceladas (decisao 1 do cabecalho). O `redigido_em`
+   * novo faz o mesmo servico do de pedidos: idempotencia + auditoria da
+   * PRIMEIRA redacao.
+   */
+  UPDATE canastra.assinaturas a
+     SET endereco_json = canastra.redigir_endereco(a.endereco_json),
+         redigido_em   = now(),
+         atualizado_em = now()
+   WHERE a.user_id = alvo_user_id
+     AND a.status = 'cancelada'
+     AND a.redigido_em IS NULL;
+
+  /**
+   * AVALIACOES — o nome publico sai; nota e texto ficam (decisao 2). O
+   * predicado E a idempotencia: 'Cliente Canastra' nao e alvo de novo.
+   * `moderado_em` NAO e tocado — redacao nao e moderacao.
+   */
+  UPDATE canastra.avaliacoes av
+     SET nome_exibicao = 'Cliente Canastra'
+   WHERE av.user_id = alvo_user_id
+     AND av.nome_exibicao <> 'Cliente Canastra';
+
+  RETURN pedidos_redigidos;
+END;
+$redigir$;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0016_redacao_ampliada')
   ON CONFLICT (versao) DO NOTHING;
 
 

@@ -18,6 +18,9 @@ const paymentRoutes = require("./routes/orders.routes");
 const addressRoutes = require("./routes/address.routes");
 const cuponsRoutes = require("./routes/cupons.routes");
 const { newsletterRoutes } = require("./routes/newsletter.routes");
+const { lgpdRoutes } = require("./routes/lgpd.routes");
+const blingRoutes = require("./routes/bling.routes");
+const clubeRoutes = require("./routes/clube.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 
@@ -171,6 +174,13 @@ app.use(addressRoutes);
 // o CRUD exige admin. Newsletter: publica, rate limit proprio.
 app.use("/cupons", cuponsRoutes);
 app.use("/newsletter", newsletterRoutes);
+// LGPD: atendimento a titular (acesso e redacao), so admin.
+app.use("/lgpd", lgpdRoutes);
+// Bling: sincronizacao de pedido, NF-e e rastreio, so admin; ações exigem BLING_ATIVO.
+app.use("/bling", blingRoutes);
+// Clube: /clube/* (cliente), /admin/assinaturas (admin) e o webhook proprio de
+// assinaturas (/webhook/mercadopago/assinaturas, rate limit dentro do router).
+app.use(clubeRoutes);
 
 /**
  * Carrinho abandonado: cron de hora em hora, DESLIGADO por padrao (decisao 5
@@ -180,6 +190,11 @@ app.use("/newsletter", newsletterRoutes);
  */
 if (process.env.ABANDONO_ATIVO === "true") {
   require("./jobs/carrinhoAbandonado").iniciarCronDeAbandono();
+}
+
+// Bling: cron de rastreio (minuto 30), DESLIGADO por padrao — exige as DUAS.
+if (process.env.BLING_ATIVO === "true" && process.env.BLING_RASTREIO_CRON === "true") {
+  require("./services/blingPedidos").iniciarCronBling();
 }
 
 // Tratamento de erros gerais

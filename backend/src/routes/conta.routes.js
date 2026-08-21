@@ -3,6 +3,7 @@ const rateLimit = require("express-rate-limit");
 const pool = require("../pgPool");
 const isAuthenticated = require("../middleware/isAuthenticated");
 const isAdmin = require("../middleware/isAdmin");
+const { ehUuid } = require("../utils/formatoUuid");
 
 /**
  * O que sobrou da conta no Express: SO o que o GoTrue nao faz.
@@ -60,6 +61,156 @@ const MENSAGEM_ULTIMO_ADMIN =
   "antes de excluir sua conta.";
 
 /**
+ * A ORDEM DA EXCLUSÃO DE CONTA, inteira, num lugar só — as duas rotas
+ * (`DELETE /auth/users/me` e `DELETE /auth/users/:id`) seguem esta, passo a
+ * passo, e cada passo só existe por causa do troco que ele evita:
+ *
+ *   1. trava do último administrador ..... 409 explicado em vez do 500 opaco
+ *                                          que a trigger `admins_nunca_zero`
+ *                                          devolveria dentro da transação do
+ *                                          GoTrue (0002);
+ *   2. credencial do GoTrue ............... 503 antes de MEXER em qualquer
+ *                                          dado: um deploy sem service key não
+ *                                          pode cancelar assinatura nem redigir
+ *                                          pedido de uma conta que ele nem
+ *                                          conseguiria apagar;
+ *   3. CANCELAR AS ASSINATURAS VIVAS ...... `cancelarAssinaturasAntesDeApagar`;
+ *   4. REDIGIR ............................ `redigirAntesDeApagar`;
+ *   5. DELETE no GoTrue ................... a cascata leva `clientes`, e
+ *                                          `pedidos`/`assinaturas`/`avaliacoes`
+ *                                          ficam órfãos (ON DELETE SET NULL) —
+ *                                          por isso 3 e 4 vêm antes.
+ *
+ * 3 ANTES DE 4 e não o contrário: a redação da 0016 só toca assinatura
+ * `cancelada` (enquanto a entrega recorrente existe, o endereço é necessário à
+ * execução do contrato — LGPD art. 16, I). Redigir primeiro deixaria a
+ * assinatura viva de fora, e o cancelamento seguinte a fecharia já sem redação.
+ * Cancelando antes, elas chegam `cancelada` e a mesma passagem da redação as
+ * alcança.
+ *
+ * O TROCO ASSUMIDO, escrito para quem for depurar um caso real: se o GoTrue
+ * falhar no passo 5, sobra uma conta VIVA com as assinaturas já canceladas e os
+ * pedidos já redigidos. É o lado certo do erro — reversível no que importa (a
+ * pessoa segue cliente, com endereços salvos e cadastro intactos; assinar de
+ * novo é um clique, e o Clube nunca prometeu que cancelar é irreversível) e
+ * re-executável (a redação repetida é no-op por `redigido_em`, o cancelamento
+ * repetido devolve `[]`, e a segunda tentativa conclui no GoTrue). O troco
+ * inverso — apagar primeiro — não é reversível em NADA: o pedido órfão fica
+ * irredigível para sempre e o preapproval segue cobrando um cartão de alguém
+ * que já não existe no banco.
+ */
+
+/**
+ * CANCELAR AS ASSINATURAS VIVAS ANTES DE APAGAR.
+ *
+ * `assinaturas.user_id` é ON DELETE SET NULL (0015), igual a `pedidos`: apagar
+ * a conta sem passar por aqui deixa um preapproval VIVO no Mercado Pago,
+ * cobrando todo ciclo o cartão de uma pessoa que pediu para sumir do banco — e
+ * órfão, sem dono para pedir o cancelamento. É o mesmo furo da redação, com
+ * dinheiro dentro.
+ *
+ * A função vem pronta do Clube (`ClubeController.cancelarAssinaturasDoTitular`,
+ * contrato no cabeçalho dela): alcança `pendente`/`ativa`/`pausada`, cancela no
+ * MP ANTES de marcar local, devolve os ids fechados por ESTA chamada e `[]`
+ * quando não havia nenhuma — o caso comum, que não é erro.
+ *
+ * RECUSA DO MP ABORTA A EXCLUSÃO, pela mesma disciplina da redação: nunca
+ * apagar a conta deixando cobrança viva. O erro carrega `.status` (400 para
+ * id fora do formato, 502 na recusa do MP) e `.canceladas` com o que já fechou
+ * antes da falha — o que fechou continua fechado, e a re-execução tenta só o
+ * que sobrou.
+ *
+ * ELA NÃO RECEBE `conexao`: fala com o pool da aplicação por conta própria, e
+ * é assim mesmo — não há transação a compartilhar. Metade do trabalho dela
+ * acontece no Mercado Pago, que não faz ROLLBACK; a garantia aqui é a
+ * re-execução, não a atomicidade.
+ *
+ * Devolve `true` se já respondeu (falha) — o chamador retorna sem apagar.
+ */
+async function cancelarAssinaturasAntesDeApagar(alvoUserId, res, cancelar) {
+  try {
+    const canceladas = await cancelar(alvoUserId);
+    if (canceladas.length) {
+      // Rastro de auditoria: a exclusão fechou contrato de recorrência, e isso
+      // é um fato comercial que precisa ter deixado linha no log.
+      console.log(
+        `Exclusão de conta ${alvoUserId}: ${canceladas.length} assinatura(s) ` +
+          `canceladas antes de apagar (${canceladas.join(", ")}).`,
+      );
+    }
+    return false;
+  } catch (erro) {
+    const jaFechadas = Array.isArray(erro.canceladas) ? erro.canceladas.length : 0;
+    console.error(
+      `Cancelamento de assinaturas falhou para ${alvoUserId} ` +
+        `(${jaFechadas} já fechadas antes da falha); exclusão abortada:`,
+      erro,
+    );
+    // `erro.status` quando o Clube o carimbou (400 id inválido, 502 recusa do
+    // MP); 500 para o resto (o banco caiu no meio, por exemplo) — responder
+    // 502 ali culparia o Mercado Pago por um problema desta casa.
+    res.status(Number(erro.status) || 500).json({
+      message:
+        "Não consegui cancelar a assinatura do Clube agora, e por isso NADA " +
+        "foi excluído — uma conta apagada com assinatura viva continuaria " +
+        "sendo cobrada. Tente de novo em alguns instantes.",
+    });
+    return true;
+  }
+}
+
+/**
+ * O caminho de produção até o Clube, carregado SÓ na hora de usar.
+ *
+ * `require` dentro da função, e não no topo: o ClubeController constrói o SDK
+ * do Mercado Pago ao ser carregado, e este módulo é importado por rotas (e por
+ * testes) que não têm nada com assinatura. O cache do require faz o resto — a
+ * segunda exclusão não recarrega nada.
+ */
+const cancelarAssinaturasPeloClube = (userId) =>
+  require("../controllers/ClubeController").cancelarAssinaturasDoTitular(userId);
+
+/**
+ * REDIGIR ANTES DE APAGAR — e nunca o contrário. Esta ordem não é estilo, é a
+ * única que funciona:
+ *
+ * Apagada a conta no GoTrue, a cascata leva `canastra.clientes` e o
+ * `pedidos.user_id` vira NULL (ON DELETE SET NULL, 0005 — a venda é registro
+ * fiscal e sobrevive). Só que o pedido órfão perdeu o VÍNCULO: não há mais
+ * como saber de quem ele era, e o nome/CPF/endereço congelados em
+ * `endereco_json` ficariam IRREDIGÍVEIS para sempre. Logo:
+ *
+ *   - a redação (`canastra.redigir_dados_do_titular`, 0013) roda ANTES do
+ *     DELETE, na mesma requisição;
+ *   - se ela falhar, a exclusão ABORTA (500) e a conta NÃO é apagada — quem
+ *     pediu tenta de novo e as duas coisas acontecem juntas ou nenhuma;
+ *   - ela roda DEPOIS da checagem de credencial do GoTrue: um deploy sem a
+ *     service key (503) não deve redigir os pedidos de uma conta que nem
+ *     poderia apagar.
+ *
+ * O QUE ELA ALCANÇA cresceu na 0016 sem que este chamador mudasse: além dos
+ * pedidos, a mesma função redige o endereço das assinaturas CANCELADAS e troca
+ * `avaliacoes.nome_exibicao` por 'Cliente Canastra' (o nome ficava PÚBLICO na
+ * PDP depois da exclusão). O retorno continua sendo a contagem de PEDIDOS.
+ *
+ * O troco assumido está escrito por inteiro no bloco de ordem acima.
+ *
+ * Devolve `true` se já respondeu (falha) — o chamador retorna sem apagar.
+ */
+async function redigirAntesDeApagar(conexao, alvoUserId, res, mensagem) {
+  try {
+    await conexao.query("SELECT canastra.redigir_dados_do_titular($1::uuid)", [
+      alvoUserId,
+    ]);
+    return false;
+  } catch (erro) {
+    console.error(`Redação LGPD falhou para ${alvoUserId}:`, erro);
+    res.status(500).json({ message: mensagem });
+    return true;
+  }
+}
+
+/**
  * Exclui a conta de QUEM ESTA CHAMANDO, e de mais ninguem.
  *
  * O `user_id` vem de `req.user`, preenchido por `isAuthenticated` a partir do
@@ -80,7 +231,12 @@ const MENSAGEM_ULTIMO_ADMIN =
 async function excluirMinhaConta(
   req,
   res,
-  { conexao = pool, buscar = globalThis.fetch, ambiente = process.env } = {},
+  {
+    conexao = pool,
+    buscar = globalThis.fetch,
+    ambiente = process.env,
+    cancelarAssinaturas = cancelarAssinaturasPeloClube,
+  } = {},
 ) {
   const { userId } = req.user;
 
@@ -110,6 +266,24 @@ async function excluirMinhaConta(
         message: "Não consigo excluir contas agora. Tente novamente mais tarde.",
       });
     }
+
+    // Passo 3 da ordem: assinatura viva vira `cancelada` no MP e aqui ANTES de
+    // qualquer outra coisa — senão o preapproval sobrevive à conta, cobrando.
+    if (await cancelarAssinaturasAntesDeApagar(userId, res, cancelarAssinaturas)) {
+      return;
+    }
+
+    // Passo 4. Ver `redigirAntesDeApagar`: sem redação não há exclusão — o
+    // pedido órfão de uma conta apagada sem redigir fica irredigível para
+    // sempre. Chega aqui com as assinaturas já `cancelada`, que é o estado em
+    // que a 0016 as alcança.
+    const abortou = await redigirAntesDeApagar(
+      conexao,
+      userId,
+      res,
+      "Não foi possível excluir sua conta agora. Nada foi apagado; tente de novo.",
+    );
+    if (abortou) return;
 
     const resposta = await buscar(`${base}/auth/v1/admin/users/${userId}`, {
       method: "DELETE",
@@ -188,9 +362,6 @@ async function listarClientes(req, res, { conexao = pool } = {}) {
   }
 }
 
-const FORMATO_UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Exclusao de um cliente PELO ADMIN — a rota que a F2 apagou junto com o
  * loginRepository e que o painel (RegisteredClients.jsx) continua chamando.
@@ -207,12 +378,25 @@ const FORMATO_UUID =
 async function excluirClientePeloAdmin(
   req,
   res,
-  { conexao = pool, buscar = globalThis.fetch, ambiente = process.env } = {},
+  {
+    conexao = pool,
+    buscar = globalThis.fetch,
+    ambiente = process.env,
+    cancelarAssinaturas = cancelarAssinaturasPeloClube,
+  } = {},
 ) {
   const { id } = req.params;
-  if (!FORMATO_UUID.test(String(id || ""))) {
+  if (!ehUuid(id)) {
     return res.status(400).json({ message: "Identificador de cliente inválido." });
   }
+
+  // QUEM mandou apagar fica no log. Esta rota é destrutiva e é exercida por
+  // TERCEIROS (o painel apaga a conta de outra pessoa): sem esta linha, o
+  // registro do que aconteceu não tem autor, e a pergunta "quem apagou o
+  // cliente X?" não teria resposta em lugar nenhum. `?.` porque os testes
+  // chamam o handler direto, sem passar pelo `isAuthenticated`.
+  const admin = req.user?.userId ?? "desconhecido";
+  console.log(`Admin ${admin} pediu a exclusão do cliente ${id}.`);
 
   try {
     const { rows } = await conexao.query(
@@ -245,6 +429,21 @@ async function excluirClientePeloAdmin(
         message: "Não consigo excluir contas agora. Tente novamente mais tarde.",
       });
     }
+
+    // A MESMA ordem da exclusão própria, passo a passo (o bloco de ordem lá em
+    // cima vale para as duas rotas): cancelar as assinaturas vivas, depois
+    // redigir, e só então apagar. Falha em qualquer um dos dois aborta.
+    if (await cancelarAssinaturasAntesDeApagar(id, res, cancelarAssinaturas)) {
+      return;
+    }
+
+    const abortou = await redigirAntesDeApagar(
+      conexao,
+      id,
+      res,
+      "Não foi possível excluir o cliente agora. Nada foi apagado; tente de novo.",
+    );
+    if (abortou) return;
 
     const resposta = await buscar(`${base}/auth/v1/admin/users/${id}`, {
       method: "DELETE",

@@ -47,6 +47,14 @@ const CuponsManager = lazy(
   () =>
     import("./components/DashboardSection/Settings/Cupons/CuponsManager.jsx"),
 );
+const AvaliacoesManager = lazy(
+  () =>
+    import("./components/DashboardSection/Avaliacoes/AvaliacoesManager.jsx"),
+);
+const AssinaturasManager = lazy(
+  () =>
+    import("./components/DashboardSection/Assinaturas/AssinaturasManager.jsx"),
+);
 
 // NAO usar `basename: "/dashboard"`. O painel legado navega por links
 // ABSOLUTOS ("/dashboard/orders" em MenuAside.jsx, navigate("/dashboard") em
@@ -89,6 +97,14 @@ const router = createBrowserRouter([
           {
             path: "/dashboard/settings/cupons",
             element: Load(CuponsManager),
+          },
+          {
+            path: "/dashboard/avaliacoes",
+            element: Load(AvaliacoesManager),
+          },
+          {
+            path: "/dashboard/assinaturas",
+            element: Load(AssinaturasManager),
           },
         ],
       },
