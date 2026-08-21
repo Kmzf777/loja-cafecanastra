@@ -21,6 +21,8 @@ import { PontoTorra } from "@/components/catalogo/PontoTorra";
 import { FichaLavoura } from "@/components/catalogo/FichaLavoura";
 import { PainelCompra } from "@/components/catalogo/PainelCompra";
 import { CardCafe } from "@/components/catalogo/CardCafe";
+import { Avaliacoes } from "@/components/catalogo/Avaliacoes";
+import { agregadoAprovadas } from "@/lib/avaliacoes/servidor";
 
 /**
  * PDP — estetica.md §7.3, "a pagina mais importante".
@@ -34,6 +36,17 @@ import { CardCafe } from "@/components/catalogo/CardCafe";
  */
 
 export const dynamicParams = false;
+
+/**
+ * A PDP era estática SEM revalidação — correto enquanto tudo nela vinha do
+ * build (o comercial já tinha o cache de 60 s do repositório por baixo). O
+ * `aggregateRating` do JSON-LD mudou isso: avaliação aprovada é dado que nasce
+ * DEPOIS do build, e sem revalidate o rating congelaria até o próximo deploy.
+ * Uma hora casa com o `REVALIDAR_SEGUNDOS` do fetch em `lib/avaliacoes/
+ * servidor.ts` — os dois expiram juntos. A LISTA visível de avaliações não
+ * depende disto: é client island e busca ao vivo.
+ */
+export const revalidate = 3600;
 
 export async function generateStaticParams() {
   const slugs = await listarSlugs();
@@ -79,10 +92,29 @@ export default async function PaginaLote({
     (f): f is NonNullable<typeof f> => Boolean(f),
   );
 
+  // Uma LINHA da vitrine agrupa varios SKUs do banco (um por peso/pacote, e a
+  // avaliacao e gravada no SKU exato que a pessoa recebeu) — a busca e sempre
+  // pela lista inteira da linha.
+  const skusDaLinha = [
+    ...new Set(
+      [...lote.variantes, ...lote.formatosEspeciais].map((v) => v.skuLoja),
+    ),
+  ];
+
+  // Busca de SERVIDOR, anonima, com revalidate de 1h (ver o comentario do
+  // `export const revalidate`): sem avaliacao aprovada — ou com o PostgREST
+  // fora no build — volta `null` e o Product sai sem aggregateRating.
+  const agregadoDeAvaliacoes = await agregadoAprovadas(skusDaLinha);
+
   // `null` quando NENHUMA variante tem preco (a Canela esgotada da captura):
   // Product sem oferta e erro de elegibilidade no Search Console, entao a
   // pagina fica so com o Breadcrumb ate a linha voltar a ter preco.
-  const productLd = productJsonLd(lote);
+  const productLd = productJsonLd(
+    lote,
+    lote.variantes,
+    undefined,
+    agregadoDeAvaliacoes,
+  );
 
   return (
     <>
@@ -294,6 +326,11 @@ export default async function PaginaLote({
           </div>
         </div>
       </section>
+
+      {/* ── Avaliações ──────────────────────────── client island, ao vivo.
+          A pagina e estatica; a lista busca no PostgREST ao montar (aprovadas
+          apenas — RLS de 0014). Erro na busca = a secao nao aparece. */}
+      <Avaliacoes skus={skusDaLinha} />
     </>
   );
 }

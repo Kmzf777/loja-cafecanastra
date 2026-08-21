@@ -154,6 +154,30 @@ describe("productJsonLd", () => {
     expect(productJsonLd(lote, variantes, BASE)).toBeNull();
   });
 
+  it("com avaliacoes aprovadas emite aggregateRating em formato de crawler", () => {
+    const p = productJsonLd(lote, lote.variantes, BASE, {
+      media: 14 / 3, // 4.666… — o formato exibido tem UMA casa e PONTO.
+      contagem: 3,
+    })!;
+    expect(p.aggregateRating).toEqual({
+      "@type": "AggregateRating",
+      ratingValue: "4.7",
+      reviewCount: 3,
+      bestRating: 5,
+      worstRating: 1,
+    });
+    // Serializado, o valor continua com ponto — nunca "4,7".
+    expect(serializarJsonLd(p)).toContain('"ratingValue":"4.7"');
+  });
+
+  it("sem avaliacoes NAO existe a chave aggregateRating — nota nao se inventa", () => {
+    for (const agregado of [undefined, null, { media: 0, contagem: 0 }]) {
+      const p = productJsonLd(lote, lote.variantes, BASE, agregado)!;
+      expect(p).not.toBeNull();
+      expect("aggregateRating" in p).toBe(false);
+    }
+  });
+
   it("todas as PDPs reais elegiveis produzem JSON-LD serializavel", () => {
     let elegiveis = 0;
     for (const l of LOTES) {

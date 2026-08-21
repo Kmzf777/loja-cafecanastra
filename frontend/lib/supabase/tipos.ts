@@ -3,7 +3,17 @@
  *
  * ESTE ARQUIVO É DERIVADO DE `backend/db/migrations/*.sql`. Ele não é gerado:
  * `supabase gen types typescript` precisa de um access token da conta Supabase,
- * que este projeto não tem. Foi escrito à mão a partir das migrações 0001–0008.
+ * que este projeto não tem. Foi escrito à mão a partir das migrações 0001–0008
+ * e 0014 (`avaliacoes` + `pode_avaliar`).
+ *
+ * O QUE NÃO ESTÁ AQUI, E POR QUÊ: as tabelas de 0010 (`cupons`), 0011
+ * (`newsletter_inscritos`) e 0015 (`assinaturas`) NÃO passam por este cliente —
+ * o navegador fala com o Express nesses três casos, e o único consumidor
+ * tipado do PostgREST é a vitrine. Tipar tabela que ninguém consulta daqui
+ * seria manutenção sem leitor, e a ausência não esconde nada: `.from("cupons")`
+ * é erro de compilação, não consulta silenciosa ao schema errado. O dia em que
+ * a vitrine falar direto com uma delas, a tabela entra ANTES da primeira
+ * consulta.
  *
  * QUANDO UMA MIGRAÇÃO MUDAR, ESTE ARQUIVO MUDA JUNTO, no mesmo commit. Nada
  * detecta a divergência sozinho — nem `tsc`, nem os testes, nem o build. Um tipo
@@ -432,6 +442,57 @@ export type Database = {
         Relationships: [];
       };
 
+      /**
+       * 0014. Avaliações de produto.
+       *
+       * `Insert` e `Update` são MAIS ESTREITOS que a tabela DE PROPÓSITO — o
+       * mesmo espírito do `ItemParaFundir`: espelham os GRANTs de coluna da
+       * migração, não o DDL. Mandar `status` ou `nome_exibicao` num INSERT
+       * responde 42501 (o status nasce 'pendente' pelo DEFAULT e o nome é
+       * congelado por trigger a partir de `clientes.nome`); o UPDATE só existe
+       * para a moderação do admin (`status` + `moderado_em`, escritos juntos —
+       * não há trigger de moddatetime neste schema). Com o tipo largo, esses
+       * erros só apareceriam em produção, como recusa do PostgREST.
+       */
+      avaliacoes: {
+        Row: {
+          id: string;
+          user_id: string | null;
+          nome_exibicao: string;
+          sku: string;
+          nota: number;
+          titulo: string | null;
+          texto: string | null;
+          status: "pendente" | "aprovada" | "oculta";
+          criado_em: string;
+          moderado_em: string | null;
+        };
+        Insert: {
+          /** A política exige `user_id = auth.uid()` — sempre o uid da sessão. */
+          user_id: string;
+          sku: string;
+          /** Inteiro de 1 a 5 (CHECK `avaliacoes_nota_valida`, 23514). */
+          nota: number;
+          /** Até 80 caracteres (23514 acima disso). */
+          titulo?: string | null;
+          /** Até 2000 caracteres (23514 acima disso). */
+          texto?: string | null;
+        };
+        Update: {
+          status?: "pendente" | "aprovada" | "oculta";
+          moderado_em?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "avaliacoes_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "clientes";
+            referencedColumns: ["user_id"];
+          },
+        ];
+      };
+
       /** 0005. Uma linha só: CHECK (id = 1) mais a chave primária. */
       config_loja: {
         Row: {
@@ -520,6 +581,16 @@ export type Database = {
       garantir_cliente: {
         Args: { nome: string; telefone?: string | null; cpf?: string | null };
         Returns: undefined;
+      };
+
+      /**
+       * 0014. "O `auth.uid()` da sessão tem pedido `entregue` com este SKU?"
+       * É a mesma pergunta que o WITH CHECK do INSERT em `avaliacoes` faz —
+       * chamá-la antes só melhora a mensagem, nunca substitui a política.
+       */
+      pode_avaliar: {
+        Args: { alvo_sku: string };
+        Returns: boolean;
       };
 
       /** 0006. "Tem cadastro NESTA loja?" — não é o mesmo que estar logado. */

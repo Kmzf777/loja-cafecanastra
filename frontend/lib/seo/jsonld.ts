@@ -100,10 +100,20 @@ const ESGOTADO = "https://schema.org/OutOfStock";
  * inteiro do que uma página sem rich result. O Breadcrumb da página não passa
  * por aqui e continua saindo.
  */
+/**
+ * Média + contagem das avaliações APROVADAS da linha — o que
+ * `lib/avaliacoes/servidor.ts` devolve. `null`/`undefined` (nenhuma aprovada,
+ * ou a pergunta falhou no build) significa SEM `aggregateRating`: um rating
+ * inventado é mentir exatamente onde o Google confere — a mesma regra do
+ * preço, logo abaixo.
+ */
+export type AvaliacoesParaJsonLd = { media: number; contagem: number };
+
 export function productJsonLd(
   lote: Lote,
   variantes: Variante[] = lote.variantes,
   base: string = urlDoSite(),
+  avaliacoes?: AvaliacoesParaJsonLd | null,
 ) {
   const urlDaPdp = `${base}/cafes/${lote.slug}`;
 
@@ -113,6 +123,20 @@ export function productJsonLd(
     if (!porSku.has(v.skuLoja)) porSku.set(v.skuLoja, v);
   }
   if (porSku.size === 0) return null;
+
+  // `ratingValue` com UMA casa e ponto decimal ("4.7"), como o preço: o
+  // schema.org aceita número ou string, e a string fixa o formato — um
+  // toLocaleString pt-BR aqui produziria "4,7", que o crawler lê como 47.
+  const aggregateRating =
+    avaliacoes && avaliacoes.contagem > 0
+      ? {
+          "@type": "AggregateRating",
+          ratingValue: avaliacoes.media.toFixed(1),
+          reviewCount: avaliacoes.contagem,
+          bestRating: 5,
+          worstRating: 1,
+        }
+      : null;
 
   const offers = [...porSku.values()].map((v) => ({
     "@type": "Offer",
@@ -136,6 +160,9 @@ export function productJsonLd(
     sku: variantes[0]?.skuLoja,
     brand: { "@type": "Brand", name: "Café Canastra" },
     offers,
+    // Espalhado condicionalmente: `aggregateRating: undefined` ainda seria
+    // uma CHAVE no objeto e sobreviveria em serializações fora do JSON.
+    ...(aggregateRating ? { aggregateRating } : {}),
   };
 }
 
