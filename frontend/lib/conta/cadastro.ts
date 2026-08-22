@@ -30,6 +30,7 @@
  */
 import type { User } from "@supabase/supabase-js";
 import { clienteNavegador } from "../supabase/cliente";
+import { paraWhatsapp } from "./telefone";
 
 /** Onde o link do e-mail de confirmação cai de volta. */
 export const CAMINHO_CONFIRMACAO = "/account/verify-email";
@@ -87,6 +88,27 @@ export const SEM_SESSAO = "42501";
 export const EMAIL_NAO_CONFIRMADO = "28000";
 export const NOME_EM_BRANCO = "23502";
 export const CPF_DUPLICADO = "23505";
+/** 0019: está logado, mas ainda não há linha em `clientes` para carimbar. */
+export const SEM_VINCULO = "P0002";
+
+/**
+ * Os dois códigos LOCAIS do telefone. Não vêm do Postgres: a recusa acontece
+ * ANTES da rede, e ter código próprio é o que permite à tela pintar o campo
+ * certo em vez de só imprimir a frase.
+ *
+ * SÃO DOIS, E NÃO UM, porque as instruções são diferentes: quem não preencheu
+ * precisa saber que o campo é obrigatório e por quê; quem preencheu errado
+ * precisa saber o FORMATO que se espera. "Confira o número" para um campo
+ * vazio manda conferir o quê?
+ */
+export const TELEFONE_EM_BRANCO = "telefone_em_branco";
+export const TELEFONE_INVALIDO = "telefone_invalido";
+
+const PEDIDO_DE_TELEFONE =
+  "Informe seu WhatsApp — é por ele que avisamos o andamento do pedido.";
+const TELEFONE_FORA_DO_FORMATO =
+  "Confira o WhatsApp: precisa ser um celular brasileiro com DDD, como " +
+  "(37) 99999-0000.";
 
 /**
  * A função não existe no PostgREST. NÃO é erro de quem está usando a loja:
@@ -106,6 +128,13 @@ const MENSAGENS_DE_VINCULO: Record<string, string> = {
   [CPF_DUPLICADO]:
     "Este CPF já está cadastrado em outra conta desta loja. Confira o número " +
     "ou entre com a conta que já o usa.",
+  // Logado, e-mail confirmado, e ainda assim sem linha em `clientes` — a 0019
+  // recusa em vez de escrever no vazio. A frase NÃO pode ser "entre na loja"
+  // (a do 42501): quem já está logado e lê isso não tem o que fazer.
+  [SEM_VINCULO]:
+    "Seu cadastro nesta loja ainda não foi concluído. Recarregue a página; se " +
+    "continuar, saia e entre de novo.",
+  [TELEFONE_INVALIDO]: TELEFONE_FORA_DO_FORMATO,
   [RPC_AUSENTE]:
     "O cadastro está indisponível no momento. Já avisamos a equipe da loja.",
   [ESQUEMA_NAO_EXPOSTO]:
@@ -198,6 +227,170 @@ export function traduzirErroDeVinculo(erro: ErroDoPostgrest): ErroDeVinculo {
 }
 
 /* ------------------------------------------------------------------ *
+ * O WhatsApp: canastra.registrar_optin_whatsapp
+ * ------------------------------------------------------------------ */
+
+/**
+ * A RPC da 0019. O nome é exportado porque os testes afirmam a SEPARAÇÃO entre
+ * as duas chamadas, e uma constante evita que a asserção e o código combinem
+ * de mudar juntos por engano.
+ */
+export const RPC_DO_OPTIN = "registrar_optin_whatsapp";
+
+export type OptinDeWhatsapp = {
+  /** O número, como a pessoa digitou. Normalizado aqui. */
+  telefone?: string | null;
+  /** `true` consente, `false` REVOGA, ausente não mexe. Ver o comentário abaixo. */
+  promocoes?: boolean | null;
+};
+
+/**
+ * Grava o número e/ou a preferência de promoções.
+ *
+ * POR QUE ISTO É UMA RPC E NÃO UM `UPDATE` DO POSTGREST — a pergunta que
+ * qualquer um faz ao ler, já que `clientes` é a única tabela em que
+ * `authenticated` conserva UPDATE:
+ *
+ *   · `whatsapp_promo_optin_em` NÃO É GRAVÁVEL PELO NAVEGADOR. A 0018 trocou o
+ *     grant de tabela pela lista `(user_id, nome, cpf, telefone, criado_em,
+ *     whatsapp_optout_em)`, exatamente porque carimbo de consentimento que o
+ *     titular escreve não prova consentimento nenhum — e o ônus da prova é do
+ *     controlador (LGPD Art. 8º §2º). Um UPDATE que toque aquela coluna leva
+ *     42501 no comando inteiro.
+ *   · `telefone` É GRAVÁVEL, e escrevê-lo direto seria PIOR do que não poder:
+ *     `whatsapp_optin_em` está na lista fechada, então o navegador gravaria o
+ *     número SEM o carimbo. E o bot manda para quem tem `telefone` e não tem
+ *     `whatsapp_optout_em` (`notificacoes.js`) — ou seja, a loja passaria a
+ *     escrever para um número sobre o qual não tem prova de consentimento
+ *     nenhuma. É o limite que o cabeçalho da 0017 já apontava: "quem escrever
+ *     aquele UPDATE tem de carimbar `whatsapp_optin_em` no mesmo gesto".
+ *
+ * Então o gesto é um só, do lado de lá, em `SECURITY DEFINER` — o mesmo padrão
+ * de `garantir_cliente` (0008), e pelo mesmo motivo.
+ *
+ * AS CHAVES AUSENTES SÃO OMITIDAS, como em `garantirCliente` — mas aqui o
+ * `false` NÃO é ausência. A RPC distingue três coisas: `NULL` ("não mexa"),
+ * `true` (consentiu) e `false` (revogou). Deixar o `false` cair fora do JSON
+ * faria desmarcar a caixa não desmarcar nada, que é o pior desfecho possível
+ * para a revogação "gratuita e facilitada" do Art. 8º §5º.
+ */
+export async function registrarOptinDeWhatsapp(
+  dados: OptinDeWhatsapp,
+): Promise<void> {
+  const argumentos: { telefone?: string; promocoes?: boolean } = {};
+
+  const informou = dados.telefone?.trim();
+  if (informou) {
+    const numero = paraWhatsapp(informou);
+    // Recusa local, ANTES da rede: a RPC aceitaria o texto e gravaria um número
+    // para o qual nada sai. Ver `paraWhatsapp`.
+    if (!numero) {
+      throw new ErroDeVinculo(TELEFONE_FORA_DO_FORMATO, TELEFONE_INVALIDO);
+    }
+    argumentos.telefone = numero;
+  }
+
+  if (typeof dados.promocoes === "boolean") {
+    argumentos.promocoes = dados.promocoes;
+  }
+
+  // Nada a registrar: uma chamada que não muda nada custa uma ida ao banco e
+  // ainda assim rodaria o UPDATE do outro lado, mexendo no `criado_em` de
+  // nada. Sair aqui é mais honesto do que confiar no `RETURN` de lá.
+  if (Object.keys(argumentos).length === 0) return;
+
+  const supabase = clienteNavegador();
+  const { error } = await supabase.rpc(RPC_DO_OPTIN, argumentos);
+  if (!error) return;
+
+  throw traduzirErroDeVinculo(error);
+}
+
+/**
+ * Volta a receber depois de ter pedido para parar — o único gesto de WhatsApp
+ * que NÃO passa pela RPC.
+ *
+ * E não passa de propósito: `whatsapp_optout_em` é a única das cinco colunas
+ * que a 0018 deixou aberta ao titular, e deixou porque o direito de parar tem
+ * de caber num clique do navegador. Escrever `null` ali é o mesmo privilégio
+ * usado no outro sentido, pela mesma pessoa, sobre a própria linha (a política
+ * `clientes_dono_atualiza` de 0006 exige `user_id = auth.uid()` nas duas
+ * pontas). Mandar isto para dentro da RPC daria à função um poder que ela não
+ * precisa ter.
+ *
+ * POR QUE ISTO EXISTE: sem ele, "PARAR" é uma porta de mão única. O menu do bot
+ * tem um botão "Parar avisos" e o webhook trata PARAR/SAIR/STOP — um toque
+ * errado no celular deixaria a pessoa sem aviso de pedido nenhum, para sempre,
+ * e o único recurso seria escrever para o suporte.
+ *
+ * NÃO MEXE EM `whatsapp_optin_em`, e não deve: o carimbo descreve QUANDO a
+ * pessoa deixou o número, e ela não deixou de novo. Voltar a receber é retirar
+ * uma parada, não consentir outra vez.
+ */
+export async function voltarAReceberNoWhatsapp(userId: string): Promise<void> {
+  const supabase = clienteNavegador();
+
+  const { error } = await supabase
+    .from("clientes")
+    .update({ whatsapp_optout_em: null })
+    .eq("user_id", userId);
+
+  if (error) throw traduzirErroDeVinculo(error);
+}
+
+/** O que a área da conta precisa saber sobre o WhatsApp de quem está logado. */
+export type ContatoDeWhatsapp = {
+  /** `null` quando o cadastro nasceu sem número — o caso que o bloco convida. */
+  telefone: string | null;
+  /** Consentiu com promoções? */
+  promocoes: boolean;
+  /** Pediu para parar de receber (respondeu PARAR, ou clicou no botão do menu). */
+  parado: boolean;
+};
+
+/**
+ * Lê o contato de WhatsApp da própria linha em `canastra.clientes`.
+ *
+ * OS CARIMBOS VIRAM BOOLEANOS AQUI, e a tela nunca vê timestamp: a data em que
+ * a pessoa consentiu é PROVA para a loja, não informação de interface — e
+ * `whatsapp_promo_optin_em` chega como string ISO do PostgREST, que numa tela
+ * só serviria para ser formatada errada.
+ *
+ * `null` QUANDO A LEITURA FALHA, e essa é a escolha de falha segura. O inverso
+ * — devolver "sem telefone" quando a rede caiu — pediria o número de novo a
+ * quem já o deu, e um segundo carimbo de opt-in por cima de um erro de rede.
+ * Quem chama some com o bloco, que é o comportamento correto na dúvida.
+ */
+export async function lerWhatsappDaConta(
+  userId: string,
+): Promise<ContatoDeWhatsapp | null> {
+  const supabase = clienteNavegador();
+
+  const { data, error } = await supabase
+    .from("clientes")
+    .select("telefone, whatsapp_promo_optin_em, whatsapp_optout_em")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(
+      "[conta] Não foi possível ler o contato de WhatsApp. " +
+        `${error.code ?? ""} ${error.message ?? ""}`.trim(),
+    );
+    return null;
+  }
+  // Sem linha em `clientes` não é erro: é quem confirmou o e-mail agora e ainda
+  // não passou por `montarUsuario()`. Também some com o bloco.
+  if (!data) return null;
+
+  return {
+    telefone: data.telefone?.trim() || null,
+    promocoes: Boolean(data.whatsapp_promo_optin_em),
+    parado: Boolean(data.whatsapp_optout_em),
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * A conta: GoTrue signUp
  * ------------------------------------------------------------------ */
 
@@ -258,11 +451,22 @@ export type DadosDeCadastro = {
   email: string;
   senha: string;
   /**
-   * Opcionais na ASSINATURA porque a RPC os aceita e a tela de perfil vai
-   * precisar deles. A tela de cadastro da vitrine NÃO os pede — ver o comentário
+   * OBRIGATÓRIO NO TIPO, e é o ponto da tarefa. A loja não coletava telefone de
+   * ninguém: o cadastro pedia nome, e-mail e senha, e `clientes.telefone`
+   * nascia nula em todo mundo. O bot inteiro — avisos de pedido, atendimento
+   * por botões, painel — não tinha para quem falar.
+   */
+  telefone: string;
+  /**
+   * A caixa de promoções. `undefined` e `false` são a MESMA coisa aqui:
+   * consentimento não tem valor padrão.
+   */
+  promocoes?: boolean;
+  /**
+   * Opcional na ASSINATURA porque a RPC o aceita e a tela de perfil vai
+   * precisar dele. A tela de cadastro da vitrine NÃO o pede — ver o comentário
    * de `cadastrar()`.
    */
-  telefone?: string | null;
   cpf?: string | null;
 };
 
@@ -305,10 +509,31 @@ export type ResultadoDeCadastro = {
  * `user_metadata` viaja DENTRO do JWT, e esta instância do Supabase é
  * compartilhada: o metadado acompanharia o token para qualquer outro projeto em
  * que a mesma pessoa entrasse. Nome é o que a loja já exibe; telefone e CPF são
- * dado pessoal com uso restrito ao pedido. Eles são coletados no checkout, que
- * é onde fazem falta — e, no caso do CPF, é também o único lugar com alguma
- * prova de posse do número (ver o aviso sobre CPF ocupado no cabeçalho da
- * 0008). Por isso a tela de cadastro da vitrine pede só nome, e-mail e senha.
+ * dado pessoal com uso restrito ao pedido. No caso do CPF, o checkout é também
+ * o único lugar com alguma prova de posse do número (ver o aviso sobre CPF
+ * ocupado no cabeçalho da 0008).
+ *
+ * E O TROCO DISSO, QUE É CONHECIDO E TEM REMÉDIO: quem se cadastra com
+ * confirmação de e-mail ligada e clica no link três dias depois PERDE o número
+ * e a preferência de promoções no caminho. Aquele segundo caminho não passa
+ * mais por esta tela — quem cria o vínculo é `montarUsuario()` (`sessao.ts`) ou
+ * a tela de confirmação, e as duas só sabem o nome. O remédio é o bloco de
+ * WhatsApp da área da conta, que aparece justamente para quem está sem número.
+ * Guardar o telefone em `user_metadata` para "não perder" seria mandar o
+ * celular do cliente para dentro de um token que outros projetos leem.
+ *
+ * AS DUAS METADES DO WHATSAPP SÃO SEPARADAS AQUI, e a separação é o requisito:
+ *
+ *   · AVISO DE PEDIDO — execução de contrato (LGPD Art. 7º V). Não depende de
+ *     consentimento: a pessoa pediu aquilo quando comprou. Ele vem junto com o
+ *     número, dentro de `garantir_cliente`, que carimba `whatsapp_optin_em`.
+ *   · PROMOÇÃO — consentimento (Art. 7º I). Precisa de cláusula destacada,
+ *     finalidade determinada e revogação gratuita (Art. 8º §5º). Caixa à parte,
+ *     desmarcada, e uma CHAMADA À PARTE.
+ *
+ * Fundir as duas faria o consentimento virar condição para criar a conta ("ou
+ * aceita ou não compra"), e consentimento assim não é livre — não se sustenta
+ * nem na LGPD nem na política da Meta.
  */
 export async function cadastrar(
   dados: DadosDeCadastro,
@@ -325,6 +550,25 @@ export async function cadastrar(
       "Preencha o nome de quem vai receber a encomenda.",
       NOME_EM_BRANCO,
     );
+  }
+
+  /**
+   * O TELEFONE É CONFERIDO AQUI, ANTES DO `signUp`, e a ordem é a coisa toda.
+   *
+   * O campo é `required` no HTML, mas isso é o navegador cooperando: autofill
+   * parcial, `noValidate` e envio por script passam por cima. E a recusa TEM de
+   * vir antes da rede porque depois do `signUp` não há volta — a conta existe,
+   * o e-mail fica tomado, e a pessoa devolvida ao formulário não consegue mais
+   * se cadastrar. Só sobraria mandá-la ao "esqueci a senha" de uma conta que
+   * ela acabou de criar sem querer.
+   */
+  const digitado = dados.telefone?.trim();
+  if (!digitado) {
+    throw new ErroDeCadastro(PEDIDO_DE_TELEFONE, TELEFONE_EM_BRANCO);
+  }
+  const telefone = paraWhatsapp(digitado);
+  if (!telefone) {
+    throw new ErroDeCadastro(TELEFONE_FORA_DO_FORMATO, TELEFONE_INVALIDO);
   }
 
   const supabase = clienteNavegador();
@@ -346,9 +590,36 @@ export async function cadastrar(
 
   await garantirCliente({
     nome,
-    telefone: dados.telefone,
+    telefone,
     cpf: dados.cpf,
   });
+
+  /**
+   * A SEGUNDA CHAMADA, e só quando a caixa foi marcada.
+   *
+   * A FALHA DELA NÃO DERRUBA O CADASTRO, de propósito. Neste ponto a conta
+   * existe, o vínculo existe e `whatsapp_optin_em` está carimbado: o cadastro
+   * DEU CERTO. Deixar o erro subir mostraria uma tela de falha a quem acabou de
+   * conseguir tudo o que precisava, e a devolveria a um formulário que não tem
+   * mais como criar a conta. A promoção é o acessório; a pessoa remarca a caixa
+   * na área da conta quando quiser.
+   *
+   * O `console.warn` não é enfeite: sem ele, uma 0019 não aplicada faria TODA
+   * caixa marcada sumir em silêncio, e ninguém descobriria por meses.
+   */
+  if (dados.promocoes) {
+    try {
+      await registrarOptinDeWhatsapp({ promocoes: true });
+    } catch (erro) {
+      const codigo = erro instanceof ErroDeVinculo ? erro.codigo : "desconhecido";
+      console.warn(
+        `[cadastro] O opt-in de promoções não foi gravado (${codigo}). A conta ` +
+          "e o aviso de pedido estão de pé; a preferência pode ser remarcada na " +
+          "área da conta.",
+        erro,
+      );
+    }
+  }
 
   return { situacao: "pronto", email };
 }

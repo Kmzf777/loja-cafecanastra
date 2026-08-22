@@ -78,6 +78,16 @@ export type Database = {
           cpf: string | null;
           telefone: string | null;
           criado_em: string;
+          /**
+           * 0017. As cinco do WhatsApp. Ficam em `Row` porque o titular LÊ a
+           * própria linha (a 0018 não estreitou o SELECT de propósito: não há
+           * segredo a esconder de quem é dono da linha).
+           */
+          whatsapp_wa_id: string | null;
+          whatsapp_optin_em: string | null;
+          whatsapp_promo_optin_em: string | null;
+          whatsapp_optout_em: string | null;
+          whatsapp_ultima_entrada_em: string | null;
         };
         Insert: {
           user_id: string;
@@ -86,12 +96,33 @@ export type Database = {
           telefone?: string | null;
           criado_em?: string;
         };
+        /**
+         * `Update` É MAIS ESTREITO QUE `Row`, E ISSO É O TIPO FAZENDO O TRABALHO
+         * DELE.
+         *
+         * A 0018 revogou o UPDATE de tabela de `authenticated` e devolveu a
+         * lista `(user_id, nome, cpf, telefone, criado_em,
+         * whatsapp_optout_em)`. As quatro que ficaram de fora — `wa_id`, a
+         * janela de 24h e os DOIS carimbos de consentimento — recusam o comando
+         * INTEIRO com 42501 quando aparecem num UPDATE do PostgREST.
+         *
+         * Deixá-las aqui compilaria um `.update({ whatsapp_promo_optin_em })`
+         * que só falha em produção, no navegador de um cliente. A escrita
+         * daquelas colunas passa por `canastra.registrar_optin_whatsapp` (0019)
+         * — ver `lib/conta/cadastro.ts`.
+         *
+         * `Insert` não ganha nenhuma das cinco pelo mesmo motivo mais antigo: a
+         * 0006 revogou INSERT em `clientes` de `authenticated`, e a única porta
+         * é `garantir_cliente`.
+         */
         Update: {
           user_id?: string;
           nome?: string;
           cpf?: string | null;
           telefone?: string | null;
           criado_em?: string;
+          /** A única das cinco que é direito do titular: parar de receber. */
+          whatsapp_optout_em?: string | null;
         };
         /**
          * A FK real é para `auth.users(id)`, que fica fora do schema exposto —
@@ -580,6 +611,19 @@ export type Database = {
       /** 0008. Cria a linha em `clientes` para o `auth.uid()` da sessão. */
       garantir_cliente: {
         Args: { nome: string; telefone?: string | null; cpf?: string | null };
+        Returns: undefined;
+      };
+
+      /**
+       * 0019. Grava o número e a preferência de promoções DEPOIS do cadastro.
+       *
+       * `promocoes` é `boolean | null` e os três valores são distintos: `true`
+       * consente, `false` REVOGA, ausente/`null` não mexe. Um tipo
+       * `promocoes?: boolean` esconderia a revogação, que é justamente o que o
+       * Art. 8º §5º exige que seja fácil.
+       */
+      registrar_optin_whatsapp: {
+        Args: { telefone?: string | null; promocoes?: boolean | null };
         Returns: undefined;
       };
 

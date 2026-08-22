@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Botao, BotaoLink } from "@/components/ui/Botao";
 import { EncerrarConta } from "@/components/conta/EncerrarConta";
+import { WhatsAppDaConta } from "@/components/conta/WhatsAppDaConta";
 import {
   API_BASE,
   recuperarSessao,
@@ -410,6 +411,13 @@ export default function PaginaConta() {
           </ul>
         )}
       </section>
+
+      {/* O canal de WhatsApp: convite para quem está sem número, e a
+          preferência de promoções para quem já tem. Fica DEPOIS dos pedidos
+          porque a página é dos pedidos, e antes de "Encerrar conta" porque
+          aquilo tem de continuar sendo a última coisa da página. Ele mesmo
+          decide se aparece — ver o cabeçalho do componente. */}
+      <WhatsAppDaConta userId={usuario.userId} />
 
       {/* A porta do direito de eliminação (LGPD art. 18, VI). Fica por último e
           discreta de propósito — ver o cabeçalho do componente. Antes disto, a

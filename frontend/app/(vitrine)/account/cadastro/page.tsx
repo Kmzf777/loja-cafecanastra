@@ -10,6 +10,7 @@ import {
   cadastrar,
   reenviarConfirmacao,
 } from "@/lib/conta/cadastro";
+import { formatarTelefone } from "@/lib/conta/telefone";
 import { destinoSeguro, recuperarSessao } from "@/lib/conta/sessao";
 
 /**
@@ -20,18 +21,38 @@ import { destinoSeguro, recuperarSessao } from "@/lib/conta/sessao";
  * conseguia adquirir cliente nenhum sozinha. Esta tela fecha isso.
  *
  * O QUE ELA PEDE, E O QUE DELIBERADAMENTE NÃO PEDE
- * Nome, e-mail e senha. Telefone e CPF ficam para o checkout — o motivo está
- * escrito por extenso em `lib/conta/cadastro.ts` (`user_metadata` viaja dentro
- * do JWT numa instância compartilhada, e o CPF só tem prova de posse na hora da
- * nota). Pedir aqui um dado que não vai ser usado agora, e que ainda por cima
- * se perderia no caminho da confirmação, é pedir por pedir.
+ * Nome, e-mail, WhatsApp e senha. O CPF fica para o checkout — ele só tem prova
+ * de posse na hora da nota (ver o aviso sobre CPF ocupado no cabeçalho da 0008).
+ *
+ * O WHATSAPP É OBRIGATÓRIO E ENTROU AQUI, e não no checkout, por um motivo de
+ * cobertura: o checkout já exige login, então o cadastro alcança TODO MUNDO que
+ * compra — e alcança antes, o que dá à loja um canal para o primeiro pedido, e
+ * não a partir do segundo. Antes disto `clientes.telefone` nascia nula em todo
+ * mundo e o bot de WhatsApp inteiro não tinha para quem falar.
+ *
+ * DUAS METADES, DUAS BASES LEGAIS, E É POR ISSO QUE UMA TEM CAIXA E A OUTRA NÃO
+ *
+ *  - AVISO DE PEDIDO — execução de contrato (LGPD Art. 7º V). Não depende de
+ *    consentimento: a pessoa pediu aquilo quando comprou. Vem junto com a conta,
+ *    e por isso é FRASE e não caixa. Uma caixa marcada por padrão seria pior que
+ *    frase nenhuma: fingiria pedir uma permissão que não está sendo pedida.
+ *  - PROMOÇÃO — consentimento (Art. 7º I). Caixa à parte, DESMARCADA, com
+ *    finalidade dita por extenso. Consentimento amarrado a "ou aceita ou não
+ *    cria conta" não é livre, e não se sustenta nem na LGPD nem na política da
+ *    Meta.
+ *
+ * O TEXTO DO OPT-IN DIZ AS DUAS COISAS QUE A META EXIGE, e elas são o único
+ * requisito de conteúdo que ela publica: que a pessoa está optando por receber
+ * mensagens NO WHATSAPP, e o NOME DO NEGÓCIO. Não há texto modelo — as duas
+ * estão escritas explicitamente abaixo, e não deduzidas do contexto da página.
  *
  * OS DOIS DESFECHOS SÃO DIFERENTES DE VERDADE, e a tela não pode achatá-los:
  *  - o GoTrue devolveu sessão (confirmação desligada) → já é cliente, segue;
  *  - o GoTrue reteve a sessão → a conta existe, o VÍNCULO COM A LOJA NÃO, e
  *    nada acontece até o link do e-mail ser clicado. Dizer "cadastro
  *    concluído" aqui seria mentira, e a pessoa descobriria isso no primeiro
- *    login recusado.
+ *    login recusado. (É também o caminho em que o número digitado aqui se
+ *    perde — ver `cadastrar()`. Quem o recupera é o bloco da área da conta.)
  */
 
 const CAMPO =
@@ -59,6 +80,10 @@ function FormularioDeCadastro() {
 
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
+  const [telefone, setTelefone] = useState("");
+  // Nasce `false`, e é a linha inteira do requisito: consentimento não tem
+  // valor padrão. Ver o cabeçalho.
+  const [promocoes, setPromocoes] = useState(false);
   const [senha, setSenha] = useState("");
   const [confirmacao, setConfirmacao] = useState("");
   const [erro, setErro] = useState<string | null>(null);
@@ -102,7 +127,13 @@ function FormularioDeCadastro() {
 
     setEnviando(true);
     try {
-      const resultado = await cadastrar({ nome, email, senha });
+      const resultado = await cadastrar({
+        nome,
+        email,
+        senha,
+        telefone,
+        promocoes,
+      });
 
       if (resultado.situacao === "aguardandoConfirmacao") {
         setAguardando(resultado.email);
@@ -224,6 +255,75 @@ function FormularioDeCadastro() {
           onChange={(e) => setEmail(e.target.value)}
           className={`${CAMPO} mt-1.5`}
         />
+      </div>
+
+      <div className="mt-5">
+        <label htmlFor="telefone" className={ROTULO}>
+          WhatsApp
+        </label>
+        {/*
+          `type="tel"` abre o teclado numérico no celular e liga o autofill de
+          telefone. `inputMode="numeric"` porque a máscara é montada aqui e
+          traço, parêntese e espaço não precisam ser digitados.
+
+          O VALOR EXIBIDO É MASCARADO E O ENVIADO NÃO É: `formatarTelefone`
+          monta "(31) 99999-0000" para ler, e `cadastrar()` normaliza para
+          E.164 antes de chegar à RPC. O servidor não deveria ter de limpar o
+          que a tela pode limpar.
+        */}
+        <input
+          id="telefone"
+          name="telefone"
+          type="tel"
+          inputMode="numeric"
+          autoComplete="tel-national"
+          required
+          value={formatarTelefone(telefone)}
+          onChange={(e) => setTelefone(e.target.value)}
+          placeholder="(37) 99999-0000"
+          aria-describedby="optin-whatsapp"
+          className={`${CAMPO} mt-1.5 font-dado`}
+        />
+        {/*
+          O OPT-IN. As duas coisas que a Meta exige estão escritas aqui, e não
+          deduzidas da página: "mensagens no WhatsApp" e "Café Canastra". A
+          terceira frase é o caminho de saída, e ele é real — o webhook trata
+          PARAR, SAIR e STOP como frase inteira (`WhatsappController.js`), e
+          carimba `whatsapp_optout_em`, que é a coluna que faz a loja parar.
+        */}
+        <p
+          id="optin-whatsapp"
+          className="mt-1.5 text-[13px] leading-relaxed text-fuligem-55"
+        >
+          Vamos avisar o andamento do seu pedido por mensagem no WhatsApp, em
+          nome do Café Canastra. Para parar, responda PARAR em qualquer
+          mensagem.
+        </p>
+      </div>
+
+      {/*
+        A SEGUNDA METADE, e a única que é caixa. Desmarcada, à parte do campo,
+        com a finalidade dita por extenso — os três requisitos do Art. 8º §5º
+        que uma caixa genérica de "aceito receber comunicações" não cumpre.
+        A ordem também importa: ela vem DEPOIS do opt-in de pedido, para que
+        ninguém leia a caixa como se fosse a permissão do aviso.
+      */}
+      <div className="mt-5 flex items-start gap-3">
+        <input
+          id="promocoes"
+          name="promocoes"
+          type="checkbox"
+          checked={promocoes}
+          onChange={(e) => setPromocoes(e.target.checked)}
+          className="mt-1 h-4 w-4 shrink-0 accent-vermelho focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-vermelho"
+        />
+        <label
+          htmlFor="promocoes"
+          className="text-[14px] leading-relaxed text-fuligem-80"
+        >
+          Quero receber também novidades e ofertas do Café Canastra pelo
+          WhatsApp. Você pode desmarcar depois, na sua conta.
+        </label>
       </div>
 
       <div className="mt-5">

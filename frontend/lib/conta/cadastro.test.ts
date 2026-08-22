@@ -16,26 +16,58 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  *     devolve sessão — e sem sessão não há `auth.uid()`, então o vínculo não
  *     pode existir ainda. Tentar a RPC aí só produziria 42501; dizer
  *     "cadastro concluído" seria mentira.
+ *   - AS DUAS METADES DO WHATSAPP SEPARADAS. O aviso de pedido se apoia em
+ *     execução de contrato (LGPD Art. 7º V) e vem junto com o número; a
+ *     promoção se apoia em consentimento (Art. 7º I) e é uma CHAMADA À PARTE,
+ *     que só existe se a caixa foi marcada. Se as duas virarem uma, a loja
+ *     passa a ter consentimento amarrado a "ou aceita ou não cria conta" — que
+ *     não é livre, e não se sustenta nem na LGPD nem na política da Meta.
  */
+
+type ErroDoPostgrest = {
+  code?: string;
+  message?: string;
+  hint?: string | null;
+};
 
 const cenario: {
   rpc: { nome: string; argumentos: unknown } | null;
-  erroDaRpc: {
-    code?: string;
-    message?: string;
-    hint?: string | null;
-  } | null;
+  erroDaRpc: ErroDoPostgrest | null;
+  /**
+   * Recusa de UMA rpc só, por nome. `erroDaRpc` continua valendo para todas —
+   * este mapa é consultado primeiro, e existe porque o cadastro passou a fazer
+   * DUAS chamadas com desfechos independentes: a promoção pode falhar sem que
+   * a conta e o vínculo deixem de existir.
+   */
+  erroPorRpc: Record<string, ErroDoPostgrest> | null;
   respostaDoSignUp: unknown;
   erroDoSignUp: { code?: string; message?: string } | null;
   reenvio: unknown;
   assinatura: unknown;
+  /** O que `lerWhatsappDaConta` pediu, e o que o PostgREST respondeu. */
+  leitura: { tabela: string; colunas: string | null; userId: string | null } | null;
+  linhaDoCliente: Record<string, unknown> | null;
+  erroDaLeitura: ErroDoPostgrest | null;
+  /** O que `voltarAReceberNoWhatsapp` mandou escrever. */
+  escrita: {
+    tabela: string;
+    valores: Record<string, unknown>;
+    userId?: string;
+  } | null;
+  erroDaEscrita: ErroDoPostgrest | null;
 } = {
   rpc: null,
   erroDaRpc: null,
+  erroPorRpc: null,
   respostaDoSignUp: { user: null, session: null },
   erroDoSignUp: null,
   reenvio: null,
   assinatura: null,
+  leitura: null,
+  linhaDoCliente: null,
+  erroDaLeitura: null,
+  escrita: null,
+  erroDaEscrita: null,
 };
 
 const falso = {
@@ -54,7 +86,37 @@ const falso = {
   },
   rpc: vi.fn(async (nome: string, argumentos: unknown) => {
     cenario.rpc = { nome, argumentos };
-    return { data: null, error: cenario.erroDaRpc };
+    const especifico = cenario.erroPorRpc?.[nome] ?? null;
+    return { data: null, error: especifico ?? cenario.erroDaRpc };
+  }),
+  from: vi.fn((tabela: string) => {
+    cenario.leitura = { tabela, colunas: null, userId: null };
+    const encadeado = {
+      select: (colunas: string) => {
+        if (cenario.leitura) cenario.leitura.colunas = colunas;
+        return encadeado;
+      },
+      update: (valores: Record<string, unknown>) => {
+        cenario.escrita = { tabela, valores };
+        return encadeado;
+      },
+      eq: (_coluna: string, valor: string) => {
+        if (cenario.leitura) cenario.leitura.userId = valor;
+        if (cenario.escrita) cenario.escrita.userId = valor;
+        // Um UPDATE termina no `.eq()`: é aqui que o postgrest-js dispara e
+        // devolve o `{ error }`. Um SELECT continua para `.maybeSingle()`, que
+        // ignora este retorno.
+        return Object.assign(
+          Promise.resolve({ data: null, error: cenario.erroDaEscrita }),
+          encadeado,
+        );
+      },
+      maybeSingle: async () => ({
+        data: cenario.linhaDoCliente,
+        error: cenario.erroDaLeitura,
+      }),
+    };
+    return encadeado;
   }),
 };
 
@@ -68,13 +130,28 @@ import {
   ErroDeCadastro,
   ErroDeVinculo,
   NOME_EM_BRANCO,
+  RPC_DO_OPTIN,
   SEM_SESSAO,
+  SEM_VINCULO,
+  TELEFONE_EM_BRANCO,
+  TELEFONE_INVALIDO,
   cadastrar,
   garantirCliente,
+  lerWhatsappDaConta,
   nomeParaCadastro,
   reenviarConfirmacao,
+  registrarOptinDeWhatsapp,
   urlDeRetorno,
+  voltarAReceberNoWhatsapp,
 } from "./cadastro";
+
+/** Cadastro válido mínimo. Cada teste troca só o que o caso dele investiga. */
+const VALIDO = {
+  nome: "Ana",
+  email: "ana@exemplo.com",
+  senha: "12345678",
+  telefone: "31999990000",
+};
 
 const USUARIO = {
   id: "uid-1",
@@ -88,14 +165,39 @@ const USUARIO = {
 beforeEach(() => {
   cenario.rpc = null;
   cenario.erroDaRpc = null;
+  cenario.erroPorRpc = null;
   cenario.respostaDoSignUp = { user: USUARIO, session: null };
   cenario.erroDoSignUp = null;
   cenario.reenvio = null;
   cenario.assinatura = null;
+  cenario.leitura = null;
+  cenario.linhaDoCliente = null;
+  cenario.erroDaLeitura = null;
+  cenario.escrita = null;
+  cenario.erroDaEscrita = null;
   falso.auth.signUp.mockClear();
   falso.rpc.mockClear();
+  falso.from.mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
+
+/** Os nomes das RPCs chamadas, na ordem. É a asserção da SEPARAÇÃO. */
+function rpcsChamadas(): string[] {
+  return falso.rpc.mock.calls.map((c) => c[0] as string);
+}
+
+/** Os argumentos da n-ésima chamada de RPC. */
+function argumentosDaRpc(n: number): unknown {
+  return falso.rpc.mock.calls[n]?.[1];
+}
+
+/** Cenário de cadastro em que o GoTrue já devolve sessão (confirmação desligada). */
+function comSessao() {
+  cenario.respostaDoSignUp = {
+    user: USUARIO,
+    session: { access_token: "t", user: USUARIO },
+  };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -226,11 +328,7 @@ describe("garantirCliente — ramificação por código", () => {
 
 describe("cadastrar", () => {
   it("recusa nome em branco antes de criar conta nenhuma", async () => {
-    const erro = await cadastrar({
-      nome: "   ",
-      email: "a@b.co",
-      senha: "12345678",
-    }).catch((e) => e);
+    const erro = await cadastrar({ ...VALIDO, nome: "   " }).catch((e) => e);
 
     expect(erro).toBeInstanceOf(ErroDeCadastro);
     // Sem esta trava, a conta seria criada e a recusa só chegaria dias depois,
@@ -239,15 +337,11 @@ describe("cadastrar", () => {
   });
 
   it("guarda só o nome em user_metadata", async () => {
-    cenario.respostaDoSignUp = {
-      user: USUARIO,
-      session: { access_token: "t", user: USUARIO },
-    };
+    comSessao();
     await cadastrar({
+      ...VALIDO,
       nome: " Ana ",
       email: " ana@exemplo.com ",
-      senha: "12345678",
-      telefone: "31999990000",
     });
 
     const argumentos = cenario.assinatura as {
@@ -270,36 +364,28 @@ describe("cadastrar", () => {
   it("não tenta o vínculo quando o GoTrue retém a sessão", async () => {
     cenario.respostaDoSignUp = { user: USUARIO, session: null };
 
-    const resultado = await cadastrar({
-      nome: "Ana",
-      email: "ana@exemplo.com",
-      senha: "12345678",
-    });
+    const resultado = await cadastrar({ ...VALIDO, promocoes: true });
 
     expect(resultado).toEqual({
       situacao: "aguardandoConfirmacao",
       email: "ana@exemplo.com",
     });
+    // Nem o vínculo, NEM a promoção: sem sessão não há `auth.uid()`, e as duas
+    // responderiam 42501. O número e a preferência se perdem aqui — é o preço
+    // de telefone não viajar em `user_metadata`, e o bloco da área da conta é
+    // quem os recupera depois da confirmação.
     expect(falso.rpc).not.toHaveBeenCalled();
   });
 
   it("cria o vínculo quando o GoTrue já devolve sessão", async () => {
-    cenario.respostaDoSignUp = {
-      user: USUARIO,
-      session: { access_token: "t", user: USUARIO },
-    };
+    comSessao();
 
-    const resultado = await cadastrar({
-      nome: "Ana",
-      email: "ana@exemplo.com",
-      senha: "12345678",
-      telefone: "31999990000",
-    });
+    const resultado = await cadastrar(VALIDO);
 
     expect(resultado.situacao).toBe("pronto");
     expect(cenario.rpc?.argumentos).toEqual({
       nome: "Ana",
-      telefone: "31999990000",
+      telefone: "5531999990000",
     });
   });
 
@@ -316,11 +402,7 @@ describe("cadastrar", () => {
       session: null,
     };
 
-    const resultado = await cadastrar({
-      nome: "Ana",
-      email: "ana@exemplo.com",
-      senha: "12345678",
-    });
+    const resultado = await cadastrar(VALIDO);
 
     expect(resultado.situacao).toBe("aguardandoConfirmacao");
   });
@@ -330,15 +412,274 @@ describe("cadastrar", () => {
       code: "weak_password",
       message: "Password should be at least 6 characters",
     };
-    const erro = await cadastrar({
-      nome: "Ana",
-      email: "a@b.co",
-      senha: "123",
-    }).catch((e) => e);
+    const erro = await cadastrar({ ...VALIDO, senha: "123" }).catch((e) => e);
 
     expect(erro).toBeInstanceOf(ErroDeCadastro);
     expect(erro.codigo).toBe("weak_password");
     expect(erro.message).not.toMatch(/Password should/);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * O WhatsApp: um número obrigatório e DOIS consentimentos separados
+ * ------------------------------------------------------------------ */
+
+describe("cadastrar — o número", () => {
+  /**
+   * O servidor não deveria ter de limpar o que a tela pode limpar. Mais do que
+   * estética: `clientes.telefone` é a semente do PRIMEIRO envio, e o bot faz
+   * `paraE164` na hora de mandar (`notificacoes.js`). Um "(31) 99999-0000"
+   * gravado cru sobrevive porque ALGUÉM normaliza depois — e no dia em que esse
+   * alguém mudar, o número gravado deixa de casar com o `from` do webhook e o
+   * cliente vira "desconhecido" para o roteador.
+   */
+  it("manda o telefone para a RPC só com dígitos, em E.164", async () => {
+    comSessao();
+    await cadastrar({ ...VALIDO, telefone: "  (31) 99999-0000 " });
+
+    expect(argumentosDaRpc(0)).toEqual({
+      nome: "Ana",
+      telefone: "5531999990000",
+    });
+    expect(String((argumentosDaRpc(0) as { telefone: string }).telefone)).toMatch(
+      /^\d+$/,
+    );
+  });
+
+  /**
+   * RECUSADO NA TELA, ANTES DA REDE. O campo é `required` no HTML, mas isso é
+   * o navegador cooperando — e o campo pode chegar vazio por autofill parcial,
+   * por `noValidate`, ou por um formulário enviado por script. A trava tem de
+   * estar aqui, ANTES do `signUp`: sem ela a conta nasce sem número, e quem se
+   * cadastra não passa mais por esta tela nunca — o vínculo seguinte é criado
+   * por `montarUsuario()`, que só sabe o nome.
+   */
+  it("recusa cadastro sem telefone antes de qualquer chamada de rede", async () => {
+    const erro = await cadastrar({ ...VALIDO, telefone: "   " }).catch((e) => e);
+
+    expect(erro).toBeInstanceOf(ErroDeCadastro);
+    expect(erro.codigo).toBe(TELEFONE_EM_BRANCO);
+    expect(erro.message).toMatch(/WhatsApp/i);
+    expect(falso.auth.signUp).not.toHaveBeenCalled();
+    expect(falso.rpc).not.toHaveBeenCalled();
+  });
+
+  it("recusa o que não é celular brasileiro plausível, com frase própria", async () => {
+    comSessao();
+    const erro = await cadastrar({ ...VALIDO, telefone: "31 3333-0000" }).catch(
+      (e) => e,
+    );
+
+    expect(erro).toBeInstanceOf(ErroDeCadastro);
+    expect(erro.codigo).toBe(TELEFONE_INVALIDO);
+    // FRASE PRÓPRIA, e não a mesma do campo vazio: "preencha" para quem não
+    // preencheu e "confira o número" para quem preencheu errado são instruções
+    // diferentes, e a segunda precisa dizer o formato esperado.
+    expect(erro.message).not.toMatch(/^Informe/);
+    expect(erro.message).toMatch(/DDD/i);
+    expect(falso.auth.signUp).not.toHaveBeenCalled();
+  });
+});
+
+describe("cadastrar — as duas metades do consentimento", () => {
+  /**
+   * DUAS BASES LEGAIS, DUAS CHAMADAS.
+   *
+   * O aviso de pedido é execução de contrato (Art. 7º V): vem junto com o
+   * número, dentro de `garantir_cliente`, que carimba `whatsapp_optin_em`
+   * (0017). A promoção é consentimento (Art. 7º I): cláusula destacada, caixa
+   * desmarcada, e uma chamada à parte — `registrar_optin_whatsapp`.
+   *
+   * Se um dia as duas virarem uma chamada só, o consentimento passa a ser
+   * condição para criar a conta. Este teste é o que fica vermelho.
+   */
+  it("promoção marcada vira uma chamada separada, depois do vínculo", async () => {
+    comSessao();
+    await cadastrar({ ...VALIDO, promocoes: true });
+
+    expect(rpcsChamadas()).toEqual(["garantir_cliente", RPC_DO_OPTIN]);
+    expect(argumentosDaRpc(1)).toEqual({ promocoes: true });
+    // O telefone NÃO se repete na segunda chamada: `garantir_cliente` já o
+    // gravou, e mandá-lo de novo daria a esta RPC um segundo caminho até a
+    // coluna — dois lugares para procurar quando o número estiver errado.
+    expect(argumentosDaRpc(1)).not.toHaveProperty("telefone");
+  });
+
+  it("promoção desmarcada não vira chamada nenhuma", async () => {
+    comSessao();
+    await cadastrar({ ...VALIDO, promocoes: false });
+
+    expect(rpcsChamadas()).toEqual(["garantir_cliente"]);
+  });
+
+  it("sem a caixa no formulário, também não vira chamada nenhuma", async () => {
+    // O padrão da AUSÊNCIA é o mesmo do "não marcado". Consentimento não tem
+    // valor default.
+    comSessao();
+    await cadastrar(VALIDO);
+
+    expect(rpcsChamadas()).toEqual(["garantir_cliente"]);
+  });
+
+  /**
+   * A promoção é o ACESSÓRIO. Se ela falhar, a conta existe, o vínculo existe e
+   * o aviso de pedido está carimbado — derrubar o cadastro inteiro por causa
+   * dela devolveria a pessoa a um formulário que não consegue mais criar a
+   * conta (o e-mail já está tomado) e a deixaria sem nada.
+   */
+  it("recusa da promoção não desfaz o cadastro", async () => {
+    comSessao();
+    cenario.erroPorRpc = {
+      [RPC_DO_OPTIN]: { code: "42501", message: "sem sessão" },
+    };
+
+    const resultado = await cadastrar({ ...VALIDO, promocoes: true });
+
+    expect(resultado.situacao).toBe("pronto");
+    expect(console.warn).toHaveBeenCalled();
+  });
+});
+
+describe("registrarOptinDeWhatsapp", () => {
+  it("manda o telefone em E.164 e omite o que não foi informado", async () => {
+    await registrarOptinDeWhatsapp({ telefone: "(31) 99999-0000" });
+
+    expect(cenario.rpc?.nome).toBe(RPC_DO_OPTIN);
+    expect(cenario.rpc?.argumentos).toEqual({ telefone: "5531999990000" });
+  });
+
+  it("desmarcar a promoção é `false` explícito, e não a ausência da chave", async () => {
+    // A RPC distingue três coisas: NULL ("não mexa"), true (consentiu) e false
+    // (revogou). Omitir a chave na revogação faria a caixa desmarcada não
+    // desmarcar nada — o pior desfecho possível para o Art. 8º §5º.
+    await registrarOptinDeWhatsapp({ promocoes: false });
+
+    expect(cenario.rpc?.argumentos).toEqual({ promocoes: false });
+  });
+
+  it("recusa telefone que não é celular brasileiro antes de chamar a RPC", async () => {
+    const erro = await registrarOptinDeWhatsapp({ telefone: "999" }).catch(
+      (e) => e,
+    );
+
+    expect(erro).toBeInstanceOf(ErroDeVinculo);
+    expect(erro.codigo).toBe(TELEFONE_INVALIDO);
+    expect(falso.rpc).not.toHaveBeenCalled();
+  });
+
+  it("não chama a RPC quando não há nada a registrar", async () => {
+    await registrarOptinDeWhatsapp({});
+    expect(falso.rpc).not.toHaveBeenCalled();
+  });
+
+  it("traduz a recusa de quem ainda não é cliente da loja", async () => {
+    cenario.erroDaRpc = {
+      code: SEM_VINCULO,
+      message: "Esta conta ainda não tem cadastro nesta loja.",
+      hint: "Confirme o e-mail e entre de novo.",
+    };
+
+    const erro = await registrarOptinDeWhatsapp({ promocoes: true }).catch(
+      (e) => e,
+    );
+
+    expect(erro).toBeInstanceOf(ErroDeVinculo);
+    expect(erro.codigo).toBe(SEM_VINCULO);
+    expect(erro.message).toMatch(/cadastro/i);
+    // A frase não pode ser a do 42501 ("Entre na loja"): quem já está logado e
+    // lê "entre na loja" não tem o que fazer.
+    expect(erro.message).not.toMatch(/^Entre na loja/);
+  });
+});
+
+describe("lerWhatsappDaConta", () => {
+  it("lê as três colunas que a tela precisa, só da própria linha", async () => {
+    cenario.linhaDoCliente = {
+      telefone: "5531999990000",
+      whatsapp_promo_optin_em: null,
+      whatsapp_optout_em: null,
+    };
+
+    const contato = await lerWhatsappDaConta("uid-1");
+
+    expect(cenario.leitura?.tabela).toBe("clientes");
+    expect(cenario.leitura?.userId).toBe("uid-1");
+    expect(contato).toEqual({
+      telefone: "5531999990000",
+      promocoes: false,
+      parado: false,
+    });
+  });
+
+  it("carimbo preenchido vira `true`; a tela não vê timestamp", async () => {
+    cenario.linhaDoCliente = {
+      telefone: "5531999990000",
+      whatsapp_promo_optin_em: "2026-08-22T10:00:00Z",
+      whatsapp_optout_em: "2026-08-22T11:00:00Z",
+    };
+
+    expect(await lerWhatsappDaConta("uid-1")).toEqual({
+      telefone: "5531999990000",
+      promocoes: true,
+      parado: true,
+    });
+  });
+
+  it("devolve null quando a leitura falha, em vez de inventar estado", async () => {
+    // Falhar para `null` faz o bloco da tela sumir. O inverso — assumir "sem
+    // telefone" — pediria o número de novo a quem já o deu, e um segundo
+    // carimbo de opt-in por cima de um erro de rede.
+    cenario.erroDaLeitura = { code: "PGRST301", message: "jwt expired" };
+
+    expect(await lerWhatsappDaConta("uid-1")).toBeNull();
+    expect(console.warn).toHaveBeenCalled();
+  });
+
+  it("sem telefone gravado devolve telefone nulo, e não erro", async () => {
+    cenario.linhaDoCliente = {
+      telefone: null,
+      whatsapp_promo_optin_em: null,
+      whatsapp_optout_em: null,
+    };
+
+    expect(await lerWhatsappDaConta("uid-1")).toEqual({
+      telefone: null,
+      promocoes: false,
+      parado: false,
+    });
+  });
+});
+
+describe("voltarAReceberNoWhatsapp", () => {
+  /**
+   * O ÚNICO gesto de WhatsApp que não passa pela RPC, e não passar é a escolha:
+   * `whatsapp_optout_em` é a única das cinco colunas que a 0018 deixou aberta
+   * ao titular. Se este teste passar a ver uma chamada de `rpc`, alguém moveu
+   * para a função privilegiada um poder que ela não precisa ter.
+   */
+  it("limpa só o carimbo de parada, na própria linha, sem RPC", async () => {
+    await voltarAReceberNoWhatsapp("uid-1");
+
+    expect(cenario.escrita?.tabela).toBe("clientes");
+    expect(cenario.escrita?.valores).toEqual({ whatsapp_optout_em: null });
+    expect(cenario.escrita?.userId).toBe("uid-1");
+    expect(falso.rpc).not.toHaveBeenCalled();
+  });
+
+  it("não mexe no carimbo de opt-in — voltar não é consentir de novo", async () => {
+    await voltarAReceberNoWhatsapp("uid-1");
+
+    expect(cenario.escrita?.valores).not.toHaveProperty("whatsapp_optin_em");
+    expect(cenario.escrita?.valores).not.toHaveProperty("telefone");
+  });
+
+  it("propaga a recusa em vez de fingir que voltou", async () => {
+    cenario.erroDaEscrita = { code: "42501", message: "permission denied" };
+
+    const erro = await voltarAReceberNoWhatsapp("uid-1").catch((e) => e);
+
+    expect(erro).toBeInstanceOf(ErroDeVinculo);
+    expect(erro.codigo).toBe("42501");
   });
 });
 
