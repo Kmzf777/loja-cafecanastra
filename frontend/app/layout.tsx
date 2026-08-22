@@ -43,8 +43,23 @@ export const metadata: Metadata = {
     "Café de origem única da Serra da Canastra, torrado sob demanda em lotes pequenos. Café da família desde 1985.",
   openGraph: {
     type: "website",
-    locale: "pt_BR",
     siteName: "Café Canastra",
+    /**
+     * NÃO EXISTE `locale` AQUI, E A AUSÊNCIA É A CORREÇÃO.
+     *
+     * Este layout envolve o site inteiro e não recebe o `[locale]` — ele está
+     * um nível abaixo, pelo motivo que a nota do `lang` explica adiante. Um
+     * valor fixo neste ponto não é um padrão inofensivo: é uma AFIRMAÇÃO sobre
+     * páginas que existem em três idiomas, e o Next só a substitui na rota que
+     * declara o próprio bloco `openGraph` (ele troca o objeto inteiro, não
+     * funde campo a campo). O `pt_BR` que morava nesta linha era o que fazia
+     * `/en` e `/es` anunciarem ao Facebook e ao WhatsApp que eram páginas em
+     * português — em sete das dez rotas traduzidas, todas as que não
+     * declaravam o bloco.
+     *
+     * Quem sabe o idioma é a rota, e é ela que declara: `openGraphDaPagina()`
+     * de lib/i18n/rotas.ts, uma tabela só para os três valores.
+     */
     // Imagem padrao dos cards compartilhados: o heroi da home (1280x720, a
     // proporcao mais proxima do 1.91:1 que os crawlers pedem — o
     // bannerdesktop.jpg e 1600x500, esticado demais para card). Paginas com

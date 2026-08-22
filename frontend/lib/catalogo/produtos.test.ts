@@ -4,8 +4,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import bruto from "../../../data/catalogo-canastra.json";
 import traduzido from "../../../data/catalogo-canastra.i18n.json";
-import { LOTES, MARCA, lotesDoLocale, traduzirLote } from "./produtos";
-import { rotuloNota } from "./rotulos";
+import {
+  KITS_DA_LOJA,
+  LOTES,
+  MARCA,
+  lotesDoLocale,
+  nomeDoKitNaSacola,
+  traduzirKit,
+  traduzirLote,
+} from "./produtos";
+import { rotuloDaEmbalagem, rotuloDoAtributo, rotuloNota } from "./rotulos";
 import { MOAGENS } from "./tipos";
 import { dicionario } from "../i18n/dicionario";
 import { LOCALES } from "../i18n/tipos";
@@ -310,10 +318,22 @@ describe("catalogo montado", () => {
  * fusao faz com ele.
  */
 
-/** Os slugs do arquivo de traducao, sem as chaves de documentacao (`_leia_me`). */
-const TRADUZIDAS = Object.entries(traduzido).filter(([k]) => !k.startsWith("_")) as [
+/**
+ * As linhas do arquivo de traducao.
+ *
+ * O ARQUIVO GANHOU SECOES, e este `Object.entries` deixou de filtrar `_leia_me`
+ * por causa disso: os slugs de linha moravam na raiz, ao lado da documentacao,
+ * e agora ha `linhas` e `kits`. Um kit tem `sku` e nao `slug`, e por na mesma
+ * gaveta duas chaves de espacos diferentes era esperar a primeira colisao.
+ */
+const TRADUZIDAS = Object.entries(traduzido.linhas) as [
   string,
   Record<string, Record<string, string | string[]>>,
+][];
+
+const TRADUZIDOS_KITS = Object.entries(traduzido.kits) as [
+  string,
+  Record<string, Record<string, string>>,
 ][];
 
 /** Os idiomas que este arquivo traduz — o `pt` e a fonte, nao uma traducao. */
@@ -326,6 +346,9 @@ const CAMPOS_PERMITIDOS = [
   "corpo",
   "preparoSugerido",
   "notas",
+  // A descricao do pacote ("Pacote preto"). Nenhuma tela a mostra sozinha: ela
+  // e a metade variavel do alt de toda foto do catalogo.
+  "embalagem",
 ];
 
 describe("editorial traduzido (data/catalogo-canastra.i18n.json)", () => {
@@ -520,8 +543,28 @@ describe("fusao do editorial traduzido", () => {
         const lote = porSlug.get(slug);
         expect(lote, `${slug}.${idioma}`).toBeDefined();
         for (const [campo, valor] of Object.entries(porIdioma[idioma])) {
+          // `embalagem` nao e campo de `Lote` e por isso nao se compara aqui:
+          // ela nao vai para a tela sozinha, vai costurada no alt da foto. Quem
+          // a cobra e o caso logo abaixo.
+          if (campo === "embalagem") continue;
           expect(lote![campo as "descricao"], `${slug}.${idioma}.${campo}`).toEqual(valor);
         }
+      }
+    }
+  });
+
+  it("a embalagem traduzida chega ao alt, e nao a lugar nenhum alem dele", () => {
+    // O unico consumidor de `embalagem` e o texto alternativo. Se um dia ela
+    // ganhar uma tela, este teste e o lugar de dizer isso.
+    for (const idioma of IDIOMAS_TRADUZIDOS) {
+      const porSlug = new Map(lotesDoLocale(idioma).map((l) => [l.slug, l]));
+      for (const [slug, porIdioma] of TRADUZIDAS) {
+        const embalagem = porIdioma[idioma].embalagem as string | undefined;
+        expect(embalagem, `${slug}.${idioma} sem embalagem traduzida`).toBeTruthy();
+        const lote = porSlug.get(slug)!;
+        expect(lote.fotos.sabor.alt, `${slug}.${idioma}`).toContain(embalagem!);
+        expect(lote.fotos.pacote.alt, `${slug}.${idioma}`).toContain(embalagem!);
+        expect(lote).not.toHaveProperty("embalagem");
       }
     }
   });
@@ -542,19 +585,45 @@ describe("fusao do editorial traduzido", () => {
     }
   });
 
-  it("linha sem traducao NENHUMA devolve o lote em portugues", () => {
-    // O dia em que uma sexta linha entrar no catalogo, ela aparece em ingles
-    // com o texto em portugues — e nao com a ficha em branco.
+  it("linha sem traducao NENHUMA devolve o texto em portugues", () => {
+    /**
+     * O dia em que uma sexta linha entrar no catalogo, ela aparece em ingles
+     * com o EDITORIAL em portugues — e nao com a ficha em branco.
+     *
+     * A ASERCAO ERA DE IDENTIDADE (`toBe`) E DEIXOU DE SER, de proposito. Fora
+     * do portugues a fusao sempre reconstroi, porque o rotulo da embalagem e o
+     * alt da foto nao vem do editorial por linha: vem do dicionario, chaveados,
+     * e sair cedo por falta de editorial era exatamente o que deixava
+     * "Display com 10 sachês" numa pagina em ingles. O que este teste protege e
+     * o texto, e ele continua caindo inteiro para o portugues.
+     */
     const semTraducao = { ...LOTES[0], slug: "linha-que-ainda-nao-foi-traduzida" };
     for (const idioma of LOCALES) {
-      expect(traduzirLote(semTraducao, idioma), idioma).toBe(semTraducao);
+      const fundido = traduzirLote(semTraducao, idioma);
+      for (const campo of ["nome", "descricao", "torra", "corpo", "preparoSugerido"] as const) {
+        expect(fundido[campo], `${idioma}.${campo}`).toBe(semTraducao[campo]);
+      }
+      expect(fundido.notas, idioma).toEqual(semTraducao.notas);
     }
+    // E o portugues continua devolvendo o PROPRIO objeto: e o que garante que
+    // exista uma versao so do catalogo em pt na memoria.
+    expect(traduzirLote(semTraducao, "pt")).toBe(semTraducao);
   });
 
-  it("nao toca em preco, estoque, SKU nem produtoId", () => {
-    // A fusao e de TEXTO. Se ela reconstruisse as variantes, o preco ao vivo
-    // do banco voltaria para o do JSON no exato momento em que a pessoa muda
-    // de idioma.
+  it("nao toca em preco, estoque, SKU, produtoId nem no rotulo gravado", () => {
+    /**
+     * A fusao e de TEXTO DE TELA. Se ela reconstruisse as variantes, o preco ao
+     * vivo do banco voltaria para o do JSON no exato momento em que a pessoa
+     * muda de idioma.
+     *
+     * E O `rotuloEmbalagem` ESTA PROTEGIDO POR ESTA MESMA ASERCAO, de proposito.
+     * Ele parece texto e e dado GRAVADO: vai para o `size` e para o nome do item
+     * da sacola, que e pt-BR por decisao (spec §1), sobrevive no localStorage
+     * ate a sessao seguinte, e vira `item_name` no GA4. Traduzi-lo aqui faria a
+     * sacola mostrar a etiqueta na lingua de ontem e o relatorio contar o mesmo
+     * SKU tres vezes. Quem mostra na tela traduz na hora de mostrar, com
+     * `rotuloDaEmbalagem()`.
+     */
     for (const idioma of LOCALES) {
       lotesDoLocale(idioma).forEach((lote, i) => {
         expect(lote.variantes, `${lote.slug}.${idioma}`).toEqual(LOTES[i].variantes);
@@ -596,5 +665,311 @@ describe("fusao do editorial traduzido", () => {
         expect(lote.notas.length, `${lote.slug}.${idioma}.notas`).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+/**
+ * O DADO DO CATALOGO CHEGANDO CRU EM PORTUGUES NA TELA EM INGLES.
+ *
+ * Era o maior vazamento que sobrou depois de a interface inteira ser traduzida,
+ * e o padrao era sempre o mesmo: a moldura fala ingles e o dado ao lado dela
+ * nao. Medido em /en/cafes servido de verdade — "Caixa com 1 pacote de 250 g de
+ * cada", "Cápsula Compatível Nespresso", "Especial", "Gourmet", "de 5".
+ *
+ * O CONSERTO TEM DUAS METADES, E ESTE BLOCO GUARDA A COSTURA DAS DUAS:
+ *
+ *   CHAVE, no JSON de catalogo — `rotuloChave` por produto e
+ *   `marca.atributosChaves`. Sao aditivas: `backend/db/seed.js` nao le nenhuma
+ *   das duas, e por isso `instalacao-completa.sql` nao muda.
+ *
+ *   TEXTO, no dicionario — `catalogo.embalagem` e `catalogo.atributo`, onde o
+ *   TypeScript cobra os tres idiomas e chave faltando quebra o build.
+ *
+ * O QUE PODE DAR ERRADO, E SO ISTO SEGURA: as duas metades se soltarem. O JSON
+ * continua sendo o oraculo do portugues, porque e ele que o seed grava no banco
+ * e e do banco que o checkout rele o item na hora de cobrar; se o dicionario
+ * discordar dele, a tela passa a dizer uma coisa e a nota fiscal outra, sem
+ * erro nenhum no caminho.
+ */
+describe("chave no catalogo, texto no dicionario", () => {
+  const EMBALAGENS_PT = dicionario("pt").catalogo.embalagem as Record<string, string>;
+  const ATRIBUTOS_PT = dicionario("pt").catalogo.atributo as Record<string, string>;
+
+  it("todo produto declara `rotuloChave`, em kebab-case", () => {
+    for (const p of bruto.produtos) {
+      expect(p.rotuloChave, `${p.sku} sem rotuloChave`).toBeTruthy();
+      expect(p.rotuloChave, p.sku).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+    }
+  });
+
+  it("o portugues do dicionario e IDENTICO ao rotulo do JSON", () => {
+    // O JSON manda: e o `rotuloEmbalagem` dele que o seed grava em
+    // `canastra.produtos.tamanho`, e e de la que o PaymentController rele o
+    // item ao fechar o pedido. Uma virgula de diferenca aqui e a vitrine
+    // dizendo uma coisa e a nota fiscal dizendo outra.
+    for (const p of bruto.produtos) {
+      expect(EMBALAGENS_PT[p.rotuloChave], `${p.sku} (${p.rotuloChave})`).toBe(
+        p.rotuloEmbalagem,
+      );
+    }
+  });
+
+  it("nao guarda rotulo que produto nenhum usa", () => {
+    // Chave sem consumidor e promessa de um produto que nao existe, e ela
+    // sobrevive a remocao do SKU sem que nada quebre.
+    const emUso = new Set(bruto.produtos.map((p) => p.rotuloChave));
+    for (const chave of Object.keys(EMBALAGENS_PT)) {
+      expect(emUso.has(chave), `catalogo.embalagem.${chave} nao e usada`).toBe(true);
+    }
+  });
+
+  it("o rotulo sai traduzido nos tres idiomas, nunca em kebab-case", () => {
+    for (const chave of Object.keys(EMBALAGENS_PT)) {
+      for (const idioma of LOCALES) {
+        const rotulo = rotuloDaEmbalagem(
+          { rotuloChave: chave, rotuloEmbalagem: "NUNCA DEVERIA APARECER" },
+          idioma,
+        );
+        expect(rotulo.trim(), `${idioma}.${chave}`).not.toBe("");
+        expect(rotulo, `${idioma}.${chave}`).not.toBe(chave);
+        expect(rotulo, `${idioma}.${chave}`).not.toBe("NUNCA DEVERIA APARECER");
+      }
+    }
+  });
+
+  it("sem chave, o rotulo fica no portugues que o item ja carrega", () => {
+    // A variante montada a mao (fixture de teste, calculo do Clube) nao tem
+    // chave para declarar. Cair no proprio `rotuloEmbalagem` e o contrato — e e
+    // o que impede um "pacote-250g" de aparecer na tela.
+    expect(rotuloDaEmbalagem({ rotuloEmbalagem: "Pacote com 250 g" }, "en")).toBe(
+      "Pacote com 250 g",
+    );
+    expect(
+      rotuloDaEmbalagem(
+        { rotuloChave: "embalagem-que-ninguem-cadastrou", rotuloEmbalagem: "250 g" },
+        "en",
+      ),
+    ).toBe("250 g");
+  });
+
+  it("os atributos da marca e as chaves andam na mesma ordem", () => {
+    expect(MARCA.atributosChaves).toHaveLength(MARCA.atributos.length);
+    MARCA.atributosChaves.forEach((chave, i) => {
+      expect(chave, `atributo ${i}`).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+      expect(ATRIBUTOS_PT[chave], `${chave} (posicao ${i})`).toBe(MARCA.atributos[i]);
+    });
+  });
+
+  it("nao guarda atributo que a marca nao declara", () => {
+    const declarados = new Set<string>(MARCA.atributosChaves);
+    for (const chave of Object.keys(ATRIBUTOS_PT)) {
+      expect(declarados.has(chave), `catalogo.atributo.${chave} nao e da marca`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("o lote guarda a CHAVE do atributo, nunca o texto", () => {
+    // O defeito exato: `origem.atributos` trazia "100% arábica" e a
+    // <FichaLavoura> o imprimia cru, embaixo de um rotulo ja traduzido.
+    for (const lote of LOTES) {
+      expect(lote.origem.atributos, lote.slug).toEqual(MARCA.atributosChaves);
+      for (const chave of lote.origem.atributos) {
+        expect(chave, `${lote.slug}.${chave}`).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+      }
+    }
+  });
+
+  it("o atributo sai no idioma de quem le", () => {
+    expect(rotuloDoAtributo("sem-gluten", "pt")).toBe("Sem glúten");
+    expect(rotuloDoAtributo("sem-gluten", "en")).toBe("Gluten free");
+    expect(rotuloDoAtributo("sem-gluten", "es")).toBe("Sin gluten");
+    // `Zero carbon` e nao `carbon neutral`: neutralidade por compensacao e
+    // outra afirmacao, e a marca nao a publica.
+    expect(rotuloDoAtributo("carbono-zero", "en")).toBe("Zero carbon");
+  });
+});
+
+describe("o rotulo de embalagem: portugues no dado, idioma da pagina na tela", () => {
+  it("todo item vendavel do catalogo carrega a chave do rotulo", () => {
+    // Sem a chave o item nao tem como ser traduzido na hora de desenhar, e o
+    // sintoma seria silencioso: um rotulo em portugues no meio da lista.
+    for (const lote of LOTES) {
+      for (const item of [...lote.variantes, ...lote.formatosEspeciais]) {
+        expect(item.rotuloChave, `${item.sku} sem rotuloChave`).toBeTruthy();
+      }
+    }
+    for (const kit of KITS_DA_LOJA) {
+      expect(kit.rotuloChave, `${kit.sku} sem rotuloChave`).toBeTruthy();
+    }
+  });
+
+  it("o dado gravado NAO muda de idioma", () => {
+    // A trava do caminho de venda: e este texto que vai para a sacola e para o
+    // GA4. Se ele mudar com o idioma da vitrine, a sacola pt-BR passa a mostrar
+    // "250 g bag" e o relatorio conta o mesmo SKU em tres linhas.
+    for (const idioma of LOCALES) {
+      lotesDoLocale(idioma).forEach((lote, i) => {
+        for (const [j, item] of lote.variantes.entries()) {
+          expect(item.rotuloEmbalagem, `${item.sku}.${idioma}`).toBe(
+            LOTES[i].variantes[j].rotuloEmbalagem,
+          );
+        }
+      });
+    }
+  });
+
+  it("o bloco 'tambem nesta linha' da PDP nao volta em portugues", () => {
+    // O caso medido: o rotulo e o UNICO texto daquela lista, e chegava cru —
+    // "Display com 10 sachês", "1 caixa — 10 cápsulas". A PDP o desenha com
+    // `rotuloDaEmbalagem(f, locale)`, que e o que este caso exercita.
+    const suave = LOTES.find((l) => l.slug === "suave")!;
+    expect(
+      suave.formatosEspeciais.map((f) => rotuloDaEmbalagem(f, "en")),
+    ).toContain("Display box with 10 sachets");
+
+    const classico = LOTES.find((l) => l.slug === "classico")!;
+    expect(
+      classico.formatosEspeciais.map((f) => rotuloDaEmbalagem(f, "es")),
+    ).toContain("1 caja — 10 cápsulas");
+    expect(
+      classico.formatosEspeciais.map((f) => rotuloDaEmbalagem(f, "pt")),
+    ).toContain("1 caixa — 10 cápsulas");
+  });
+});
+
+describe("o alt de toda foto", () => {
+  const classicoDe = (idioma: Locale) =>
+    lotesDoLocale(idioma).find((l) => l.slug === "classico")!;
+
+  it("fala o idioma da pagina, com o nome proprio intacto", () => {
+    expect(classicoDe("pt").fotos.sabor.alt).toBe(
+      "Pacote preto do Canastra Clássico sobre fundo claro",
+    );
+    expect(classicoDe("en").fotos.sabor.alt).toBe(
+      "Black bag of Canastra Clássico on a light background",
+    );
+    expect(classicoDe("es").fotos.sabor.alt).toBe(
+      "Bolsa negra de Canastra Clássico sobre fondo claro",
+    );
+    expect(classicoDe("en").fotos.pacote.alt).toBe("Black bag of Canastra Clássico");
+  });
+
+  it("nunca deixa um espaco reservado do molde por preencher", () => {
+    // `{embalagem}` na tela e pior que portugues: e o molde vazando.
+    for (const idioma of LOCALES) {
+      for (const lote of lotesDoLocale(idioma)) {
+        for (const foto of [lote.fotos.sabor, lote.fotos.pacote]) {
+          expect(foto.alt, `${lote.slug}.${idioma}`).not.toContain("{");
+          expect(foto.alt.length, `${lote.slug}.${idioma}`).toBeGreaterThan(10);
+        }
+      }
+    }
+  });
+
+  it("o alt do pacote nao afirma peso nenhum", () => {
+    // Ele dizia "de 250 g" em TODA linha, inclusive no Nectar de Minas, que so
+    // existe em 1 kg. Peso e do SKU, e ele esta no rotulo ao lado.
+    for (const idioma of LOCALES) {
+      for (const lote of lotesDoLocale(idioma)) {
+        expect(lote.fotos.pacote.alt, `${lote.slug}.${idioma}`).not.toMatch(
+          /\d+\s?(g|kg)\b/i,
+        );
+      }
+    }
+  });
+});
+
+describe("kits traduzidos", () => {
+  it("a secao `kits` do arquivo aponta exatamente para os kits do catalogo", () => {
+    const doCatalogo = KITS_DA_LOJA.map((k) => k.sku).sort();
+    expect(TRADUZIDOS_KITS.map(([sku]) => sku).sort()).toEqual(doCatalogo);
+  });
+
+  it("tem os dois idiomas em todo kit, e so o campo `nome`", () => {
+    // Preco, estoque e SKU ficam de fora pelo mesmo motivo das linhas: sao o
+    // mesmo numero nos tres idiomas.
+    for (const [sku, porIdioma] of TRADUZIDOS_KITS) {
+      expect(Object.keys(porIdioma).sort(), sku).toEqual([...IDIOMAS_TRADUZIDOS].sort());
+      for (const [idioma, campos] of Object.entries(porIdioma)) {
+        expect(Object.keys(campos), `${sku}.${idioma}`).toEqual(["nome"]);
+        expect(campos.nome.trim(), `${sku}.${idioma}`).not.toBe("");
+      }
+    }
+  });
+
+  it("mantem o ' - ' que o card usa para quebrar titulo e complemento", () => {
+    // Sem o separador o <CardKit> perde o complemento e fica com um titulo de
+    // duas linhas — o mesmo desenho que o nome capturado da loja tem em pt.
+    for (const [sku, porIdioma] of TRADUZIDOS_KITS) {
+      for (const [idioma, campos] of Object.entries(porIdioma)) {
+        expect(campos.nome, `${sku}.${idioma}`).toContain(" - ");
+      }
+    }
+  });
+
+  it("traduz o nome do kit que a PLP vende, e o rotulo se traduz na tela", () => {
+    const kit = KITS_DA_LOJA.find(
+      (k) => k.sku === "kit-canela-classico-suave-moido-3x250",
+    )!;
+
+    const en = traduzirKit(kit, "en");
+    expect(en.nome).toBe(
+      "Canastra Specialty Coffee Canela, Clássico and Suave, Ground - Box with one 250 g bag of each",
+    );
+    expect(rotuloDaEmbalagem(en, "en")).toBe("Box with one 250 g bag of each");
+
+    const es = traduzirKit(kit, "es");
+    expect(es.nome).toContain("Caja con 1 bolsa de 250 g de cada");
+    expect(rotuloDaEmbalagem(es, "es")).toBe("Caja con 1 bolsa de 250 g de cada");
+  });
+
+  it("nao toca em preco, estoque, produtoId nem no rotulo gravado", () => {
+    // O kit chega do repositorio com o comercial do banco ja aplicado. Se a
+    // traducao o reconstruisse do JSON, o preco do painel sumiria de /en — e o
+    // rotulo fica em portugues pela mesma razao das variantes: e o que o card
+    // poe na sacola.
+    const kit = { ...KITS_DA_LOJA[0], preco: 12345, produtoId: "id-do-banco" };
+    for (const idioma of LOCALES) {
+      const fundido = traduzirKit(kit, idioma);
+      expect(fundido.preco, idioma).toBe(12345);
+      expect(fundido.produtoId, idioma).toBe("id-do-banco");
+      expect(fundido.estoque, idioma).toBe(kit.estoque);
+      expect(fundido.skuLoja, idioma).toBe(kit.skuLoja);
+      expect(fundido.rotuloEmbalagem, idioma).toBe(kit.rotuloEmbalagem);
+    }
+  });
+
+  it("'pt' devolve o proprio kit", () => {
+    for (const kit of KITS_DA_LOJA) {
+      expect(traduzirKit(kit, "pt"), kit.sku).toBe(kit);
+    }
+  });
+
+  it("o nome que entra na SACOLA fica em portugues, mesmo vindo do kit traduzido", () => {
+    /**
+     * A trava do caminho de venda no lado dos kits. O card tem o kit traduzido
+     * na mao e e dele que sai o titulo da tela; passar o objeto errado para a
+     * sacola seria o erro mais facil de cometer e o mais dificil de ver — o
+     * sintoma so aparece na sessao seguinte, numa sacola pt-BR mostrando
+     * "Box with one 250 g bag of each", e no GA4 contando o mesmo SKU tres
+     * vezes. `nomeDoKitNaSacola` reprocura pelo `sku` justamente por isso.
+     */
+    const kit = KITS_DA_LOJA[0];
+    const esperado = `${kit.nome.split(" - ")[0]} — ${kit.rotuloEmbalagem}`;
+    for (const idioma of LOCALES) {
+      expect(nomeDoKitNaSacola(traduzirKit(kit, idioma)), idioma).toBe(esperado);
+    }
+    expect(esperado).toContain("Caixa com 1 pacote de 250 g de cada");
+  });
+
+  it("kit sem nome traduzido cai para o portugues, e o rotulo continua traduzivel", () => {
+    // As duas portas sao independentes: o nome vem do arquivo de traducao (por
+    // sku), o rotulo vem do dicionario (por chave). Um kit novo entra em /en com
+    // o nome em portugues e a etiqueta ja certa — nunca com a etiqueta vazia.
+    const semTraducao = { ...KITS_DA_LOJA[0], sku: "kit-que-ninguem-traduziu" };
+    const en = traduzirKit(semTraducao, "en");
+    expect(en.nome).toBe(semTraducao.nome);
+    expect(rotuloDaEmbalagem(en, "en")).toBe("Box with one 250 g bag of each");
   });
 });

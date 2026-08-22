@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PaginaTexto, AvisoJuridico } from "@/components/layout/PaginaTexto";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import {
   TERMOS,
@@ -58,6 +58,12 @@ export async function generateMetadata({
     // `generateMetadata` e não um `metadata` constante porque o canônico
     // precisa ser a PRÓPRIA página, no próprio idioma — ver lib/i18n/rotas.ts.
     alternates: alternativasDeIdioma("/termos-de-uso", locale),
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/termos-de-uso",
+      titulo: meta.titulo,
+      descricao: meta.descricao,
+    }),
   };
 }
 

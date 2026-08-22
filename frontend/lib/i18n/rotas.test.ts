@@ -4,7 +4,10 @@ import {
   localeDaRota,
   caminhoSemLocale,
   alternativasDeIdioma,
+  openGraphDaPagina,
+  TAG_OPEN_GRAPH,
 } from "./rotas";
+import { LOCALES, TAG_BCP47 } from "./tipos";
 
 /**
  * A regra que estes testes travam é a mesma do middleware, vista do outro lado:
@@ -133,5 +136,113 @@ describe("alternativasDeIdioma", () => {
     expect(alt.canonical).toBe("/en");
     expect(alt.languages.en).toBe("/en");
     expect(alt.languages["x-default"]).toBe("/");
+  });
+});
+
+/**
+ * O DEFEITO QUE ESTES TESTES EXISTEM PARA IMPEDIR DE VOLTAR: o site tinha TRÊS
+ * tabelas de `og:locale` — /historia e a PDP com `en_US`/`es_ES`, /bio com
+ * `en`/`es` montado à mão a partir do `TAG_BCP47` — e sete rotas traduzidas sem
+ * tabela nenhuma, herdando `pt_BR` do layout raiz. O `hreflang` dizia "esta
+ * página é inglesa" e o Open Graph ao lado dizia "português do Brasil".
+ */
+describe("TAG_OPEN_GRAPH", () => {
+  /**
+   * O erro que o /bio cometia. `og:locale` exige `idioma_TERRITÓRIO`; o
+   * `TAG_BCP47` devolve `en` e `es` secos porque o `hreflang` os quer assim.
+   * As duas tabelas parecem intercambiáveis e não são.
+   */
+  it("é sempre idioma_TERRITÓRIO, com sublinhado e nunca hífen", () => {
+    for (const locale of LOCALES) {
+      expect(TAG_OPEN_GRAPH[locale]).toMatch(/^[a-z]{2}_[A-Z]{2}$/);
+      expect(TAG_OPEN_GRAPH[locale]).not.toContain("-");
+    }
+  });
+
+  it("cobre os três idiomas com valores distintos", () => {
+    expect(TAG_OPEN_GRAPH).toEqual({ pt: "pt_BR", en: "en_US", es: "es_ES" });
+    expect(new Set(Object.values(TAG_OPEN_GRAPH)).size).toBe(LOCALES.length);
+  });
+
+  /** A confusão que gerou a terceira implementação, travada por escrito. */
+  it("NÃO é o TAG_BCP47 com o hífen trocado por sublinhado", () => {
+    expect(TAG_OPEN_GRAPH.en).not.toBe(TAG_BCP47.en.replace("-", "_"));
+    expect(TAG_OPEN_GRAPH.es).not.toBe(TAG_BCP47.es.replace("-", "_"));
+  });
+});
+
+describe("openGraphDaPagina", () => {
+  it("declara o idioma da própria página, não o do layout raiz", () => {
+    expect(
+      openGraphDaPagina({
+        locale: "en",
+        caminho: "/historia",
+        titulo: "t",
+        descricao: "d",
+      }).locale,
+    ).toBe("en_US");
+    expect(
+      openGraphDaPagina({
+        locale: "es",
+        caminho: "/historia",
+        titulo: "t",
+        descricao: "d",
+      }).locale,
+    ).toBe("es_ES");
+  });
+
+  /** A `og:url` é a versão traduzida, e relativa — o Next resolve pelo metadataBase. */
+  it("aponta para o endereço daquele idioma", () => {
+    expect(
+      openGraphDaPagina({ locale: "pt", caminho: "/bio", titulo: "t", descricao: "d" })
+        .url,
+    ).toBe("/bio");
+    expect(
+      openGraphDaPagina({ locale: "en", caminho: "/bio", titulo: "t", descricao: "d" })
+        .url,
+    ).toBe("/en/bio");
+    expect(
+      openGraphDaPagina({ locale: "es", caminho: "/", titulo: "t", descricao: "d" }).url,
+    ).toBe("/es");
+  });
+
+  /**
+   * O bloco tem de vir COMPLETO: o Next substitui o `openGraph` do layout raiz
+   * inteiro quando a rota declara o seu. Faltar `siteName` ou imagem aqui é o
+   * card sair sem marca e sem foto — foi por ter de repetir os dois à mão em
+   * cada arquivo que as três tabelas discordantes apareceram.
+   */
+  it("traz siteName, tipo e imagem sem a rota precisar repetir", () => {
+    const og = openGraphDaPagina({
+      locale: "pt",
+      caminho: "/",
+      titulo: "Título",
+      descricao: "Descrição",
+    });
+    expect(og.siteName).toBe("Café Canastra");
+    expect(og.type).toBe("website");
+    expect(og.title).toBe("Título");
+    expect(og.description).toBe("Descrição");
+    expect(og.images).toEqual([
+      {
+        url: "/imagem-banner.jpg",
+        width: 1280,
+        height: 720,
+        alt: "Café Canastra — Serra da Canastra, Minas Gerais",
+      },
+    ]);
+  });
+
+  it("aceita outro tipo e outra imagem quando a página tem os seus", () => {
+    const og = openGraphDaPagina({
+      locale: "pt",
+      caminho: "/historia",
+      titulo: "t",
+      descricao: "d",
+      tipo: "article",
+      imagens: [{ url: "/foto.png", alt: "foto" }],
+    });
+    expect(og.type).toBe("article");
+    expect(og.images).toEqual([{ url: "/foto.png", alt: "foto" }]);
   });
 });

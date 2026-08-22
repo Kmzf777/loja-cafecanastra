@@ -10,6 +10,9 @@ import {
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
 import { Botao, BotaoLink } from "@/components/ui/Botao";
+// Só o nome da variável CSS, não o componente: é o contrato de quem manda na
+// base da janela. Ver o comentário longo em BannerCookies.tsx.
+import { VAR_ALTURA_DO_AVISO } from "@/components/layout/BannerCookies";
 import { useSacola } from "@/lib/sacola/sacola";
 import { eventoAddToCart } from "@/lib/analytics";
 import { dicionario } from "@/lib/i18n/dicionario";
@@ -94,9 +97,12 @@ export function PainelCompra({
   const [erroDaSacola, setErroDaSacola] = useState<string | null>(null);
 
   /**
-   * §10 — em mobile a PDP ganha barra de compra fixa no rodape, que aparece
-   * DEPOIS que o usuario passa do botao original. Mostra-la desde o inicio
-   * cobriria o proprio botao e roubaria altura util logo na primeira dobra.
+   * §10 — em mobile a PDP ganha barra de compra fixa no rodape. Ela SOME
+   * enquanto o botao original esta na tela, e so por isso: duas vezes o mesmo
+   * "Adicionar a sacola" na mesma dobra e ruido, e a barra ainda roubaria
+   * altura util da propria area de compra. Fora dessa janela ela aparece —
+   * inclusive acima do botao, no comeco da pagina, que e onde a foto grande
+   * empurra o preco para longe.
    */
   const ctaRef = useRef<HTMLDivElement>(null);
   const [ctaVisivel, setCtaVisivel] = useState(true);
@@ -343,7 +349,11 @@ export function PainelCompra({
                 disabled={!existe}
                 aria-pressed={peso === g}
                 title={existe ? undefined : d.pdp.semEstePeso}
-                className={`border px-4 py-2.5 font-dado text-[13px] transition-colors ${
+                // `min-h-12` pelo mesmo motivo do seletor de moagem acima: com
+                // `py-2.5` e 13px o botão fechava em 41,5 px de altura, abaixo
+                // dos 44 do §10 — e estes são os botões que decidem O QUE se
+                // compra.
+                className={`min-h-12 border px-4 py-2.5 font-dado text-[13px] transition-colors ${
                   peso === g
                     ? "border-fuligem bg-fuligem text-cal"
                     : "border-fuligem-20 hover:border-fuligem"
@@ -371,7 +381,9 @@ export function PainelCompra({
                 key={n}
                 onClick={() => setPacotes(n)}
                 aria-pressed={pacotes === n}
-                className={`border px-4 py-2.5 text-[13px] transition-colors ${
+                // Mesma altura mínima do fieldset de peso — os dois nasceram
+                // da mesma linha de classe e carregavam o mesmo defeito.
+                className={`min-h-12 border px-4 py-2.5 text-[13px] transition-colors ${
                   pacotes === n
                     ? "border-fuligem bg-fuligem text-cal"
                     : "border-fuligem-20 hover:border-fuligem"
@@ -469,12 +481,31 @@ export function PainelCompra({
       )}
 
       {/* Barra de compra fixa — só mobile, e só depois de passar do CTA (§10) */}
+      {/* A BASE DA JANELA É DO AVISO DE COOKIES, NÃO DESTA BARRA.
+          Medido em 360×800: o aviso ocupa de y=642,8 a 800 (157,3 px; 180 px em
+          espanhol) e esta barra ocupava de y=727 a 800 — os 73 px dela inteira
+          por baixo do aviso. Botão que o DOM dá por visível e dedo nenhum
+          alcança, na primeira visita, que é a que converte.
+          Subir a barra por `z-index` seria pior: dá para comprar sem poder
+          recusar cookie. Então quem cede é a barra — ela se apoia na altura que
+          o aviso publica (BannerCookies.VAR_ALTURA_DO_AVISO) e desce sozinha
+          para a base quando o aviso sai. Sem aviso, o fallback `0px` mantém o
+          comportamento de sempre.
+          `bottom` NÃO entra na transição de propósito: o aviso some de uma vez
+          (não tem animação de saída), e a barra descendo no mesmo instante lê
+          como um movimento só; deslizar sozinha atrasada leria como bug. */}
       <div
         aria-hidden={ctaVisivel}
-        className={`fixed inset-x-0 bottom-0 z-40 border-t border-fuligem-20 bg-cal-puro px-4 py-3 transition-transform duration-[320ms] ease-canastra md:hidden ${
+        className={`fixed inset-x-0 z-40 border-t border-fuligem-20 bg-cal-puro px-4 py-3 transition-transform duration-[320ms] ease-canastra md:hidden ${
           ctaVisivel ? "translate-y-full" : "translate-y-0"
         }`}
-        style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        style={{
+          bottom: `var(${VAR_ALTURA_DO_AVISO}, 0px)`,
+          // Enquanto o aviso está de pé é ELE que cobre a faixa do gesto do
+          // iPhone; descontá-la aqui evita a folga dobrada. `max` devolve os
+          // 0,75rem normais quando a conta dá negativo (ou quando não há aviso).
+          paddingBottom: `max(0.75rem, calc(env(safe-area-inset-bottom) - var(${VAR_ALTURA_DO_AVISO}, 0px)))`,
+        }}
       >
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">

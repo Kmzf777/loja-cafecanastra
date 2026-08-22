@@ -6,7 +6,7 @@ import { CardCafe } from "@/components/catalogo/CardCafe";
 import { SecaoDoBlog } from "@/components/blog/SecaoDoBlog";
 import { BotaoLink } from "@/components/ui/Botao";
 import { Serra } from "@/components/marca/Serra";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { MARCO_DE_ORIGEM } from "./a-serra/conteudo";
@@ -54,6 +54,46 @@ export function generateStaticParams() {
   return LOCALES.map((locale) => ({ locale }));
 }
 
+/* -------------------------------------------------------------------------
+   O QUE A HOME DIZ AO BUSCADOR, nos três idiomas.
+
+   Ela era a ÚNICA página da vitrine sem título e sem descrição próprios: o
+   `generateMetadata` devolvia só `alternates`, e por isso `/en` servia o
+   título padrão do layout raiz — "Café Canastra", sem nome de página — com a
+   descrição em PORTUGUÊS, repetida em `og:description` e
+   `twitter:description`. Idêntico em `/es`. A porta de entrada dos três
+   idiomas era a única que não se traduzia, enquanto /a-serra, /clube,
+   /historia, /bio, /rastreabilidade, os termos, a privacidade e a PDP todas
+   traduziam.
+
+   Tabela à parte do `TEXTOS` da página logo abaixo, e de propósito: isto não é
+   texto de tela, é o cartão de resultado. É a mesma separação que /a-serra,
+   /clube e /historia já fazem, guardando o `meta` fora dos textos da página.
+
+   O CONTEÚDO NÃO INVENTA NADA. Origem única da Serra da Canastra, torra sob
+   demanda em lotes pequenos, família desde 1985 e Canastra desde 2008 são os
+   mesmos fatos de `a-serra/conteudo.ts` — e o vocabulário dos três idiomas é o
+   do herói e do bloco de história desta própria página, para o cartão de
+   resultado não prometer numa língua o que a tela diz noutra.
+------------------------------------------------------------------------- */
+const META: Record<Locale, { titulo: string; descricao: string }> = {
+  pt: {
+    titulo: "Café Canastra — Café de origem única da Serra da Canastra",
+    descricao:
+      "Café de origem única da Serra da Canastra, torrado sob demanda em lotes pequenos. Café da família Boaventura desde 1985, na Canastra desde 2008.",
+  },
+  en: {
+    titulo: "Café Canastra — Single origin coffee from the Serra da Canastra",
+    descricao:
+      "Single origin coffee from the Serra da Canastra, roasted to order in small batches. A Boaventura family coffee since 1985, in the Canastra since 2008.",
+  },
+  es: {
+    titulo: "Café Canastra — Café de origen único de la Serra da Canastra",
+    descricao:
+      "Café de origen único de la Serra da Canastra, tostado bajo pedido en lotes pequeños. Café de la familia Boaventura desde 1985, en la Canastra desde 2008.",
+  },
+};
+
 /**
  * `alternates` é o que impede `/`, `/en` e `/es` de concorrerem entre si no
  * buscador. É `generateMetadata` e não um `metadata` constante por um motivo
@@ -65,7 +105,26 @@ export async function generateMetadata({
 }: {
   params: Promise<{ locale: string }>;
 }): Promise<Metadata> {
-  return { alternates: alternativasDeIdioma("/", comoLocale((await params).locale)) };
+  const locale = comoLocale((await params).locale);
+  const m = META[locale];
+
+  return {
+    /**
+     * `absolute` porque o título já traz a marca NA FRENTE, que é o lugar dela
+     * na home. O `title.template` de app/layout.tsx acrescenta "— Café
+     * Canastra" ao fim de qualquer título-string, e o resultado seria a marca
+     * duas vezes na aba e no cartão de resultado. Mesma decisão de /bio.
+     */
+    title: { absolute: m.titulo },
+    description: m.descricao,
+    alternates: alternativasDeIdioma("/", locale),
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/",
+      titulo: m.titulo,
+      descricao: m.descricao,
+    }),
+  };
 }
 
 /**

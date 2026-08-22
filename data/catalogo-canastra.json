@@ -10,6 +10,7 @@
       "material-da-marca": "Descricao de produto publicada pela propria marca no seu material comercial, entregue pelo dono do projeto. Evidencia primaria para texto sensorial, torra, intensidade e pontuacao SCA — e o que a marca de fato afirma sobre cada linha, e vence a pesquisa-web onde os dois divergem."
     },
     "acesso_direto_bloqueado": "Este ambiente nao alcanca loja.cafecanastra.com (a politica de egresso responde 403 no CONNECT), entao nada foi raspado do site. Por isso a procedencia por campo importa: quando o dominio for liberado, da para reconferir SKU a SKU pelo campo `url`.",
+    "chaves_de_texto": "`rotuloChave` (em cada produto) e `marca.atributosChaves` NAO sao dado novo: sao a CHAVE ESTAVEL do texto que ja esta ao lado deles em portugues. O texto de cada idioma vive em frontend/lib/i18n/dicionario.ts, em `catalogo.embalagem` e `catalogo.atributo`, chaveado por elas — a mesma regra que ja vale para torra, formato e moagem. O portugues daqui continua sendo o oraculo: produtos.test.ts falha se o dicionario e este arquivo discordarem de uma virgula. Nada disso e lido por backend/db/seed.js, que continua enxergando exatamente os mesmos campos de antes.",
     "moeda": "precoCentavos esta em centavos de real. 3970 = R$ 39,70."
   },
   "marca": {
@@ -32,6 +33,14 @@
       "100% energia fotovoltaica",
       "Sem glúten",
       "Vegano"
+    ],
+    "atributosChaves": [
+      "arabica",
+      "origem-unica",
+      "carbono-zero",
+      "energia-fotovoltaica",
+      "sem-gluten",
+      "vegano"
     ],
     "fonte": "material-da-marca",
     "fonte_observacao": "O bloco `marca` tem procedencia MISTA e cada campo carrega a sua: `selo` veio da embalagem (ver selo_observacao), `variedades` da historia publicada pela propria marca (ver variedades_observacao) e `atributos` do material comercial dela. O campo dizia 'pesquisa-web', que era verdade quando as variedades eram Bourbon/Catuai Vermelho/Mundo Novo e deixou de ser quando a marca as desmentiu.",
@@ -148,6 +157,7 @@
       "gramas": 250,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 250 g",
+      "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
       "fonte": "captura-loja"
@@ -162,6 +172,7 @@
       "gramas": 500,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 500 g",
+      "rotuloChave": "pacote-500g",
       "precoCentavos": 6570,
       "estoque": 20,
       "fonte": "captura-loja"
@@ -176,6 +187,7 @@
       "gramas": 1000,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 1 kg",
+      "rotuloChave": "pacote-1kg",
       "precoCentavos": 10990,
       "estoque": 20,
       "fonte": "captura-loja"
@@ -190,6 +202,7 @@
       "gramas": 500,
       "pacotes": 4,
       "rotuloEmbalagem": "Caixa com 4 pacotes de 500 g",
+      "rotuloChave": "caixa-4x500g",
       "precoCentavos": 23670,
       "estoque": 10,
       "fonte": "pesquisa-web"
@@ -204,6 +217,7 @@
       "gramas": 250,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 250 g",
+      "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
       "fonte": "pesquisa-web"
@@ -218,6 +232,7 @@
       "gramas": 500,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 500 g",
+      "rotuloChave": "pacote-500g",
       "precoCentavos": 6570,
       "estoque": 20,
       "fonte": "pesquisa-web"
@@ -232,6 +247,7 @@
       "gramas": 250,
       "pacotes": 3,
       "rotuloEmbalagem": "Caixa com 3 pacotes de 250 g",
+      "rotuloChave": "caixa-3x250g",
       "precoCentavos": 9990,
       "estoque": 10,
       "fonte": "pesquisa-web"
@@ -246,6 +262,7 @@
       "gramas": 250,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 250 g",
+      "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
       "fonte": "captura-loja"
@@ -260,6 +277,7 @@
       "gramas": 500,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 500 g",
+      "rotuloChave": "pacote-500g",
       "precoCentavos": 6570,
       "estoque": 20,
       "fonte": "captura-loja"
@@ -274,6 +292,7 @@
       "gramas": 1000,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 1 kg",
+      "rotuloChave": "pacote-1kg",
       "precoCentavos": 10990,
       "estoque": 20,
       "fonte": "captura-loja"
@@ -288,6 +307,7 @@
       "gramas": 250,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 250 g",
+      "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
       "fonte": "pesquisa-web"
@@ -302,6 +322,7 @@
       "gramas": 500,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 500 g",
+      "rotuloChave": "pacote-500g",
       "precoCentavos": 6570,
       "estoque": 20,
       "fonte": "pesquisa-web"
@@ -316,6 +337,7 @@
       "gramas": 250,
       "pacotes": 3,
       "rotuloEmbalagem": "Caixa com 3 pacotes de 250 g",
+      "rotuloChave": "caixa-3x250g",
       "precoCentavos": 9990,
       "estoque": 10,
       "fonte": "pesquisa-web"
@@ -330,6 +352,7 @@
       "gramas": 250,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 250 g",
+      "rotuloChave": "pacote-250g",
       "precoCentavos": 4370,
       "estoque": 8,
       "fonte": "captura-loja"
@@ -344,6 +367,7 @@
       "gramas": 1000,
       "pacotes": 1,
       "rotuloEmbalagem": "Pacote com 1 kg",
+      "rotuloChave": "pacote-1kg",
       "precoCentavos": 10570,
       "estoque": 12,
       "fonte": "captura-loja"
@@ -358,6 +382,7 @@
       "gramas": 250,
       "pacotes": 3,
       "rotuloEmbalagem": "Caixa com 1 pacote de 250 g de cada",
+      "rotuloChave": "caixa-1x250g-de-cada",
       "precoCentavos": 10970,
       "estoque": 6,
       "kit": true,
@@ -374,6 +399,7 @@
       "pacotes": 1,
       "unidades": 10,
       "rotuloEmbalagem": "Display com 10 sachês",
+      "rotuloChave": "display-10-saches",
       "precoCentavos": 3770,
       "estoque": 0,
       "fonte": "pesquisa-web",
@@ -390,6 +416,7 @@
       "pacotes": 1,
       "unidades": 10,
       "rotuloEmbalagem": "Display com 10 sachês",
+      "rotuloChave": "display-10-saches",
       "precoCentavos": 3770,
       "estoque": 0,
       "fonte": "inferido",
@@ -407,6 +434,7 @@
       "pacotes": 3,
       "unidades": 30,
       "rotuloEmbalagem": "3 caixas — 30 sachês",
+      "rotuloChave": "caixas-3-saches-30",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja",
@@ -423,6 +451,7 @@
       "pacotes": 6,
       "unidades": 60,
       "rotuloEmbalagem": "6 caixas — 60 sachês",
+      "rotuloChave": "caixas-6-saches-60",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -438,6 +467,7 @@
       "pacotes": 3,
       "unidades": 30,
       "rotuloEmbalagem": "3 caixas — 30 sachês",
+      "rotuloChave": "caixas-3-saches-30",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -453,6 +483,7 @@
       "pacotes": 6,
       "unidades": 60,
       "rotuloEmbalagem": "6 caixas — 60 sachês",
+      "rotuloChave": "caixas-6-saches-60",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -468,6 +499,7 @@
       "pacotes": 3,
       "unidades": 30,
       "rotuloEmbalagem": "3 caixas — 30 sachês",
+      "rotuloChave": "caixas-3-saches-30",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -483,6 +515,7 @@
       "pacotes": 1,
       "unidades": 10,
       "rotuloEmbalagem": "1 caixa — 10 cápsulas",
+      "rotuloChave": "caixas-1-capsulas-10",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -498,6 +531,7 @@
       "pacotes": 6,
       "unidades": 60,
       "rotuloEmbalagem": "6 caixas — 60 cápsulas",
+      "rotuloChave": "caixas-6-capsulas-60",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -513,6 +547,7 @@
       "pacotes": 1,
       "unidades": 10,
       "rotuloEmbalagem": "1 caixa — 10 cápsulas",
+      "rotuloChave": "caixas-1-capsulas-10",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -528,6 +563,7 @@
       "pacotes": 6,
       "unidades": 60,
       "rotuloEmbalagem": "6 caixas — 60 cápsulas",
+      "rotuloChave": "caixas-6-capsulas-60",
       "precoCentavos": 0,
       "estoque": 0,
       "fonte": "captura-loja"
@@ -543,6 +579,7 @@
       "pacotes": 3,
       "unidades": 30,
       "rotuloEmbalagem": "3 caixas — 30 cápsulas",
+      "rotuloChave": "caixas-3-capsulas-30",
       "precoCentavos": 0,
       "estoque": 0,
       "kit": true,
@@ -559,6 +596,7 @@
       "pacotes": 4,
       "unidades": 40,
       "rotuloEmbalagem": "4 caixas — 40 cápsulas",
+      "rotuloChave": "caixas-4-capsulas-40",
       "precoCentavos": 0,
       "estoque": 0,
       "kit": true,

@@ -1,5 +1,5 @@
 import type { Lote } from "@/lib/catalogo/tipos";
-import { formatarSca } from "@/lib/catalogo/rotulos";
+import { formatarSca, rotuloDoAtributo } from "@/lib/catalogo/rotulos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 
@@ -32,6 +32,13 @@ import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
  * O TEXTO DOS ROTULOS E DAS DEFINICOES VEM DO DICIONARIO (`catalogo.ficha`).
  * Estava cravado aqui, em portugues, e aparecia igual em /en e /es — numa
  * ficha cuja razao de existir e explicar o vocabulario a quem nao o tem.
+ *
+ * E OS SELOS DO PE DA FICHA VIERAM JUNTO, uma onda depois. O rotulo e a
+ * definicao ja se traduziam e a fileira de chips logo abaixo deles continuava
+ * dizendo "100% arabica · Carbono zero · Sem gluten" em ingles — o dado ao lado
+ * da interface traduzida, que e o padrao deste conserto inteiro. Hoje
+ * `lote.origem.atributos` guarda CHAVE (`carbono-zero`), o texto esta em
+ * `catalogo.atributo` e quem o busca e `rotuloDoAtributo()`.
  */
 
 export function FichaLavoura({
@@ -57,7 +64,13 @@ export function FichaLavoura({
 
   return (
     <details className="group border-t border-fuligem-20 pt-4">
-      <summary className="flex cursor-pointer list-none items-center justify-between text-[13px] font-semibold uppercase tracking-[0.14em] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho">
+      {/* `min-h-11` (44px): media 19,5px de altura — 24,5px abaixo do piso do
+          estetica.md §10 —, e e o unico controle que abre origem, torra, corpo,
+          pontuacao SCA e preparo. Num telefone o dedo nao acerta uma linha de
+          texto de 19px de forma confiavel, e o que esta atras dela e o
+          argumento de venda do cafe especial. O <summary> do Cabecalho ja usa
+          `h-11 min-w-11` pela mesma razao. */}
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between text-[13px] font-semibold uppercase tracking-[0.14em] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho">
         {ficha.titulo}
         <span aria-hidden className="font-dado text-[16px] leading-none">
           <span className="group-open:hidden">+</span>
@@ -90,14 +103,15 @@ export function FichaLavoura({
         ))}
       </dl>
 
-      {/* Selos que valem para toda a coleção, não por lote. */}
+      {/* Selos que valem para toda a coleção, não por lote. A `key` é a CHAVE
+          e não o texto: o texto muda de idioma, a identidade do chip não. */}
       <ul className="mt-4 flex flex-wrap gap-2">
         {lote.origem.atributos.map((atributo) => (
           <li
             key={atributo}
             className="border border-fuligem-20 px-2.5 py-1 text-[11px] uppercase tracking-[0.1em] text-fuligem-55"
           >
-            {atributo}
+            {rotuloDoAtributo(atributo, locale)}
           </li>
         ))}
       </ul>

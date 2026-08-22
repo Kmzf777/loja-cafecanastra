@@ -6,8 +6,8 @@
 
 > **O que mudou depois da medição, e este documento acompanha.** Os dois únicos
 > defeitos daqui que valiam em produção **já foram corrigidos** — não procure
-> por eles: o `fetch` sem timeout do catálogo (§5) e as 21 páginas que a fusão
-> dos dois sites tirou da geração estática (§7.1, achado que não existia quando
+> por eles: o `fetch` sem timeout do catálogo (§5) e as **24 páginas** que a
+> fusão dos dois sites tirou da geração estática (§7.1, achado que não existia quando
 > as medições foram feitas). Todos os números medidos abaixo são de **antes** do
 > segmento `[locale]`; o resto do documento continua sendo o diagnóstico de
 > `dev` que ele sempre foi, e o veredito dele continua sendo *não mexa*.
@@ -31,17 +31,18 @@ escrito que não há.
 | **H4 · `next/image` no PNG de 3,7 MB** | 209 ms uma vez, 4 ms depois | não | **inocentado. E ele nem está na PDP** |
 | **A máquina** | 866 MB de RAM livre, 2,5 GB de disco livre em 475 GB | não | **o multiplicador de todos os números acima** |
 | **`fetch` sem timeout no catálogo** | 307 s pendurados com a API muda | **SIM** | **corrigido:** `AbortSignal.timeout(3000)`, §5 |
-| **21 páginas fora do build** (achado posterior) | um render de servidor por visita, no lugar de 15–17 ms | **SIM** | **corrigido:** `generateStaticParams` nas sete institucionais, §7.1 |
+| **24 páginas fora do build** (achado posterior) | um render de servidor por visita, no lugar de 15–17 ms | **SIM** | **corrigido e conferido no build:** 51 rotas prerenderizadas, contra 27 com o defeito de pé, §7.1 |
 
 E o que ninguém tinha medido: **`lib/catalogo/repositorio.ts` ficava pendurado
 307 segundos** quando a API aceita a conexão e não responde. Cinco minutos de
 home, PLP e PDP travadas, com o banco perfeitamente de pé. **Já corrigido nesta
 árvore** — §5 tem o antes e o depois.
 
-O segundo achado entrou depois da medição original e não é de `dev`: **21
+O segundo achado entrou depois da medição original e não é de `dev`: **24
 páginas deixaram de ser geradas no build ao entrar no `[locale]`**, sem erro
-nenhum, sem aviso e sem teste vermelho. Também já corrigido, e desta vez com
-trava. Está em §7.1.
+nenhum, sem aviso e sem teste vermelho. Também já corrigido, desta vez com
+trava em teste **e com a saída de um `npm run build` confirmando**. Está em
+§7.1.
 
 ---
 
@@ -470,7 +471,7 @@ O build de produção também mostra que os bundles estão saudáveis: 104 kB de
 JavaScript compartilhado, 197 kB de primeira carga na PDP. Não há gordura de
 produção a cortar.
 
-### 7.1 · 21 páginas saíram do build ao entrar no `[locale]` — e voltaram
+### 7.1 · 27 páginas saíram do build ao entrar no `[locale]`; 24 voltaram, e 3 ficam fora de propósito
 
 **Todos os números acima foram medidos ANTES de a vitrine entrar no segmento
 `[locale]`** — é por isso que a linha diz `26 páginas estáticas geradas` e a §2
@@ -485,11 +486,24 @@ uma única rota fazia isso: a PDP, que monta o produto cartesiano `idioma × slu
 na própria folha (3 × 5 = 15 endereços; o comentário de lá explica por que na
 folha e não nos segmentos).
 
-Todas as outras foram junto. As **sete rotas institucionais** — home, `/a-serra`,
-`/historia`, `/bio`, `/rastreabilidade`, termos e política — são texto puro:
-não leem `cookies()`, `headers()` nem `searchParams`, e o build as resolveria
-uma vez para servir como arquivo. Sem enumeração do `[locale]`, passaram a pagar
-render de servidor **a cada visita**, nos três idiomas: **7 × 3 = 21 páginas.**
+Todas as outras foram junto. Foram **nove rotas × três idiomas = 27 páginas**, e
+a conta se divide em duas metades desiguais:
+
+- **Oito rotas de texto puro** — home, `/a-serra`, `/historia`, `/bio`,
+  `/rastreabilidade`, `/clube`, termos e política. Não leem `cookies()`,
+  `headers()` nem `searchParams`, e o build as resolveria uma vez para servir
+  como arquivo. Sem enumeração do `[locale]`, passaram a pagar render de
+  servidor **a cada visita**, nos três idiomas: **8 × 3 = 24 páginas** — e são
+  estas as que voltaram.
+- **A PLP `/cafes`** — as outras **3**. Ela lê `searchParams` e **fica fora por
+  decisão**, explicada logo abaixo. Não é regressão: com `[locale]` ou sem ele,
+  ela sempre foi dinâmica.
+
+> **A aritmética estava errada neste documento até 22/08/2026**, e vale dizer
+> como: a onda 1 registrou "27 páginas" no `git log` (`15755de`), o título
+> desta seção dizia "21" (contando só sete institucionais), e o parágrafo da
+> correção somava `/clube` "de brinde" mais adiante — três páginas que apareciam
+> depois da conta e nunca entravam nela. **24 + 3 = 27**, e agora fecha.
 
 O que torna este defeito desagradável é que ele **não deu erro nenhum**. Build
 verde, testes verdes, nenhum aviso — só o site mais lento em produção. É o
@@ -498,23 +512,48 @@ sintoma visível.
 
 #### A correção
 
-As sete declaram `generateStaticParams` devolvendo os três idiomas, e há uma
+As oito declaram `generateStaticParams` devolvendo os três idiomas, e há uma
 trava para o defeito não voltar do mesmo jeito silencioso:
 `frontend/app/[locale]/(vitrine)/paginas-estaticas.test.ts` lê o **código-fonte**
-das sete e falha se a função sumir. Ela lê o texto do módulo em vez de importar
+delas e falha se a função sumir. Ela lê o texto do módulo em vez de importar
 a página porque importar `page.tsx` no Vitest arrastaria `next/image`, o
 repositório do catálogo e a árvore de componentes de servidor para um ambiente
 que não é o do Next — e o que precisa ser verdade é uma propriedade do fonte.
 
-`/clube` ganhou a mesma enumeração de brinde. Ficam de fora, e é decisão: a PLP
-`/cafes` lê `searchParams` (`app/[locale]/(vitrine)/cafes/page.tsx:118`) e é
-dinâmica por natureza, com `[locale]` ou sem ele.
+#### A PLP `/cafes`: declara a enumeração e mesmo assim não prerenderiza
 
-**Nenhum `npm run build` foi rodado para conferir isto.** Três agentes escreviam
-nesta árvore ao mesmo tempo e o build é global — rodá-lo teria colidido. O que
-está verificado é o fonte (`grep -rn "generateStaticParams" frontend/app`) e a
-suíte. **Quem arbitra de verdade é a saída do build**, que imprime `○`, `●` e
-`ƒ` rota a rota: é lá que se confere que as 21 voltaram.
+Este é o ponto em que é fácil escrever bobagem, então ele fica explícito.
+
+**A PLP também declara `generateStaticParams`** — em
+`app/[locale]/(vitrine)/cafes/page.tsx:67`, com vinte linhas de comentário
+acima explicando por que ela fica declarada mesmo sem prerenderizar. O que a
+tira do build não é a falta da função: é o `await searchParams` do componente
+de página (`:178-186`). Ler `searchParams` interrompe o prerender no Next 15
+sem PPR, e o caminho para recuperar a casca sem filtro seria uma fronteira
+`<Suspense>` com PPR ligado — decisão de projeto, não de página.
+
+A enumeração fica lá porque ela é a lista de endereços que a rota serve — o
+mesmo papel que cumpre na PDP ao lado — e porque no dia em que o PPR entrar, os
+três idiomas saem do build sem mais nada a mudar.
+
+#### Conferido no build, não só no fonte
+
+A onda 2 fechou sem build (três agentes escreviam na mesma árvore e o build é
+global). **Isso deixou de ser verdade.** O `npm run build` foi rodado e a saída
+arbitra: **51 rotas prerenderizadas, contra 27 com o defeito de pé.** A
+diferença de 24 é exatamente a conta acima, e as restauradas são home,
+`/a-serra`, `/bio`, `/clube`, `/historia`, `/politica-de-privacidade`,
+`/rastreabilidade` e `/termos-de-uso`, nos três idiomas.
+
+> **Cuidado com os dois 27 desta seção — eles não são o mesmo número.** Um é
+> *páginas perdidas* (9 rotas × 3 idiomas); o outro é *rotas prerenderizadas
+> pelo build* enquanto o defeito estava de pé, e essa conta inclui a PDP em três
+> idiomas, o painel e o transacional, que nunca saíram do estático. É
+> coincidência aritmética, não a mesma medida. O `26` da §7 é um terceiro
+> número ainda: é de **antes** da fusão, com uma vitrine que não tinha idioma.
+
+Para repetir: `npm run build` imprime `○`, `●` e `ƒ` rota a rota. `ƒ` na PLP
+`/cafes` é o esperado; `ƒ` em qualquer uma das oito acima é regressão.
 
 #### O tamanho disto
 
@@ -522,6 +561,40 @@ Com os números que a §7 já tem: uma rota estática servida por `next start`
 responde em **15–17 ms**; a mesma rota renderizada a cada requisição paga o
 render inteiro. Não é o sintoma de que o cliente reclamou — aquele é de `dev` —
 mas era o único item deste documento que piorava a loja **publicada**.
+
+### 7.2 · FALSO POSITIVO REGISTRADO: o middleware **não** entra em laço de 308
+
+Isto está escrito aqui, e não num comentário do código, porque é uma medição —
+e porque quem vai reencontrar o boato é justamente quem cronometrar rota em
+`next dev`.
+
+**O relato:** um verificador reportou que `frontend/middleware.ts` entra em laço
+infinito de 308 em `next dev` — que `/cafes` redirecionaria para `/pt/cafes`,
+que redirecionaria de volta, e assim por diante.
+
+**Não entra.** Medido em `next dev`, contando redirects de fora do processo:
+
+| Endereço | Resultado | Redirects |
+|---|---|---|
+| `/cafes`, `/clube`, `/historia`, `/bio`, `/a-serra`, `/termos-de-uso` | **200** | **0** |
+| `/pt/cafes` → `/cafes` | 200 | **1** |
+| `/en/checkout` → `/checkout` | 200 | **1** |
+
+O português é servido por *rewrite* interno, que não é resposta HTTP nenhuma —
+a barra de endereços não muda e o navegador não faz segunda viagem. Só `/pt/*`
+(o prefixo redundante) e o caminho transacional dentro de `/en` e `/es` viram
+308, e cada um deles pousa num endereço que o middleware já não reescreve. Um
+salto, e acabou.
+
+**Como o verificador errou:** ele mediu um instantâneo do arquivo colhido no
+meio de uma escrita — três agentes editavam a mesma árvore. Foi medida de um
+estado que nunca existiu inteiro.
+
+**Não vá caçar este bug.** Se desconfiar de novo, meça antes de mexer:
+`curl -sIL http://localhost:3000/cafes | grep -c '^HTTP'` — um `1` é o certo.
+E lembre que o `deploy/nginx/loja.conf` **não pode** ganhar regra para `/pt/*`
+nem para `/en/checkout`: duas camadas redirecionando o mesmo endereço é a
+receita de produzir de verdade o laço que aqui não existe (`go-live.md` §10).
 
 ### Uma observação de brinde, que não é performance
 
@@ -595,9 +668,10 @@ build compram uma PDP de 15 ms e um clique de 106 ms. Para trabalho iterativo o
 desta lista que valia em produção, e os cinco minutos de página pendurada já
 não existem: `AbortSignal.timeout(3000)` está no arquivo (§5). Nada a fazer.
 
-**6. ~~Devolver ao build as rotas traduzidas~~ — FEITO (§7.1).** As 21 páginas
-institucionais voltaram a sair do build, com trava em teste. Falta só **ver a
-saída de um `npm run build`** confirmando — nenhum foi rodado nesta onda.
+**6. ~~Devolver ao build as rotas traduzidas~~ — FEITO E CONFERIDO (§7.1).** As
+24 páginas institucionais voltaram a sair do build, com trava em teste, e o
+`npm run build` confirmou: **51 rotas prerenderizadas, contra 27 com o defeito
+de pé**. Nada a fazer.
 
 ---
 

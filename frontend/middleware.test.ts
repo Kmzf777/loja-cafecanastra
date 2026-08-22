@@ -172,6 +172,7 @@ describe("rewrite de idioma", () => {
     expect(rewriteDe(await middleware(requisicaoPara("/")))).toBe("/pt");
   });
 
+
   it("deixa /en e /es passarem — já têm idioma", async () => {
     expect(rewriteDe(await middleware(requisicaoPara("/en/cafes")))).toBeNull();
     expect(rewriteDe(await middleware(requisicaoPara("/es/cafes")))).toBeNull();

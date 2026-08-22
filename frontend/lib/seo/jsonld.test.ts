@@ -11,6 +11,7 @@ import {
 } from "./jsonld";
 import { LOTES } from "../catalogo/produtos";
 import type { Lote, Variante } from "../catalogo/tipos";
+import { LOCALES, TAG_BCP47 } from "../i18n/tipos";
 
 const BASE = "https://exemplo.test";
 
@@ -87,16 +88,72 @@ describe("organizationJsonLd", () => {
     expect(org.logo).toBe(`${BASE}/logo-canastra.png`);
     expect(org.foundingDate).toBe("1985");
   });
+
+  /**
+   * Organization descreve a EMPRESA, não um documento — nome próprio, logo,
+   * ano de fundação e estado não mudam de idioma. `inLanguage` no schema.org é
+   * propriedade de CreativeWork, e quem a carrega é o WebSite. Cravar um
+   * idioma aqui repetiria, num nó que não fala idioma nenhum, o defeito que o
+   * `websiteJsonLd` tinha.
+   */
+  it("NÃO afirma idioma nenhum — a marca é a mesma nos três", () => {
+    expect("inLanguage" in organizationJsonLd(BASE)).toBe(false);
+  });
 });
 
+/**
+ * O DEFEITO QUE ESTES TESTES IMPEDEM DE VOLTAR: `inLanguage` estava cravado em
+ * `"pt-BR"`, e a moldura (`app/moldura-da-loja.tsx`) emite este bloco em TODA
+ * página da loja. Em /en e /es o dado estruturado contradizia, DENTRO do
+ * documento, o `hreflang` que existe para desmenti-lo.
+ */
 describe("websiteJsonLd", () => {
-  it("aponta a SearchAction para a busca da PLP", () => {
-    const site = websiteJsonLd(BASE);
+  it("declara o idioma da página que o emite", () => {
+    expect(websiteJsonLd("pt", BASE).inLanguage).toBe("pt-BR");
+    expect(websiteJsonLd("en", BASE).inLanguage).toBe("en");
+    expect(websiteJsonLd("es", BASE).inLanguage).toBe("es");
+  });
+
+  /**
+   * `inLanguage` e o `hreflang` saem da MESMA tabela. Se um dia divergirem, o
+   * crawler recebe duas respostas para a mesma pergunta no mesmo documento.
+   */
+  it("usa a mesma etiqueta BCP 47 do hreflang", () => {
+    for (const locale of LOCALES) {
+      expect(websiteJsonLd(locale, BASE).inLanguage).toBe(TAG_BCP47[locale]);
+    }
+  });
+
+  it("sem idioma pedido cai no português, que é o padrão do site", () => {
+    expect(websiteJsonLd(undefined, BASE).inLanguage).toBe("pt-BR");
+  });
+
+  /** A home daquele idioma, e sem barra final — `${BASE}/` seria um segundo nó. */
+  it("aponta para a home do próprio idioma", () => {
+    expect(websiteJsonLd("pt", BASE).url).toBe(BASE);
+    expect(websiteJsonLd("en", BASE).url).toBe(`${BASE}/en`);
+    expect(websiteJsonLd("es", BASE).url).toBe(`${BASE}/es`);
+  });
+
+  /**
+   * A caixa de busca do cabeçalho tem `action={href(locale, "/cafes")}`, então
+   * em /en ela submete para `/en/cafes`. Uma SearchAction fixa em `/cafes`
+   * prometeria ao Google um endereço de busca que aquela versão não usa.
+   */
+  it("aponta a SearchAction para a busca daquele idioma", () => {
+    const site = websiteJsonLd("pt", BASE);
     expect(site["@type"]).toBe("WebSite");
     expect(site.potentialAction.target.urlTemplate).toBe(
       `${BASE}/cafes?q={termo}`,
     );
     expect(site.potentialAction["query-input"]).toContain("termo");
+
+    expect(websiteJsonLd("en", BASE).potentialAction.target.urlTemplate).toBe(
+      `${BASE}/en/cafes?q={termo}`,
+    );
+    expect(websiteJsonLd("es", BASE).potentialAction.target.urlTemplate).toBe(
+      `${BASE}/es/cafes?q={termo}`,
+    );
   });
 });
 
@@ -104,7 +161,7 @@ describe("productJsonLd", () => {
   const lote = LOTES.find((l) => l.slug === "classico") as Lote;
 
   it("monta Product com identidade, url, imagem absoluta, sku e marca", () => {
-    const p = productJsonLd(lote, lote.variantes, BASE)!;
+    const p = productJsonLd("pt", lote, lote.variantes, BASE)!;
     expect(p).not.toBeNull();
     expect(p["@type"]).toBe("Product");
     expect(p["@id"]).toBe(`${BASE}/cafes/${lote.slug}#product`);
@@ -115,13 +172,50 @@ describe("productJsonLd", () => {
     expect(p.brand).toEqual({ "@type": "Brand", name: "Café Canastra" });
   });
 
+  /**
+   * Estes três casos existem porque o defeito já aconteceu: a PDP em inglês
+   * emitia `@id`, `url` e as `url` de cada Offer apontando para a página em
+   * PORTUGUÊS, contradizendo o canônico da própria página. E `@id` idêntico
+   * nos três idiomas faz o Google fundir as três num nó só, que é o contrário
+   * do que o hreflang ao lado afirma.
+   */
+  it("aponta @id, url e as Offers para a PDP DO IDIOMA pedido", () => {
+    for (const [locale, prefixo] of [
+      ["pt", ""],
+      ["en", "/en"],
+      ["es", "/es"],
+    ] as const) {
+      const p = productJsonLd(locale, lote, lote.variantes, BASE)!;
+      const esperada = `${BASE}${prefixo}/cafes/${lote.slug}`;
+      expect(p["@id"]).toBe(`${esperada}#product`);
+      expect(p.url).toBe(esperada);
+      for (const oferta of p.offers) expect(oferta.url).toBe(esperada);
+    }
+  });
+
+  it("da um @id DIFERENTE para cada idioma", () => {
+    const ids = (["pt", "en", "es"] as const).map(
+      (l) => productJsonLd(l, lote, lote.variantes, BASE)!["@id"],
+    );
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it("declara inLanguage, porque o Product descreve uma pagina", () => {
+    expect(productJsonLd("pt", lote, lote.variantes, BASE)!.inLanguage).toBe(
+      "pt-BR",
+    );
+    expect(productJsonLd("en", lote, lote.variantes, BASE)!.inLanguage).toBe(
+      "en",
+    );
+  });
+
   it("emite uma Offer por skuLoja, com preco decimal em BRL", () => {
     const variantes = [
       varianteDe({ sku: "a-grao", skuLoja: "a", preco: 3970, estoque: 5 }),
       varianteDe({ sku: "a-espresso", skuLoja: "a", preco: 3970, estoque: 5 }),
       varianteDe({ sku: "b-grao", skuLoja: "b", preco: 10570, estoque: 0 }),
     ];
-    const p = productJsonLd(lote, variantes, BASE)!;
+    const p = productJsonLd("pt", lote, variantes, BASE)!;
     const offers = p.offers;
     expect(offers).toHaveLength(2);
     expect(offers.map((o) => o.sku)).toEqual(["a", "b"]);
@@ -138,7 +232,7 @@ describe("productJsonLd", () => {
       varianteDe({ skuLoja: "com-estoque", estoque: 3 }),
       varianteDe({ sku: "x", skuLoja: "sem-estoque", estoque: 0 }),
     ];
-    const p = productJsonLd(lote, variantes, BASE)!;
+    const p = productJsonLd("pt", lote, variantes, BASE)!;
     const offers = p.offers;
     expect(offers.find((o) => o.sku === "com-estoque")?.availability).toBe(
       "https://schema.org/InStock",
@@ -151,11 +245,11 @@ describe("productJsonLd", () => {
   it("sem variante com preco NAO ha bloco Product — erro de elegibilidade", () => {
     // Caso real da linha Canela: esgotada, sem preco na captura da loja.
     const variantes = [varianteDe({ skuLoja: "sem-preco", preco: 0 })];
-    expect(productJsonLd(lote, variantes, BASE)).toBeNull();
+    expect(productJsonLd("pt", lote, variantes, BASE)).toBeNull();
   });
 
   it("com avaliacoes aprovadas emite aggregateRating em formato de crawler", () => {
-    const p = productJsonLd(lote, lote.variantes, BASE, {
+    const p = productJsonLd("pt", lote, lote.variantes, BASE, {
       media: 14 / 3, // 4.666… — o formato exibido tem UMA casa e PONTO.
       contagem: 3,
     })!;
@@ -172,7 +266,7 @@ describe("productJsonLd", () => {
 
   it("sem avaliacoes NAO existe a chave aggregateRating — nota nao se inventa", () => {
     for (const agregado of [undefined, null, { media: 0, contagem: 0 }]) {
-      const p = productJsonLd(lote, lote.variantes, BASE, agregado)!;
+      const p = productJsonLd("pt", lote, lote.variantes, BASE, agregado)!;
       expect(p).not.toBeNull();
       expect("aggregateRating" in p).toBe(false);
     }
@@ -181,7 +275,7 @@ describe("productJsonLd", () => {
   it("todas as PDPs reais elegiveis produzem JSON-LD serializavel", () => {
     let elegiveis = 0;
     for (const l of LOTES) {
-      const p = productJsonLd(l, l.variantes, BASE);
+      const p = productJsonLd("pt", l, l.variantes, BASE);
       if (p === null) {
         // So e aceitavel ficar sem Product quando nada tem preco de verdade.
         expect(l.variantes.every((v) => v.preco <= 0)).toBe(true);

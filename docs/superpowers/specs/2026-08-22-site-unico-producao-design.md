@@ -202,6 +202,9 @@ Dois números aqui **contradizem** o catálogo atual, e o dado da marca vence:
 A intensidade de torra declarada (7, 8) é dado real e deve alimentar o
 `pontoTorra`, hoje arbitrado.
 
+> **Isto foi REJEITADO na execução, e a razão está em §7.** O `pontoTorra`
+> continua derivado da palavra da torra. Não leia este parágrafo como pendência.
+
 ---
 
 ## 3. As páginas institucionais
@@ -318,10 +321,21 @@ teste. É a única correção autorizada fora do relatório.
 
 ## 6. Verificação
 
-- As duas suítes verdes. Baseline no início do trabalho: **407 testes da vitrine
-  em 28 arquivos**, mais a suíte do backend. Ao fim da onda 2: **658 em 45
-  arquivos**, e 398 no backend. Nenhum agente entrega com teste vermelho, e
-  nenhum desses números pode cair.
+- As duas suítes verdes, e **nenhum desses números pode cair**:
+
+  | Momento | Vitrine | Backend |
+  |---|---|---|
+  | baseline, início do trabalho | 407 testes em 28 arquivos | 398 |
+  | fim da onda 1 (`15755de`) | 579 em 42 | 398 |
+  | fim da onda 2 (`bd9ec58`) | 658 em 45 | 398 |
+  | fim da onda 3 | 799 em 62 | 398 |
+  | **medido em 22/08/2026, fecho** | **806 em 62** | **398** |
+
+  **Meça antes de escrever o número em qualquer lugar.** A contagem é um piso
+  com data, nunca um fato do repositório: enquanto a coluna da esquerda crescia,
+  o README dizia 658, o `go-live.md` dizia 579 e o `producao.md` dizia 317 — três
+  contagens da mesma suíte, todas verdadeiras no dia em que foram escritas.
+  Comando, de dentro de `frontend/`: `npx vitest run`.
 - `npm run build` de produção passa — é ele que prova que `generateStaticParams`
   dá conta de locale × slug e que o dicionário está completo.
 - Nenhuma string em português cravada na superfície traduzida. Verificado por
@@ -331,15 +345,53 @@ teste. É a única correção autorizada fora do relatório.
 
 ## 7. O que a execução fechou, e o que ela deixou
 
-*Escrito ao fim da onda 2 (22/08/2026), para o próximo leitor não ter de
-reconstruir isto do `git log`. Um spec que só descreve a intenção envelhece
-mentindo; este parágrafo é o que impede isso.*
+*Escrito ao fim da onda 2 e revisado na onda 3 (22/08/2026), para o próximo
+leitor não ter de reconstruir isto do `git log`. Um spec que só descreve a
+intenção envelhece mentindo; esta seção é o que impede isso — e ela mesma já
+precisou de conserto: a onda 3 achou aqui uma pendência que estava fechada, um
+build que já tinha rodado e uma decisão de produto que nunca foi registrada.*
 
-O trabalho saiu em duas ondas na branch `producao-site-unico`. A **onda 1**
+### O defeito que mais custou, e nenhum teste pegou
+
+A onda 3 criou `app/not-found.tsx` para fechar um 404 feio, e com isso **desligou
+a geração estática do site inteiro**. Um `not-found` de raiz é renderizado dentro
+do layout raiz; se ele toca `headers()`, `cookies()` ou `connection()`, o
+bail-out de prerender sobe pela árvore e leva tudo junto. Medido no mesmo commit,
+mudando só a existência do arquivo:
+
+| | rotas estáticas | HTML em disco |
+|---|---|---|
+| com `connection()` no `not-found` de raiz | 4 | 0 |
+| sem o arquivo | 51 | 47 |
+
+Levava junto `/checkout`, `/sacola` e as páginas de conta, que eram estáticas.
+**Build verde, 806 testes verdes, `tsc` limpo** — e o site inteiro renderizando
+sob demanda. É exatamente a mesma classe de defeito que a onda 2 já tinha
+consertado uma vez (as 21 páginas que perderam o prerender ao entrar no
+`[locale]`), voltando por uma porta que a trava de então não cobria: ela olhava
+só para dentro de `app/[locale]/`, e o culpado morava fora.
+
+O desfecho: a PDP voltou a `dynamicParams = true`, de modo que slug inválido cai
+no `not-found` do próprio segmento — dentro do layout do `[locale]`, portanto com
+a moldura no idioma certo e sem API dinâmica nenhuma. O `not-found` de raiz ficou
+estático e só atende endereço que não casa com rota alguma; a moldura dele sai em
+`pt` e o corpo acerta o idioma pelo cliente. `paginas-estaticas.test.ts` ganhou o
+caso que faltava.
+
+**A lição, que vale além deste arquivo:** as três ondas provaram build verde e
+suíte verde a cada passo, e nenhum dos dois viu o site perder a geração estática
+— duas vezes. O que viu foi ler o `prerender-manifest.json` e contar o HTML em
+disco. Quem mexer em `app/` de novo: conte os arquivos.
+
+O trabalho saiu em três ondas na branch `producao-site-unico`. A **onda 1**
 (`15755de`) montou a estrutura: o segmento `[locale]`, o rewrite do middleware,
 o dicionário tipado, `app/(transacional)/` fora do idioma, as páginas novas, a
 separação `Moagem`/`Metodo` e o timeout de `lib/catalogo/repositorio.ts`. A
-**onda 2** existiu para consertar o que os verificadores acharam depois.
+**onda 2** existiu para consertar o que os verificadores acharam depois. A
+**onda 3** rodou o build que faltava e tirou a mentira dos documentos e dos
+comentários — porque terminar uma branch que existiu para tirar afirmação falsa
+de tela, deixando a afirmação falsa no `README`, seria o mesmo defeito em outro
+arquivo.
 
 ### Fechado
 
@@ -351,7 +403,7 @@ separação `Moagem`/`Metodo` e o timeout de `lib/catalogo/repositorio.ts`. A
 | Sacola antiga com `moagem: "aeropress"` | `lib/sacola/fusao.ts` trata valor desconhecido como `moido`, com teste — era o pior bug possível aqui (§2) |
 | O texto do catálogo saindo de tabelas em português cravadas | `lib/catalogo/rotulos.ts` guarda **só a cor**; todo rótulo foi para `dicionario.catalogo.*` |
 | `/clube` respondia nos três endereços servindo português | `clube/conteudo.ts`, `Record<Locale, …>` como as outras |
-| **21 páginas saíram da geração estática** ao entrar no `[locale]`, sem erro nenhum | `generateStaticParams` nas sete institucionais × três idiomas, com trava em `paginas-estaticas.test.ts`. Custo medido em `docs/performance-dev.md` §7.1 |
+| **27 páginas saíram da geração estática** ao entrar no `[locale]` (9 rotas × 3), sem erro nenhum | `generateStaticParams` nas **oito** institucionais × três idiomas devolveu **24**, com trava em `paginas-estaticas.test.ts`. As outras 3 são a PLP `/cafes`, que fica fora por causa do `searchParams` — decisão, não regressão. Build confere: **51 rotas prerenderizadas, contra 27 com o defeito de pé**. Detalhe em `docs/performance-dev.md` §7.1 |
 | Documentação afirmando o que o código já não fazia | README, `docs/performance-dev.md` §5 e §7.1, o comentário de `lib/i18n/tipos.ts` que apontava para um `app/[locale]/layout.tsx` inexistente |
 | "Torramos na terça e enviamos na quarta" promovida a **cláusula contratual** em três idiomas | saiu dos Termos. É microcopy (estetica.md §11, barra de aviso do `seed.js`), não calendário apurado — e num Termos de uso vira obrigação. A cláusula ficou em "torra sob demanda", sem data inventada no lugar |
 
@@ -363,12 +415,52 @@ cabeçalho de `termos-de-uso/conteudo.ts`. Material assim não passou por
 advogado, e remover um aviso de "sem revisão jurídica" de um texto que continua
 sem revisão seria a mesma mentira que esta branch existiu para tirar.
 
+### Fechado na onda 3 — não é mais pendência
+
+Esta lista existe porque as três primeiras linhas dela **estavam escritas acima
+como pendentes** e já não eram. Spec que inventa pendência custa uma sessão
+inteira a quem confia nela.
+
+- **O build rodou, e ele arbitra.** `npm run build` sai verde com **51 rotas
+  prerenderizadas** (eram 27 com o defeito de pé), o que confirma as 24 páginas
+  de volta e o `generateStaticParams` dando conta de locale × slug.
+- **O 404 da PDP já respeita o idioma.**
+  `app/[locale]/(vitrine)/cafes/[slug]/not-found.tsx` virou uma casca: ela busca
+  as sugestões de café disponível e delega a tela para
+  `components/catalogo/PaginaNaoEncontrada.tsx`, que descobre o locale por
+  `usePathname()` e monta todo link com `href(locale, …)`. Tem teste dedicado
+  (`PaginaNaoEncontrada.test.tsx`). Um 404 dentro de `/en` continua em `/en`.
+- **O `pontoTorra` NÃO passou a vir da intensidade declarada, e isso é rejeição,
+  não esquecimento.** O §2 pedia que a intensidade da marca (7, 8) alimentasse o
+  `pontoTorra`, "hoje arbitrado". Ele não é arbitrado: é a mesma coisa que a
+  torra em texto, em outra forma, e `produtos.test.ts` trava a igualdade contra
+  `PONTO_TORRA`. A intensidade é **outro eixo** — força na xícara, não cor do
+  grão — e a prova está no próprio catálogo: **Suave e Canela declaram os dois
+  intensidade 7 e têm torras diferentes** (média e escura, `pontoTorra` 3 e 5).
+  Fundir os dois eixos apagaria a diferença entre eles. A intensidade vive na
+  descrição, com a palavra da marca, porque escrever "intensidade 8 de 10" seria
+  inventar a escala. A justificativa estava só no campo `torra_observacao` de
+  `data/catalogo-canastra.json` — escondida no lugar onde ninguém procura
+  decisão de produto —, e por isso subiu para cá.
+
+### Falso positivo registrado — o middleware **não** entra em laço de 308
+
+Um verificador reportou que `frontend/middleware.ts` entra em laço infinito de
+308 em `next dev`. **Não entra**, e está medido: `/cafes`, `/clube`, `/historia`,
+`/bio`, `/a-serra` e `/termos-de-uso` respondem **200 com zero redirects** (o
+português é *rewrite* interno, não resposta HTTP); `/pt/cafes` → `/cafes` e
+`/en/checkout` → `/checkout` custam **um** salto cada, e pousam num endereço que
+o middleware já não reescreve.
+
+O verificador leu um instantâneo do arquivo colhido no meio de uma escrita —
+três agentes na mesma árvore — e mediu um estado que nunca existiu inteiro. A
+medição completa e o comando para repeti-la estão em `docs/performance-dev.md`
+§7.2. **Não recace este bug**, e não escreva regra de nginx para `/pt/*`: duas
+camadas redirecionando o mesmo endereço é o que produziria de verdade o laço que
+aqui não existe.
+
 ### Não fechado, e é preciso saber
 
-- **Nenhum `npm run build` foi rodado na onda 2.** Três agentes escreviam na
-  mesma árvore e o build é global. As duas suítes estão verdes; o que falta ver
-  é a saída do build confirmando as 21 páginas de volta como `●`/`○`, e o
-  `generateStaticParams` dando conta de locale × slug (§6).
 - **Não existe varredura automática contra português cravado na superfície
   traduzida.** O §6 pedia "verificado por varredura, não por confiança", e a
   trava que existe é de outro tipo: o dicionário quebra o build por chave
@@ -376,9 +468,6 @@ sem revisão seria a mesma mentira que esta branch existiu para tirar.
   `grep` documentado no README.
 - **`npm run verifica` não abre uma única URL em `/en` ou `/es`.** As 37
   checagens do Chromium são todas em português.
-- **`app/[locale]/(vitrine)/cafes/[slug]/not-found.tsx` linka `/cafes` cru**, em
-  vez de `href(locale, "/cafes")`: um 404 dentro de `/en` devolve o visitante ao
-  português.
 
 ## 8. Fora de escopo
 

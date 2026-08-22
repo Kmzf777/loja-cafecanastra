@@ -80,6 +80,7 @@ export function CardCafe({
           <SeloSCA
             sca={lote.sca}
             scaExata={lote.scaExata}
+            locale={locale}
             variante="compacto"
             className="absolute bottom-3 right-3"
           />

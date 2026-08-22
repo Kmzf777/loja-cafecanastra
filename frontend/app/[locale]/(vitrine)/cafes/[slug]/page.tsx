@@ -9,7 +9,11 @@ import {
   precoMinimo,
   formatarPreco,
 } from "@/lib/catalogo/repositorio";
-import { formatarSca, rotuloNota } from "@/lib/catalogo/rotulos";
+import {
+  formatarSca,
+  rotuloDaEmbalagem,
+  rotuloNota,
+} from "@/lib/catalogo/rotulos";
 import {
   breadcrumbJsonLd,
   productJsonLd,
@@ -22,7 +26,7 @@ import { PainelCompra } from "@/components/catalogo/PainelCompra";
 import { CardCafe } from "@/components/catalogo/CardCafe";
 import { Avaliacoes } from "@/components/catalogo/Avaliacoes";
 import { agregadoAprovadas } from "@/lib/avaliacoes/servidor";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { traduzirLote } from "@/lib/catalogo/produtos";
@@ -40,20 +44,26 @@ import { moagemDaReceita } from "@/components/catalogo/receita";
  */
 
 /**
- * O território é convenção de crawler, não afirmação sobre o público: quem lê
- * em espanhol aqui é sobretudo Chile e Argentina, mas `es_ES` é o valor que o
- * Facebook documenta como padrão da língua. A tabela é irmã da de
- * `app/[locale]/(vitrine)/historia/page.tsx`, e o dia em que aparecer uma
- * terceira cópia ela tem de subir para lib/i18n/tipos.ts, ao lado do
- * `TAG_BCP47`.
+ * `dynamicParams` VOLTOU A SER `true`, E A RAZÃO É A TELA DE 404.
+ *
+ * Com `false`, o Next respondia 404 ANTES de entrar neste segmento: nem o
+ * `not-found.tsx` ao lado nem o `notFound()` abaixo eram alcançados, e quem
+ * digitava `/en/cafes/slug-errado` recebia a página crua do Next — sem
+ * cabeçalho, sem rodapé, sem saída, em inglês inclusive no site em português.
+ * A tentativa de consertar isso com uma rede em `app/not-found.tsx` custou
+ * caro e foi MEDIDA nesta árvore: um `not-found` de raiz que toca API dinâmica
+ * derruba a geração estática do site INTEIRO — de 51 rotas prerenderizadas
+ * para 4, e zero HTML em disco, levando junto `/checkout`, `/sacola` e as
+ * páginas de conta.
+ *
+ * Com `true`, o slug inválido entra no segmento, `obterLote` devolve `null`, o
+ * `notFound()` abaixo dispara e quem responde é o `not-found.tsx` deste
+ * diretório — DENTRO do layout do `[locale]`, ou seja, com a moldura já no
+ * idioma certo. Custo: um render de servidor por slug inventado, que termina
+ * numa busca em memória e num 404. As 15 PDPs reais continuam saindo do build
+ * pelo `generateStaticParams` logo abaixo.
  */
-const OG_LOCALE: Record<Locale, string> = {
-  pt: "pt_BR",
-  en: "en_US",
-  es: "es_ES",
-};
-
-export const dynamicParams = false;
+export const dynamicParams = true;
 
 /**
  * A PDP era estática SEM revalidação — correto enquanto tudo nela vinha do
@@ -111,17 +121,22 @@ export async function generateMetadata({
     // O slug é o MESMO nos três idiomas — a URL do produto não se traduz, só o
     // texto. É o que mantém um link de PDP válido para quem trocar de idioma.
     alternates: alternativasDeIdioma(`/cafes/${slug}`, locale),
-    openGraph: {
-      title: `${lote.nome} — Café Canastra`,
-      description: descricao,
-      type: "website",
-      // `og:locale` exige `idioma_TERRITÓRIO` e por isso não reaproveita o
-      // `TAG_BCP47`, que devolve `en` e `es` secos — a mesma tabela e a mesma
-      // razão de /historia. Cravado em `pt_BR`, ele anunciava ao Facebook que
-      // a PDP em inglês era uma página em português.
-      locale: OG_LOCALE[locale],
-      images: [{ url: lote.fotos.pacote.src, alt: lote.fotos.pacote.alt }],
-    },
+    /**
+     * A PDP montava este bloco à mão, com uma tabela `OG_LOCALE` local. O
+     * comentário dela previa o desfecho — "o dia em que aparecer uma terceira
+     * cópia ela tem de subir" — e a terceira apareceu, inline em /bio. Eram
+     * três tabelas discordando sobre a mesma língua, e as SEIS rotas que não
+     * declaravam bloco nenhum herdavam `pt_BR` do layout raiz.
+     * `openGraphDaPagina()` é a fonte única, e ela também traz `siteName`, que
+     * este bloco perdia por substituir o da raiz inteiro.
+     */
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: `/cafes/${slug}`,
+      titulo: `${lote.nome} — Café Canastra`,
+      descricao,
+      imagens: [{ url: lote.fotos.pacote.src, alt: lote.fotos.pacote.alt }],
+    }),
   };
 }
 
@@ -164,6 +179,7 @@ export default async function PaginaLote({
   // Product sem oferta e erro de elegibilidade no Search Console, entao a
   // pagina fica so com o Breadcrumb ate a linha voltar a ter preco.
   const productLd = productJsonLd(
+    locale,
     lote,
     lote.variantes,
     undefined,
@@ -250,6 +266,7 @@ export default async function PaginaLote({
             <SeloSCA
               sca={lote.sca}
               scaExata={lote.scaExata}
+              locale={locale}
               className="mt-6 inline-block"
             />
 
@@ -270,7 +287,13 @@ export default async function PaginaLote({
 
             {/* Drip coffee e cápsula existem na loja mas não têm peso de
                 pacote nem moagem a escolher — ficam fora do seletor, listados
-                com o estado real de estoque em vez de sumirem da página. */}
+                com o estado real de estoque em vez de sumirem da página.
+
+                O rótulo é a ÚNICA coisa que distingue um item do outro nesta
+                lista, e ele chegava cru: "Display com 10 sachês" numa página em
+                inglês. A tradução acontece AQUI, na hora de desenhar, e não no
+                dado: `f.rotuloEmbalagem` continua em português porque é ele que
+                vai para a sacola e para o GA4 — ver `rotuloDaEmbalagem()`. */}
             {lote.formatosEspeciais.length ? (
               <section className="mt-10 border-t border-fuligem-20 pt-6">
                 <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
@@ -282,7 +305,9 @@ export default async function PaginaLote({
                       key={f.sku}
                       className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border border-fuligem-20 px-4 py-3"
                     >
-                      <span className="text-[14px]">{f.rotuloEmbalagem}</span>
+                      <span className="text-[14px]">
+                        {rotuloDaEmbalagem(f, locale)}
+                      </span>
                       <span className="font-dado text-[13px] text-fuligem-55">
                         {f.estoque > 0 && f.preco > 0
                           ? formatarPreco(f.preco)

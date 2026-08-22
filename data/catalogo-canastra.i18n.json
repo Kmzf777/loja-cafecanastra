@@ -1,92 +1,132 @@
 {
   "_leia_me": {
-    "o_que_e": "O editorial das cinco linhas em inglês e espanhol. Indexado por `slug` de `data/catalogo-canastra.json`, que é o arquivo em português — este aqui é só a camada de tradução por cima dele.",
+    "o_que_e": "O editorial do catálogo em inglês e espanhol: as cinco linhas em `linhas` e os nomes dos kits em `kits`. Indexado pelas chaves de `data/catalogo-canastra.json` — `slug` para linha, `sku` para kit —, que é o arquivo em português; este aqui é só a camada de tradução por cima dele.",
     "por_que_e_um_arquivo_separado": "catalogo-canastra.json é lido também por backend/db/seed.js. Mudar a FORMA dele para caber três idiomas arriscaria o caminho de venda — o seed, o preço, o SKU, a nota fiscal — para ganhar tradução. Aqui a tradução entra por fora: se este arquivo sumir, a loja continua vendendo, em português.",
     "quem_le": "frontend/lib/catalogo/produtos.ts, que sobrepõe estes campos sobre o `pt` no mesmo desenho de `aplicarDadosAoVivo()` em repositorio.ts — o dado de fora vence campo a campo, e o que falta cai para o português.",
+    "as_duas_secoes": "`linhas` é texto que só aquela linha diz de si (descrição, torra, corpo, preparo, notas, embalagem). `kits` é só o `nome` das caixas que misturam linhas, porque um nome de kit também é frase de produto e não se compõe de peça nenhuma. O que NÃO está em nenhuma das duas é o RÓTULO DE EMBALAGEM (\"Pacote com 250 g\", \"3 caixas — 30 cápsulas\"): ele é um vocabulário FECHADO de treze valores, compartilhado por dezenas de SKUs, e por isso mora em `catalogo.embalagem` no dicionário, chaveado por `rotuloChave` — onde o TypeScript cobra os três idiomas e uma tradução esquecida quebra o build. Aqui ela só ficaria faltando, calada.",
     "o_que_NAO_entra": "Preço, estoque, SKU, produtoId e qualquer identificador. Não são texto: são o mesmo número nos três idiomas, e duplicá-los aqui criaria um segundo lugar onde o preço pode estar errado. produtos.test.ts falha se qualquer um deles aparecer.",
     "por_que_nao_ha_chave_pt": "O português é a FONTE, e ele mora no outro arquivo. Uma chave `pt` aqui seria um segundo lugar para editar o mesmo texto, e os dois divergiriam na primeira correção. Há teste barrando.",
-    "por_que_nao_ha_nome": "Nome de linha é nome próprio. \"Canastra Clássico\" não vira \"Canastra Classic\", como \"Néctar de Minas\" não vira \"Nectar of Minas\": é o que está impresso no pacote que chega na casa da pessoa. O campo existe no contrato de produtos.ts (traduzir nome é possível), mas nenhuma linha o usa — e é justamente esse o caso vivo de queda para o português que o teste exercita.",
+    "por_que_nao_ha_nome_de_linha": "Nome de linha é nome próprio. \"Canastra Clássico\" não vira \"Canastra Classic\", como \"Néctar de Minas\" não vira \"Nectar of Minas\": é o que está impresso no pacote que chega na casa da pessoa. O campo existe no contrato de produtos.ts (traduzir nome é possível), mas nenhuma linha o usa — e é justamente esse o caso vivo de queda para o português que o teste exercita. Nome de KIT é outra coisa: \"Caixa com 1 pacote de 250 gramas de cada\" é descrição, não marca, e por isso `kits` existe.",
+    "embalagem_e_alt_de_foto": "`embalagem` descreve o pacote (\"Pacote preto\", \"Bolsa negra\") e nenhuma tela o mostra sozinho: ele é a metade variável do texto alternativo de TODA foto do catálogo, montado em produtos.ts com o molde de `catalogo.alt` no dicionário. Sem ele, quem não enxerga a imagem ouvia \"Pacote preto do Canastra Clássico\" numa página em inglês.",
     "vocabulario_das_notas": "As notas seguem o léxico de cupping (SCA flavor wheel), não o dicionário: melaço é `molasses`/`melaza`, cacau é `cocoa`/`cacao`, cítrico é `citrus`/`citrico`. Continuam em kebab-case sem acento porque são CHAVE — quem desenha o rótulo é `rotuloNota()` em lib/catalogo/rotulos.ts, e as chaves escolhidas aqui foram conferidas contra esse mapa para não voltarem em português na tela.",
     "fonte": "Tradução do texto que a marca publica em português (procedência `material-da-marca` no arquivo irmão). Nenhum número, nenhuma nota e nenhuma afirmação nova foi acrescentada na travessia: onde o português não diz, estes textos também não dizem."
   },
-  "classico": {
-    "en": {
-      "descricao": "100% arabica, specialty grade, above 80 SCA points. Dark roast, intensity 8. Caramel and chocolate notes.",
-      "torra": "Dark roast",
-      "corpo": "Full body",
-      "preparoSugerido": "Ristretto and espresso",
-      "notas": ["caramel", "chocolate"]
+  "linhas": {
+    "classico": {
+      "en": {
+        "descricao": "100% arabica, specialty grade, above 80 SCA points. Dark roast, intensity 8. Caramel and chocolate notes.",
+        "torra": "Dark roast",
+        "corpo": "Full body",
+        "preparoSugerido": "Ristretto and espresso",
+        "notas": ["caramel", "chocolate"],
+        "embalagem": "Black bag"
+      },
+      "es": {
+        "descricao": "100% arábica, tipo especial por encima de 80 puntos SCA. Tueste oscuro, intensidad 8. Notas acarameladas y achocolatadas.",
+        "torra": "Tueste oscuro",
+        "corpo": "Cuerpo intenso",
+        "preparoSugerido": "Ristretto y espresso",
+        "notas": ["caramelo", "chocolate"],
+        "embalagem": "Bolsa negra"
+      }
     },
-    "es": {
-      "descricao": "100% arábica, tipo especial por encima de 80 puntos SCA. Tueste oscuro, intensidad 8. Notas acarameladas y achocolatadas.",
-      "torra": "Tueste oscuro",
-      "corpo": "Cuerpo intenso",
-      "preparoSugerido": "Ristretto y espresso",
-      "notas": ["caramelo", "chocolate"]
+    "suave": {
+      "en": {
+        "descricao": "100% arabica, specialty grade, above 80 SCA points. Medium roast, intensity 7. Chocolate notes with a citrus finish.",
+        "torra": "Medium roast",
+        "corpo": "Medium body",
+        "preparoSugerido": "Pour-over, French press and AeroPress",
+        "notas": ["chocolate", "citrus"],
+        "embalagem": "Kraft bag"
+      },
+      "es": {
+        "descricao": "100% arábica, tipo especial por encima de 80 puntos SCA. Tueste medio, intensidad 7. Notas achocolatadas y final cítrico.",
+        "torra": "Tueste medio",
+        "corpo": "Cuerpo medio",
+        "preparoSugerido": "Filtro, prensa francesa y AeroPress",
+        "notas": ["chocolate", "citrico"],
+        "embalagem": "Bolsa kraft"
+      }
+    },
+    "canela": {
+      "en": {
+        "descricao": "100% arabica, specialty grade, above 80 SCA points. Dark roast, intensity 7. Caramel notes, with natural cinnamon ground together with the beans.",
+        "torra": "Dark roast",
+        "corpo": "Full body",
+        "preparoSugerido": "Pour-over",
+        "notas": ["caramel", "cinnamon"],
+        "embalagem": "Red bag"
+      },
+      "es": {
+        "descricao": "100% arábica, tipo especial por encima de 80 puntos SCA. Tueste oscuro, intensidad 7. Notas acarameladas, con canela natural molida junto al grano.",
+        "torra": "Tueste oscuro",
+        "corpo": "Cuerpo intenso",
+        "preparoSugerido": "Filtro",
+        "notas": ["caramelo", "canela"],
+        "embalagem": "Bolsa roja"
+      }
+    },
+    "microlote": {
+      "en": {
+        "descricao": "100% arabica, specialty grade, 86 SCA points. Medium body, notes of cocoa and molasses with a gently citrus finish. A lot set apart from the harvest, in limited quantity: sold in 250 g only, whole bean only.",
+        "torra": "Light-medium roast",
+        "corpo": "Medium body",
+        "preparoSugerido": "Pour-over and AeroPress",
+        "notas": ["cocoa", "molasses", "citrus"],
+        "embalagem": "Kraft stand-up pouch with an illustration of the Casca d'Anta waterfall"
+      },
+      "es": {
+        "descricao": "100% arábica especial, 86 puntos SCA. Cuerpo medio, notas de cacao y melaza con un final suavemente cítrico. Lote apartado de la cosecha, en cantidad limitada: se vende solo en 250 g y solo en grano.",
+        "torra": "Tueste claro-medio",
+        "corpo": "Cuerpo medio",
+        "preparoSugerido": "Filtro y AeroPress",
+        "notas": ["cacao", "melaza", "citrico"],
+        "embalagem": "Bolsa stand-up kraft con la ilustración de la cascada Casca d'Anta"
+      }
+    },
+    "nectar-de-minas": {
+      "en": {
+        "descricao": "100% arabica, gourmet grade, 75 SCA points. Dark roast, intensity 8. Caramel and chocolate notes. A sister brand, export grade, sold in the same shop as a 1 kg whole-bean bag.",
+        "torra": "Dark roast",
+        "corpo": "Full body",
+        "preparoSugerido": "Espresso",
+        "notas": ["caramel", "chocolate"],
+        "embalagem": "Black bag reading \"Café Superior\""
+      },
+      "es": {
+        "descricao": "100% arábica gourmet, 75 puntos SCA. Tueste oscuro, intensidad 8. Notas acarameladas y achocolatadas. Marca hermana, tipo exportación, vendida en la misma tienda en paquete de 1 kg en grano.",
+        "torra": "Tueste oscuro",
+        "corpo": "Cuerpo intenso",
+        "preparoSugerido": "Espresso",
+        "notas": ["caramelo", "chocolate"],
+        "embalagem": "Bolsa negra con \"Café Superior\""
+      }
     }
   },
-  "suave": {
-    "en": {
-      "descricao": "100% arabica, specialty grade, above 80 SCA points. Medium roast, intensity 7. Chocolate notes with a citrus finish.",
-      "torra": "Medium roast",
-      "corpo": "Medium body",
-      "preparoSugerido": "Pour-over, French press and AeroPress",
-      "notas": ["chocolate", "citrus"]
+  "kits": {
+    "kit-canela-classico-suave-moido-3x250": {
+      "en": {
+        "nome": "Canastra Specialty Coffee Canela, Clássico and Suave, Ground - Box with one 250 g bag of each"
+      },
+      "es": {
+        "nome": "Café Especial Canastra Canela, Clássico y Suave Molido - Caja con 1 bolsa de 250 g de cada"
+      }
     },
-    "es": {
-      "descricao": "100% arábica, tipo especial por encima de 80 puntos SCA. Tueste medio, intensidad 7. Notas achocolatadas y final cítrico.",
-      "torra": "Tueste medio",
-      "corpo": "Cuerpo medio",
-      "preparoSugerido": "Filtro, prensa francesa y AeroPress",
-      "notas": ["chocolate", "citrico"]
-    }
-  },
-  "canela": {
-    "en": {
-      "descricao": "100% arabica, specialty grade, above 80 SCA points. Dark roast, intensity 7. Caramel notes, with natural cinnamon ground together with the beans.",
-      "torra": "Dark roast",
-      "corpo": "Full body",
-      "preparoSugerido": "Pour-over",
-      "notas": ["caramel", "cinnamon"]
+    "capsula-classico-2-canela-1": {
+      "en": {
+        "nome": "Nespresso Compatible Capsule - Canastra Clássico 2 boxes + Canela 1 box"
+      },
+      "es": {
+        "nome": "Cápsula Compatible Nespresso - Canastra Clássico 2 cajas + Canela 1 caja"
+      }
     },
-    "es": {
-      "descricao": "100% arábica, tipo especial por encima de 80 puntos SCA. Tueste oscuro, intensidad 7. Notas acarameladas, con canela natural molida junto al grano.",
-      "torra": "Tueste oscuro",
-      "corpo": "Cuerpo intenso",
-      "preparoSugerido": "Filtro",
-      "notas": ["caramelo", "canela"]
-    }
-  },
-  "microlote": {
-    "en": {
-      "descricao": "100% arabica, specialty grade, 86 SCA points. Medium body, notes of cocoa and molasses with a gently citrus finish. A lot set apart from the harvest, in limited quantity: sold in 250 g only, whole bean only.",
-      "torra": "Light-medium roast",
-      "corpo": "Medium body",
-      "preparoSugerido": "Pour-over and AeroPress",
-      "notas": ["cocoa", "molasses", "citrus"]
-    },
-    "es": {
-      "descricao": "100% arábica especial, 86 puntos SCA. Cuerpo medio, notas de cacao y melaza con un final suavemente cítrico. Lote apartado de la cosecha, en cantidad limitada: se vende solo en 250 g y solo en grano.",
-      "torra": "Tueste claro-medio",
-      "corpo": "Cuerpo medio",
-      "preparoSugerido": "Filtro y AeroPress",
-      "notas": ["cacao", "melaza", "citrico"]
-    }
-  },
-  "nectar-de-minas": {
-    "en": {
-      "descricao": "100% arabica, gourmet grade, 75 SCA points. Dark roast, intensity 8. Caramel and chocolate notes. A sister brand, export grade, sold in the same shop as a 1 kg whole-bean bag.",
-      "torra": "Dark roast",
-      "corpo": "Full body",
-      "preparoSugerido": "Espresso",
-      "notas": ["caramel", "chocolate"]
-    },
-    "es": {
-      "descricao": "100% arábica gourmet, 75 puntos SCA. Tueste oscuro, intensidad 8. Notas acarameladas y achocolatadas. Marca hermana, tipo exportación, vendida en la misma tienda en paquete de 1 kg en grano.",
-      "torra": "Tueste oscuro",
-      "corpo": "Cuerpo intenso",
-      "preparoSugerido": "Espresso",
-      "notas": ["caramelo", "chocolate"]
+    "capsula-classico-3-canela": {
+      "en": {
+        "nome": "Nespresso Compatible Capsule - Canastra Clássico 3 boxes + Canela"
+      },
+      "es": {
+        "nome": "Cápsula Compatible Nespresso - Canastra Clássico 3 cajas + Canela"
+      }
     }
   }
 }

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import { Serra } from "@/components/marca/Serra";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { LOCALES, comoLocale, TAG_BCP47, type Locale } from "@/lib/i18n/tipos";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
+import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import {
   PRINCIPAIS,
   SECUNDARIOS,
@@ -66,29 +66,22 @@ export async function generateMetadata({
     description: t.descricao,
     alternates: alternativasDeIdioma("/bio", locale),
     /**
-     * O openGraph do layout raiz NÃO é herdado campo a campo quando a rota
-     * declara o seu: o objeto inteiro é substituído. Por isso a imagem padrão
-     * é repetida aqui — e ela importa mais nesta página do que em qualquer
-     * outra, porque /bio é o endereço que a marca cola no perfil e que as
-     * pessoas mandam uma para a outra.
+     * O CARD IMPORTA MAIS AQUI DO QUE EM QUALQUER OUTRA PÁGINA: /bio é o
+     * endereço que a marca cola no perfil do Instagram e que as pessoas mandam
+     * uma para a outra — o que a rede desenha ao redor do link é a primeira
+     * coisa que se vê dele.
+     *
+     * O `og:locale` VEM DE `openGraphDaPagina()` E NÃO SE MONTA AQUI. Este
+     * arquivo já o construiu à mão, com `TAG_BCP47[locale].replace("-", "_")`
+     * — e aquela tabela devolve `en` e `es` SECOS, enquanto o Open Graph exige
+     * `idioma_TERRITÓRIO`. As duas tabelas parecem intercambiáveis e não são.
      */
-    openGraph: {
-      title: t.titulo,
-      description: t.descricao,
-      type: "website",
-      siteName: "Café Canastra",
-      // OG usa sublinhado (`pt_BR`), BCP 47 usa hífen (`pt-BR`).
-      locale: TAG_BCP47[locale].replace("-", "_"),
-      url: href(locale, "/bio"),
-      images: [
-        {
-          url: "/imagem-banner.jpg",
-          width: 1280,
-          height: 720,
-          alt: "Café Canastra — Serra da Canastra, Minas Gerais",
-        },
-      ],
-    },
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/bio",
+      titulo: t.titulo,
+      descricao: t.descricao,
+    }),
   };
 }
 

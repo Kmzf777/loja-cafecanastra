@@ -214,9 +214,19 @@ function Recusa({
   );
 }
 
+/**
+ * A classe de TODO botão de escolha do wizard — café, moagem, peso e
+ * frequência saem daqui.
+ *
+ * `min-h-12`: sem piso de altura, `py-2.5` com 13px fechava em 41,5 px, abaixo
+ * dos 44 que o §10 exige. Eram 15 alvos somando os três idiomas, e num caminho
+ * que fatura recorrente — errar o toque aqui não perde uma venda, perde a
+ * assinatura inteira. O piso vive na função, e não em cada `<button>`, porque
+ * é justamente o que os quatro grupos têm em comum.
+ */
 function botaoDeOpcao(ativo: boolean, existe = true) {
   return [
-    "border px-3 py-2.5 text-left text-[13px] transition-colors",
+    "min-h-12 border px-3 py-2.5 text-left text-[13px] transition-colors",
     "focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-cal",
     ativo ? "border-cal bg-cal text-fuligem" : "border-cal/30 hover:border-cal",
     existe

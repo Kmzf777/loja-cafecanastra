@@ -7,7 +7,8 @@ import {
   formatarPreco,
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
-import { COR_DA_LINHA } from "@/lib/catalogo/rotulos";
+import { COR_DA_LINHA, rotuloDaEmbalagem } from "@/lib/catalogo/rotulos";
+import { nomeDoKitNaSacola, traduzirKit } from "@/lib/catalogo/produtos";
 import { Botao } from "@/components/ui/Botao";
 import { useSacola } from "@/lib/sacola/sacola";
 import { eventoAddToCart } from "@/lib/analytics";
@@ -32,7 +33,7 @@ import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
  */
 
 export function CardKit({
-  kit,
+  kit: kitCru,
   locale = LOCALE_PADRAO,
 }: {
   kit: Kit;
@@ -48,6 +49,19 @@ export function CardKit({
   locale?: Locale;
 }) {
   const d = dicionario(locale);
+  /**
+   * O KIT CHEGA CRU E É TRADUZIDO AQUI, e é o único lugar onde isso pode
+   * acontecer: `listarKits()` no repositório não conhece idioma (aquela camada
+   * casa preço e estoque com o banco) e a PLP entrega a lista como veio. O
+   * card é a única superfície do kit no site inteiro, e ele já recebe o
+   * `locale`.
+   *
+   * A ORDEM É A MESMA DA PDP — comercial primeiro, texto depois: o kit que
+   * chega aqui já traz o preço e o `produtoId` do banco, e `traduzirKit` só
+   * sobrepõe o nome. Traduzir antes de o repositório falar devolveria o preço
+   * do JSON a quem trocasse de idioma.
+   */
+  const kit = traduzirKit(kitCru, locale);
   const { adicionar, itens } = useSacola();
   const [adicionado, setAdicionado] = useState(false);
   const [erroDaSacola, setErroDaSacola] = useState<string | null>(null);
@@ -76,9 +90,22 @@ export function CardKit({
 
   // "Café Especial Canastra X - Caixa com..." → título e complemento. O nome
   // capturado da loja embute o conteúdo depois do hífen; quebrado em dois, o
-  // card lê como etiqueta em vez de frase corrida.
+  // card lê como etiqueta em vez de frase corrida. O " - " é parte do nome e
+  // por isso as traduções o mantêm — sem ele o card perderia o complemento e
+  // ficaria com um título de uma linha e meia.
   const [titulo, ...resto] = kit.nome.split(" - ");
   const complemento = resto.join(" - ");
+
+  /**
+   * O RÓTULO TEM DUAS FORMAS, E A SEPARAÇÃO É A REGRA DA CASA.
+   *
+   * `rotuloNaTela` fala o idioma da página. O que vai para a SACOLA continua em
+   * português — ver `nomeDoKitNaSacola` e `rotuloDaEmbalagem`, onde a razão
+   * está escrita: aquele texto fica gravado e vira dimensão de relatório, e é a
+   * mesma decisão que o `PainelCompra` documenta para a moagem.
+   */
+  const rotuloNaTela = rotuloDaEmbalagem(kit, locale);
+  const nomeNaSacola = nomeDoKitNaSacola(kit);
 
   const indisponivel = kit.estoque === 0 || kit.preco <= 0;
   const fita = COR_DA_LINHA[kit.linha];
@@ -100,18 +127,19 @@ export function CardKit({
     try {
       await adicionar({
         product_id: kit.produtoId,
-        name: `${titulo} — ${kit.rotuloEmbalagem}`,
+        // Em português, sempre — ver `nomeNaSacola`.
+        name: nomeNaSacola,
         price: kit.preco / 100,
         quantity: 1,
         image: kit.imagem,
-        size: kit.rotuloEmbalagem,
+        size: kitCru.rotuloEmbalagem, // gravado, e portanto em português
         // Identidade estável do funil GA4 — o begin_checkout da sacola reporta
         // este mesmo id. Ver o comentário de `sku` em lib/sacola/sacola.tsx.
         sku: kit.skuLoja,
       });
       eventoAddToCart({
         id: kit.skuLoja,
-        nome: `${titulo} — ${kit.rotuloEmbalagem}`,
+        nome: nomeNaSacola,
         precoCentavos: kit.preco,
         quantidade: 1,
       });
@@ -150,7 +178,7 @@ export function CardKit({
             <p className="mt-1 text-[13px] text-fuligem-55">{complemento}</p>
           ) : null}
           <p className="mt-1.5 text-[13px] text-fuligem-55">
-            {kit.rotuloEmbalagem}
+            {rotuloNaTela}
             {kit.unidades ? (
               <>
                 <span aria-hidden> · </span>

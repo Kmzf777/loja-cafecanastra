@@ -66,6 +66,27 @@ describe("CardKit", () => {
     );
   });
 
+  it("traduz o NOME e o rótulo da caixa, não só os botões", () => {
+    /**
+     * O card já vendia em inglês e o produto continuava em português: "Café
+     * Especial Canastra Canela, Clássico e Suave Moído" com um "Add to bag"
+     * embaixo. O nome e o rótulo são o que a pessoa está comprando — traduzir
+     * a moldura e deixar o produto cru é o defeito inteiro desta onda.
+     */
+    const en = html(<CardKit kit={KIT} locale="en" />);
+    expect(en).toContain("Canastra Specialty Coffee");
+    expect(en).toContain("Box with one 250 g bag of each");
+    expect(en).not.toContain("Caixa com 1 pacote");
+
+    const es = html(<CardKit kit={KIT} locale="es" />);
+    expect(es).toContain("Caja con 1 bolsa de 250 g de cada");
+
+    // Nome próprio não se traduz em idioma nenhum: é o que está impresso no
+    // pacote que chega na casa da pessoa.
+    expect(en).toContain("Canela");
+    expect(en).toContain("Clássico");
+  });
+
   it("conta as unidades no idioma de quem lê", () => {
     const comUnidades = KITS_DA_LOJA.find((k) => k.unidades);
     // Nem todo kit conta por unidade (sachê, cápsula); se nenhum contar, não

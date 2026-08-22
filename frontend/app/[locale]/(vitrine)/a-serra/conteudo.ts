@@ -28,9 +28,6 @@ import type { Locale } from "../../../../lib/i18n/tipos";
  * seed do banco. A página as lê de lá. Guardar uma segunda cópia aqui daria
  * dois lugares para a mesma afirmação, que é exatamente como a versão errada
  * de "quarenta anos na mesma serra" sobreviveu tanto tempo.
- *
- * IMPORT RELATIVO, não `@/`: o vitest.config.ts não resolve o alias, e este
- * módulo é importado pelo teste ao lado (mesma nota de lib/i18n/rotas.ts).
  */
 
 /**

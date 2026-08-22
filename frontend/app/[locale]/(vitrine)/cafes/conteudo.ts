@@ -20,8 +20,6 @@ import type { Linha } from "../../../../lib/catalogo/tipos";
  * DECLARADOS como `TextosDaPlp`, e faltou chave o TypeScript quebra o build.
  * O teste ao lado cobra a outra metade — que o valor não seja o português
  * copiado.
- *
- * IMPORTS RELATIVOS, não `@/`: mesma nota dos vizinhos.
  */
 
 /* -------------------------------------------------------------------------

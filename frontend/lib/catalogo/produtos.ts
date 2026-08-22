@@ -18,8 +18,10 @@
 
 import bruto from "../../../data/catalogo-canastra.json";
 import editorialTraduzido from "../../../data/catalogo-canastra.i18n.json";
+import { dicionario } from "../i18n/dicionario";
 import { LOCALES, LOCALE_PADRAO } from "../i18n/tipos";
 import type { Locale } from "../i18n/tipos";
+import { rotuloDaEmbalagem } from "./rotulos";
 import type {
   Formato,
   FormatoEspecial,
@@ -88,6 +90,7 @@ function variantesDa(linha: LinhaBruta): Variante[] {
       pesoGramas: p.gramas,
       pacotes: p.pacotes,
       rotuloEmbalagem: p.rotuloEmbalagem,
+      rotuloChave: p.rotuloChave,
       preco: p.precoCentavos,
       estoque: p.estoque,
     };
@@ -120,16 +123,47 @@ function especiaisDa(linha: LinhaBruta): FormatoEspecial[] {
       formato: p.formato as "drip" | "capsula",
       nome: p.nome,
       rotuloEmbalagem: p.rotuloEmbalagem,
+      rotuloChave: p.rotuloChave,
       unidades: "unidades" in p ? (p.unidades as number) : 0,
       preco: p.precoCentavos,
       estoque: p.estoque,
     }));
 }
 
-function alt(linha: LinhaBruta, papel: "sabor" | "pacote"): string {
-  const onde = papel === "sabor" ? "sobre fundo claro" : "de 250 g";
-  return `${linha.embalagem} do ${linha.nome} ${onde}`;
+/**
+ * O texto alternativo de uma foto, no idioma da página.
+ *
+ * ELE ERA UMA FRASE COSTURADA EM PORTUGUÊS AQUI DENTRO, sem locale nenhum:
+ * "Pacote preto do Canastra Clássico sobre fundo claro" era o que a leitora de
+ * tela ouvia em /en/cafes, e o mesmo texto ia para `og:image:alt` e
+ * `twitter:image:alt`. Agora a frase é MOLDE do dicionário (`catalogo.alt`) e
+ * as duas peças variáveis entram por nome: a descrição do pacote, que se traduz
+ * no editorial por linha, e o nome, que é próprio e não se traduz em nenhuma.
+ *
+ * A substituição é de UMA passada de propósito: encadear dois `.replace` faria
+ * o segundo procurar dentro do texto que o primeiro acabou de inserir.
+ */
+function alt(
+  papel: "sabor" | "pacote",
+  embalagem: string,
+  nome: string,
+  locale: Locale,
+): string {
+  const pecas: Record<string, string> = { embalagem, nome };
+  return dicionario(locale).catalogo.alt[papel].replace(
+    /\{(embalagem|nome)\}/g,
+    (_, chave: string) => pecas[chave],
+  );
 }
+
+/**
+ * A descrição do pacote em português, por slug — a metade variável do alt.
+ *
+ * Vive num mapa daqui, e não em `Lote`, porque nenhuma tela a mostra sozinha:
+ * pôr no contrato um campo que só este arquivo lê é prometer um elemento de
+ * tela que não existe. O idioma dela chega pelo editorial traduzido.
+ */
+const EMBALAGEM_PT = new Map(bruto.linhas.map((l) => [l.slug, l.embalagem]));
 
 function monta(linha: LinhaBruta): Lote {
   const pontoTorra = linha.pontoTorra as Lote["pontoTorra"];
@@ -164,14 +198,28 @@ function monta(linha: LinhaBruta): Lote {
     origem: {
       regiao: bruto.marca.origem,
       estado: "MG",
-      atributos: bruto.marca.atributos,
+      // A CHAVE, NÃO O TEXTO — `carbono-zero`, e não "Carbono zero". A lista em
+      // português continua em `marca.atributos`, que é o que o seed cola na
+      // descrição de cada SKU; a de chaves é irmã dela, na mesma ordem, e o
+      // texto de tela vem do dicionário. Ver `Origem` em tipos.ts.
+      atributos: bruto.marca.atributosChaves,
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8 pede o ingrediente da
       // nota de degustação, não o pacote. Enquanto a produção não acontece, as
       // duas imagens são a mesma e o crossfade do card não aparece.
-      sabor: { src: linha.imagem, alt: alt(linha, "sabor"), w: 500, h: 500 },
-      pacote: { src: linha.imagem, alt: alt(linha, "pacote"), w: 500, h: 500 },
+      sabor: {
+        src: linha.imagem,
+        alt: alt("sabor", linha.embalagem, linha.nome, LOCALE_PADRAO),
+        w: 500,
+        h: 500,
+      },
+      pacote: {
+        src: linha.imagem,
+        alt: alt("pacote", linha.embalagem, linha.nome, LOCALE_PADRAO),
+        w: 500,
+        h: 500,
+      },
     },
     variantes: variantesDa(linha),
     formatosEspeciais: especiaisDa(linha),
@@ -195,8 +243,15 @@ export const LOTES: Lote[] = bruto.linhas.map(monta);
  * arquivo é lido também por `backend/db/seed.js`, e mudar a forma dele para
  * caber três idiomas arriscaria o caminho de venda — seed, preço, SKU, nota
  * fiscal — para ganhar texto. `data/catalogo-canastra.i18n.json` entra por
- * fora, indexado por slug; se ele sumir, a loja continua vendendo, em
- * português.
+ * fora, indexado por slug de linha e por sku de kit; se ele sumir, a loja
+ * continua vendendo, em português.
+ *
+ * O QUE FICOU DE FORA DELE, e a divisão é deliberada: o rótulo de embalagem e
+ * o selo da marca são vocabulário FECHADO, repetido em dezenas de SKUs, e por
+ * isso vivem no dicionário — chaveados por `rotuloChave` e por
+ * `marca.atributosChaves`, onde o TypeScript cobra os três idiomas. Frase de
+ * produto (a descrição da linha, o nome do kit) fica no arquivo de tradução;
+ * palavra de catálogo fica no dicionário.
  *
  * O DESENHO É O DE `aplicarDadosAoVivo()` em repositorio.ts, e isso não é
  * coincidência: lá o comercial do banco vence o editorial do JSON campo a
@@ -221,11 +276,18 @@ export const LOTES: Lote[] = bruto.linhas.map(monta);
  * idiomas, e um segundo lugar para editá-los é um segundo lugar onde eles
  * podem estar errados.
  */
-type EditorialTraduzido = Partial<
-  Pick<Lote, "nome" | "descricao" | "torra" | "corpo" | "preparoSugerido" | "notas">
+type CampoDeLote = Pick<
+  Lote,
+  "nome" | "descricao" | "torra" | "corpo" | "preparoSugerido" | "notas"
 >;
 
-const CAMPOS_TRADUZIVEIS: readonly (keyof EditorialTraduzido)[] = [
+/**
+ * `embalagem` não é campo de `Lote` e por isso entra por fora do `Pick`: ela
+ * não é lida por tela nenhuma, é a peça variável do alt (ver `EMBALAGEM_PT`).
+ */
+type EditorialTraduzido = Partial<CampoDeLote> & { embalagem?: string };
+
+const CAMPOS_TRADUZIVEIS: readonly (keyof CampoDeLote)[] = [
   "nome",
   "descricao",
   "torra",
@@ -236,11 +298,23 @@ const CAMPOS_TRADUZIVEIS: readonly (keyof EditorialTraduzido)[] = [
 
 type TraducoesPorSlug = Record<string, Partial<Record<Locale, EditorialTraduzido>>>;
 
-// A conversão passa por `unknown` porque o JSON tem duas formas: as cinco
-// linhas e o `_leia_me`, que é prosa de documentação e não casa com nenhum
-// slug do catálogo. `traducaoDe` é o único ponto que lê este mapa, e ele
-// procura por slug — o que não for slug nunca é alcançado.
-const TRADUCOES = editorialTraduzido as unknown as TraducoesPorSlug;
+/** Só o `nome` — o resto do kit é número, e número não tem idioma. */
+type TraducoesDeKit = Record<string, Partial<Record<Locale, { nome?: string }>>>;
+
+// A conversão passa por `unknown` porque o TypeScript infere do JSON um tipo
+// literal, com exatamente os cinco slugs e os dois idiomas que o arquivo tem
+// hoje; o mapa que este módulo quer é aberto, porque a busca é por slug de
+// catálogo e o que não estiver traduzido tem de cair para o português em vez
+// de virar erro de compilação.
+const TRADUCOES = editorialTraduzido.linhas as unknown as TraducoesPorSlug;
+
+/**
+ * O nome das caixas que misturam linhas, em inglês e espanhol.
+ *
+ * Indexado pelo `sku` do kit e não por slug: kit não é linha, e o `sku` é a
+ * chave estável que ele já tem. Ver `traduzirKit`.
+ */
+const TRADUCOES_DE_KIT = editorialTraduzido.kits as unknown as TraducoesDeKit;
 
 /** Campo ausente, string em branco ou lista vazia são a mesma coisa: não há tradução. */
 function temConteudo(valor: string | string[] | undefined): boolean {
@@ -252,19 +326,30 @@ function temConteudo(valor: string | string[] | undefined): boolean {
  * Sobrepõe o editorial traduzido sobre UM lote, campo a campo.
  *
  * Recebe o lote já montado — inclusive com preço e estoque do banco, se o
- * repositório já os aplicou — e devolve o mesmo lote quando não há nada a
- * traduzir. Devolver o próprio objeto no caso do português não é micro-otimização:
- * é o que garante que exista uma versão só do catálogo em pt na memória.
+ * repositório já os aplicou — e devolve O PRÓPRIO OBJETO no português. Isso não
+ * é micro-otimização: é o que garante que exista uma versão só do catálogo em
+ * pt na memória.
+ *
+ * FORA DO PORTUGUÊS ELE SEMPRE RECONSTRÓI, mesmo sem editorial traduzido, por
+ * causa do ALT DAS FOTOS: o alt não vem do arquivo de tradução, é frase montada
+ * do molde do dicionário, e sair cedo por falta de editorial era o que deixava
+ * "Pacote preto do Canastra Clássico sobre fundo claro" no `og:image:alt` de
+ * uma página em inglês.
+ *
+ * O QUE ELE NÃO TOCA, E A OMISSÃO É DELIBERADA: o `rotuloEmbalagem` das
+ * variantes e dos formatos especiais. Aquele campo é dado GRAVADO — vai para o
+ * `size` e para o nome do item da sacola, que é pt-BR por decisão (spec §1), e
+ * para o `item_name` do GA4. Quem o mostra na tela o traduz na hora de mostrar,
+ * com `rotuloDaEmbalagem()`; ver a nota daquela função.
  */
 export function traduzirLote(lote: Lote, locale: Locale): Lote {
   if (locale === LOCALE_PADRAO) return lote;
 
   const traducao = TRADUCOES[lote.slug]?.[locale];
-  if (!traducao) return lote;
-
   const fundido: Lote = { ...lote };
+
   for (const campo of CAMPOS_TRADUZIVEIS) {
-    const valor = traducao[campo];
+    const valor = traducao?.[campo];
     if (!temConteudo(valor)) continue;
     // `Object.assign` em vez de `fundido[campo] = valor`: `campo` percorre as
     // chaves de um `Pick` de `Lote`, então os tipos casam campo a campo — mas
@@ -272,7 +357,67 @@ export function traduzirLote(lote: Lote, locale: Locale): Lote {
     // seria um cast por campo.
     Object.assign(fundido, { [campo]: valor });
   }
+
+  // O ALT SE REMONTA, não se sobrepõe: ele é frase costurada de `embalagem` e
+  // `nome`, e as duas peças acabaram de mudar de idioma. Só `sabor` e `pacote`
+  // — as duas fotos que o catálogo produz hoje e as duas chaves que o molde
+  // tem; `terreiro` e `moido` seguem como estavam se um dia existirem.
+  const embalagem = temConteudo(traducao?.embalagem)
+    ? (traducao?.embalagem as string)
+    : EMBALAGEM_PT.get(lote.slug);
+  if (embalagem) {
+    fundido.fotos = { ...lote.fotos };
+    for (const papel of ["sabor", "pacote"] as const) {
+      fundido.fotos[papel] = {
+        ...lote.fotos[papel],
+        alt: alt(papel, embalagem, fundido.nome, locale),
+      };
+    }
+  }
+
   return fundido;
+}
+
+/**
+ * O NOME do kit no idioma da página, e ele tem UM chamador só: o `<CardKit>`.
+ *
+ * A linha tem página própria e é a página que a traduz, antes de entregá-la ao
+ * card; o kit não tem página nenhuma — a única superfície dele no site é o card
+ * da seção "Kits e caixas", que já recebe o `locale` da PLP. Traduzir ali é
+ * traduzir no único lugar que sabe o idioma, e é o que evita um
+ * `listarKits(locale)` no repositório, onde idioma não é assunto: aquela camada
+ * existe para casar preço e estoque com o banco.
+ *
+ * SÓ O NOME. O `rotuloEmbalagem` do kit é dado gravado, como o das variantes, e
+ * o card o traduz na hora de desenhar — o que ele põe na sacola continua sendo
+ * o português. Ver `rotuloDaEmbalagem()` em rotulos.ts.
+ */
+export function traduzirKit(kit: Kit, locale: Locale): Kit {
+  if (locale === LOCALE_PADRAO) return kit;
+
+  const nome = TRADUCOES_DE_KIT[kit.sku]?.[locale]?.nome;
+  if (!temConteudo(nome)) return kit;
+  return { ...kit, nome: nome as string };
+}
+
+/**
+ * O nome com que o kit entra na SACOLA — e ele é sempre em português.
+ *
+ * Mesma decisão que `PainelCompra` já documenta para a moagem, e a razão é que
+ * este texto não é tela: fica gravado no `localStorage`, volta na sessão
+ * seguinte, viaja para `canastra.carrinho_itens` na fusão e vira `item_name` no
+ * GA4. Uma sacola pt-BR (spec §1) mostrando a etiqueta na língua em que a
+ * pessoa navegava ontem é confusão; um relatório com o mesmo SKU em três
+ * idiomas é o mesmo produto contado três vezes.
+ *
+ * ELA REPROCURA O KIT PELO `sku` EM VEZ DE CONFIAR NO QUE RECEBE, e é isso que
+ * a torna uma garantia em vez de uma convenção: o card tem o kit traduzido na
+ * mão, e passar o objeto errado seria o erro mais fácil do mundo de cometer e o
+ * mais difícil de ver. Kit fora do catálogo (fixture) cai no que veio.
+ */
+export function nomeDoKitNaSacola(kit: Kit): string {
+  const emPortugues = KITS_DA_LOJA.find((k) => k.sku === kit.sku) ?? kit;
+  return `${emPortugues.nome.split(" - ")[0]} — ${emPortugues.rotuloEmbalagem}`;
 }
 
 const LOTES_POR_IDIOMA = Object.fromEntries(
@@ -314,6 +459,7 @@ export const KITS_DA_LOJA: Kit[] = KITS.map((p) => ({
   skuLoja: p.sku,
   nome: p.nome,
   rotuloEmbalagem: p.rotuloEmbalagem,
+  rotuloChave: p.rotuloChave,
   formato: p.formato as Formato,
   linha: p.linha as Linha,
   imagem:

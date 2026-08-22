@@ -89,6 +89,108 @@ export function caminhoSemLocale(caminho: string): string {
   return resto.startsWith("/") ? resto : `/${resto}`;
 }
 
+/* -------------------------------------------------------------------------
+   O QUE UMA PÁGINA DIZ DE SI AO CRAWLER
+
+   `tipos.ts` responde "quais são os idiomas". Daqui para baixo é a outra
+   pergunta: como uma página traduzida se apresenta ao buscador e às redes.
+   `alternates` e `og:locale` são o mesmo assunto — e é por não serem o mesmo
+   assunto de `tipos.ts` que eles moram aqui, ao lado de `href()`, que é quem
+   sabe montar o endereço de cada versão.
+------------------------------------------------------------------------- */
+
+/**
+ * `og:locale` — A ÚNICA TABELA DO SITE, e a unicidade é o ponto.
+ *
+ * Ela já existiu em TRÊS cópias que discordavam: /historia e a PDP diziam
+ * `en_US`/`es_ES` por duas tabelas gêmeas copiadas uma da outra, e /bio dizia
+ * `en`/`es` por um `TAG_BCP47[locale].replace("-", "_")` escrito à mão. Três
+ * valores para a mesma língua no mesmo site — e o Facebook lê o valor, não a
+ * intenção.
+ *
+ * NÃO DÁ PARA REAPROVEITAR O `TAG_BCP47` de ./tipos: o Open Graph exige
+ * `idioma_TERRITÓRIO` sempre, e aquela tabela devolve `en` e `es` secos — que
+ * é exatamente o valor inválido que /bio emitia. O território é convenção de
+ * crawler, não afirmação sobre o público: quem lê em espanhol aqui é sobretudo
+ * Chile e Argentina, mas `es_ES` é o valor que o Facebook documenta como
+ * padrão da língua.
+ */
+export const TAG_OPEN_GRAPH: Record<Locale, string> = {
+  pt: "pt_BR",
+  en: "en_US",
+  es: "es_ES",
+};
+
+export type ImagemOpenGraph = {
+  url: string;
+  width?: number;
+  height?: number;
+  alt?: string;
+};
+
+/**
+ * A imagem padrão dos cards compartilhados: o herói da home, 1280x720 — a
+ * proporção mais próxima do 1.91:1 que os crawlers pedem (o `bannerdesktop.jpg`
+ * é 1600x500, esticado demais para card). Páginas com imagem própria passam a
+ * sua em `imagens`.
+ */
+const IMAGEM_PADRAO: ImagemOpenGraph = {
+  url: "/imagem-banner.jpg",
+  width: 1280,
+  height: 720,
+  alt: "Café Canastra — Serra da Canastra, Minas Gerais",
+};
+
+/**
+ * O bloco `openGraph` COMPLETO de uma página traduzida.
+ *
+ * TODA ROTA TRADUZIDA PRECISA CHAMAR ESTA FUNÇÃO, e o motivo é uma regra do
+ * Next que só morde quem não a conhece: `openGraph` NÃO é fundido campo a
+ * campo com o do layout pai — a rota que declara SUBSTITUI o objeto inteiro.
+ * Daí as duas metades do defeito que esta função fecha:
+ *
+ *   - quem NÃO declarava herdava um `locale` fixo do layout raiz e anunciava
+ *     ao Facebook e ao WhatsApp que a versão em inglês era portuguesa;
+ *   - quem declarava perdia `siteName` e a imagem do card, e tinha de repetir
+ *     os dois à mão — foi copiando essa repetição que as três tabelas de
+ *     `og:locale` discordantes nasceram.
+ *
+ * Por isso o retorno é o bloco INTEIRO, com `siteName` e imagem dentro: uma
+ * chamada só por rota, barata o bastante para nenhuma rota nova "esquecer" de
+ * declarar — e é o esquecimento, não o erro de digitação, que produziu as sete
+ * rotas erradas.
+ *
+ * `url` sai de `href()` e por isso é RELATIVA, como as de `alternativasDeIdioma`
+ * logo abaixo: o Next a resolve contra o `metadataBase` de app/layout.tsx, que
+ * é a mesma origem do sitemap e do JSON-LD. Escrever o domínio aqui criaria uma
+ * segunda fonte, capaz de desmentir as outras.
+ */
+export function openGraphDaPagina({
+  locale,
+  caminho,
+  titulo,
+  descricao,
+  tipo = "website",
+  imagens = [IMAGEM_PADRAO],
+}: {
+  locale: Locale;
+  caminho: string;
+  titulo: string;
+  descricao: string;
+  tipo?: "website" | "article";
+  imagens?: ImagemOpenGraph[];
+}) {
+  return {
+    type: tipo,
+    siteName: "Café Canastra",
+    locale: TAG_OPEN_GRAPH[locale],
+    url: href(locale, caminho),
+    title: titulo,
+    description: descricao,
+    images: imagens,
+  };
+}
+
 /**
  * O bloco `alternates` do metadata de uma página traduzida.
  *

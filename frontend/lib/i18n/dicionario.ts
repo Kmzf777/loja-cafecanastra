@@ -159,11 +159,13 @@ const pt = {
    * ["preco-asc"]`. Quem tem o valor na mão sabe onde está o rótulo sem
    * procurar, e é a mesma leitura `d.alguma.coisa` do resto do dicionário.
    *
-   * AS DUAS EXCEÇÕES SÃO AS DE CHAVE ABERTA, e por isso passam por função em
+   * AS EXCEÇÕES SÃO AS DE CHAVE ABERTA, e por isso passam por função em
    * rotulos.ts: a nota de sabor (`rotuloNota`) chega do editorial já no idioma
-   * do texto — `melaco` em pt, `molasses` em en — e o ponto de torra
-   * (`rotuloPontoTorra`) pode chegar fora da escala pela querystring. As duas
-   * precisam de um fallback que uma leitura direta não tem.
+   * do texto — `melaco` em pt, `molasses` em en —, o ponto de torra
+   * (`rotuloPontoTorra`) pode chegar fora da escala pela querystring, e o
+   * rótulo de embalagem e o atributo da marca (`rotuloDaEmbalagem`,
+   * `rotuloDoAtributo`) chegam do JSON de catálogo, que TypeScript nenhum lê.
+   * Todas precisam de um fallback que uma leitura direta não tem.
    */
   catalogo: {
     /**
@@ -190,6 +192,28 @@ const pt = {
       3: "Torra média",
       4: "Torra média-escura",
       5: "Torra escura",
+    },
+
+    /**
+     * AS DUAS PONTAS DA RÉGUA DO <PontoTorra>, que são outra coisa que a
+     * tabela acima: `pontoTorra` nomeia CADA degrau ("Torra média"), `escala`
+     * rotula o EIXO em que os degraus se distribuem — o "Clara" à esquerda, o
+     * "Escura" à direita, e o "de 5" que diz de que tamanho é a régua.
+     *
+     * Estavam cravadas em português dentro do componente, que já recebia o
+     * `locale` e já o usava para o degrau: em /en a torra dizia "Dark roast" e
+     * a régua ao lado dela dizia "Clara · Escura · 5 de 5". O mesmo português
+     * ia no `aria-label` de todo card da home, da PLP e do bloco da PDP.
+     *
+     * O "5" mora DENTRO do texto porque a escala é fixa em cinco pela própria
+     * assinatura de `Lote.pontoTorra` (1 | 2 | 3 | 4 | 5). Costurar número e
+     * preposição no componente sairia mais barato em português e erraria na
+     * primeira língua que pusesse os dois em outra ordem.
+     */
+    escala: {
+      clara: "Clara",
+      escura: "Escura",
+      deCinco: "de 5",
     },
 
     /**
@@ -280,6 +304,90 @@ const pt = {
       capsula: "Cápsulas",
     },
 
+    /**
+     * O RÓTULO DA EMBALAGEM — treze valores fechados, e é por serem fechados
+     * que eles estão AQUI e não no editorial traduzido por linha.
+     *
+     * "Pacote com 250 g" se repete em cinco SKUs; "3 caixas — 30 cápsulas" em
+     * dois. Traduzir por SKU seria escrever a mesma frase dezenas de vezes em
+     * dois idiomas, e o dia em que uma delas ficasse para trás ninguém
+     * notaria — JSON não tem compilador. Chaveado por `rotuloChave`
+     * (data/catalogo-canastra.json), o rótulo ganha a trava do dicionário:
+     * chave faltando quebra o build.
+     *
+     * O PORTUGUÊS DAQUI NÃO É A FONTE: o `rotuloEmbalagem` do JSON é, porque é
+     * ele que o seed grava em `canastra.produtos.tamanho` e é de lá que o
+     * checkout relê o item na hora de cobrar. `produtos.test.ts` cobra que os
+     * dois digam exatamente a mesma coisa.
+     *
+     * A TABELA ESPELHA O CATÁLOGO INTEIRO, e nem todas as treze linhas chegam à
+     * tela hoje: as que a vitrine mostra são as dos formatos especiais e dos
+     * kits (a lista "Também nesta linha" na PDP e o card de kit na PLP). As
+     * cinco de pacote — 250 g, 500 g, 1 kg e as duas caixas — só aparecem na
+     * sacola, que é pt-BR por decisão, porque o seletor da PDP compõe o próprio
+     * texto (`pdp.umPacote`, `pdp.caixaCom`) em vez de imprimir o rótulo. Elas
+     * ficam aqui mesmo assim: uma tabela que espelha o catálogo é completa por
+     * construção e o teste consegue afirmar isso; uma tabela com buracos é uma
+     * armadilha esperando o dia em que uma tela nova mostrar o rótulo de um
+     * pacote e ninguém lembrar que aquela linha faltava.
+     */
+    embalagem: {
+      "pacote-250g": "Pacote com 250 g",
+      "pacote-500g": "Pacote com 500 g",
+      "pacote-1kg": "Pacote com 1 kg",
+      "caixa-4x500g": "Caixa com 4 pacotes de 500 g",
+      "caixa-3x250g": "Caixa com 3 pacotes de 250 g",
+      /** A caixa que mistura linhas — "de cada" é o que a distingue da acima. */
+      "caixa-1x250g-de-cada": "Caixa com 1 pacote de 250 g de cada",
+      "display-10-saches": "Display com 10 sachês",
+      "caixas-3-saches-30": "3 caixas — 30 sachês",
+      "caixas-6-saches-60": "6 caixas — 60 sachês",
+      "caixas-1-capsulas-10": "1 caixa — 10 cápsulas",
+      "caixas-3-capsulas-30": "3 caixas — 30 cápsulas",
+      "caixas-4-capsulas-40": "4 caixas — 40 cápsulas",
+      "caixas-6-capsulas-60": "6 caixas — 60 cápsulas",
+    },
+
+    /**
+     * OS SELOS QUE VALEM PARA A COLEÇÃO INTEIRA — os chips do pé da ficha da
+     * PDP. Vêm de `marca.atributos` e eram renderizados crus: a ficha em
+     * inglês, com rótulo e definição já traduzidos, terminava numa fileira de
+     * "100% arábica · Carbono zero · Sem glúten".
+     *
+     * São afirmação de MARCA e não de produto, e por isso o texto vive aqui e
+     * não no editorial por linha: é a mesma frase nas cinco. A chave é
+     * `marca.atributosChaves`, na mesma ordem da lista em português —
+     * `produtos.test.ts` casa as duas listas e cobra que este português seja
+     * idêntico ao do JSON, que é o que o seed cola na descrição de cada SKU.
+     */
+    atributo: {
+      arabica: "100% arábica",
+      "origem-unica": "Origem única da Serra da Canastra",
+      "carbono-zero": "Carbono zero",
+      "energia-fotovoltaica": "100% energia fotovoltaica",
+      "sem-gluten": "Sem glúten",
+      vegano: "Vegano",
+    },
+
+    /**
+     * A PLAQUETA DO <SeloSCA> (estetica.md §5.1), e ela tem uma sutileza.
+     *
+     * `sobrancelha` é a palavra que as caixas de Drip Coffee estampam ACIMA de
+     * "ESPECIAL" — inglês impresso numa embalagem brasileira. Ela é a mesma
+     * nos três idiomas porque é REPRODUÇÃO, não tradução. Numa página em
+     * inglês ela colide com `especial`, que ali também é "Specialty", e a
+     * plaqueta diria a mesma palavra duas vezes: o componente compara as duas
+     * e some com a sobrancelha quando coincidem.
+     *
+     * `gourmet` é o que está impresso no pacote do Néctar de Minas, e é
+     * empréstimo do francês nas três línguas — não se traduz em nenhuma.
+     */
+    selo: {
+      especial: "Especial",
+      gourmet: "Gourmet",
+      sobrancelha: "Specialty",
+    },
+
     ordenacao: {
       relevancia: "Relevância",
       "preco-asc": "Menor preço",
@@ -318,6 +426,28 @@ const pt = {
           "Nota de 0 a 100 dada em prova cega segundo o protocolo da SCA. De 80 para cima o café é classificado como especial; abaixo disso é gourmet. Onde o site mostra 80+, o número é o piso que a embalagem declara para a coleção, não a nota daquele café; onde mostra um número sem o +, é a nota que a marca publica para aquela linha.",
         preparo: "Os métodos em que esta linha costuma render melhor.",
       },
+    },
+
+    /**
+     * O TEXTO ALTERNATIVO DE TODA FOTO DO CATÁLOGO, e ele é MOLDE, não frase.
+     *
+     * `{embalagem}` chega do editorial traduzido por linha
+     * (data/catalogo-canastra.i18n.json) e `{nome}` é nome próprio, igual nos
+     * três idiomas. É molde porque a ordem e a preposição mudam de língua para
+     * língua: costurá-las no componente produziria "Black bag do Canastra
+     * Clássico". Quem monta é `lib/catalogo/produtos.ts`; quem consome é a foto
+     * de todo card, a galeria da PDP e o `og:image:alt` — ou seja, quem não
+     * enxerga a imagem, que era exatamente quem estava ouvindo português numa
+     * página em inglês.
+     *
+     * O ALT DO PACOTE DIZIA "de 250 g" E O NÚMERO SAIU. A mesma frase servia
+     * ao Néctar de Minas, que só existe em 1 kg: era peso inventado no lugar
+     * onde ninguém confere. O que a foto mostra é o pacote; o peso é do SKU e
+     * está no rótulo ao lado.
+     */
+    alt: {
+      sabor: "{embalagem} do {nome} sobre fundo claro",
+      pacote: "{embalagem} do {nome}",
     },
   },
 
@@ -667,6 +797,16 @@ const en: Dicionario = {
       4: "Medium-dark roast",
       5: "Dark roast",
     },
+    /**
+     * As pontas do eixo saem SEM a palavra `roast`: elas rotulam a régua, e
+     * "Light roast — Dark roast" nas duas pontas repetiria o degrau escrito
+     * logo abaixo dela.
+     */
+    escala: {
+      clara: "Light",
+      escura: "Dark",
+      deCinco: "of 5",
+    },
     nota: {
       /** O nome que a castanha tem em inglês é o do país de onde ela sai. */
       "castanha-do-para": "Brazil nut",
@@ -731,6 +871,50 @@ const en: Dicionario = {
       drip: "Drip Coffee",
       capsula: "Capsules",
     },
+    /**
+     * `bag` e `box` são o que uma torrefação escreve no rótulo em inglês —
+     * `packet` é remédio e `package` é encomenda dos Correios. `sachet` é o
+     * termo do drip coffee de saquinho; `display` é o expositor de balcão, e a
+     * palavra é a mesma nas duas línguas.
+     */
+    embalagem: {
+      "pacote-250g": "250 g bag",
+      "pacote-500g": "500 g bag",
+      "pacote-1kg": "1 kg bag",
+      "caixa-4x500g": "Box with four 500 g bags",
+      "caixa-3x250g": "Box with three 250 g bags",
+      "caixa-1x250g-de-cada": "Box with one 250 g bag of each",
+      "display-10-saches": "Display box with 10 sachets",
+      "caixas-3-saches-30": "3 boxes — 30 sachets",
+      "caixas-6-saches-60": "6 boxes — 60 sachets",
+      "caixas-1-capsulas-10": "1 box — 10 capsules",
+      "caixas-3-capsulas-30": "3 boxes — 30 capsules",
+      "caixas-4-capsulas-40": "4 boxes — 40 capsules",
+      "caixas-6-capsulas-60": "6 boxes — 60 capsules",
+    },
+    atributo: {
+      arabica: "100% arabica",
+      "origem-unica": "Single origin from Serra da Canastra",
+      /**
+       * `Zero carbon`, e não `carbon neutral`: as duas não dizem a mesma
+       * coisa, e neutralidade por compensação é afirmação que a marca não
+       * publica. O que ela publica é "Carbono zero".
+       */
+      "carbono-zero": "Zero carbon",
+      "energia-fotovoltaica": "100% photovoltaic energy",
+      "sem-gluten": "Gluten free",
+      vegano: "Vegan",
+    },
+    /**
+     * Aqui `especial` e `sobrancelha` são a MESMA palavra, e é justamente isso
+     * que o <SeloSCA> detecta para não escrever "Specialty" duas vezes numa
+     * plaqueta só. Ver a nota no `pt`.
+     */
+    selo: {
+      especial: "Specialty",
+      gourmet: "Gourmet",
+      sobrancelha: "Specialty",
+    },
     ordenacao: {
       relevancia: "Relevance",
       "preco-asc": "Lowest price",
@@ -757,6 +941,10 @@ const en: Dicionario = {
           "A 0-to-100 score given in blind cupping under the SCA protocol. From 80 up the coffee is graded as specialty; below that it is gourmet. Where the site shows 80+, the number is the floor the packaging declares for the whole collection, not the score of that coffee; where it shows a number without the +, it is the score the roaster publishes for that line.",
         preparo: "The methods this line tends to shine in.",
       },
+    },
+    alt: {
+      sabor: "{embalagem} of {nome} on a light background",
+      pacote: "{embalagem} of {nome}",
     },
   },
   pdp: {
@@ -955,6 +1143,16 @@ const es: Dicionario = {
       4: "Tueste medio-oscuro",
       5: "Tueste oscuro",
     },
+    /**
+     * Masculino, ao contrário do português: quem concorda aqui é `tueste`, e
+     * não `torra`. Trocar só o acento — "Clara"/"Escura" — deixaria a régua em
+     * português no meio de uma página em espanhol.
+     */
+    escala: {
+      clara: "Claro",
+      escura: "Oscuro",
+      deCinco: "de 5",
+    },
     nota: {
       "castanha-do-para": "Nuez de Brasil",
       "doce-de-leite": "Dulce de leche",
@@ -1014,6 +1212,45 @@ const es: Dicionario = {
       drip: "Drip Coffee",
       capsula: "Cápsulas",
     },
+    /**
+     * `Bolsa` e não `paquete`: é o que está impresso en el envase de café en
+     * español. `Sobre` é o sachê de drip coffee — `sachet` é galicismo que a
+     * góndola do Cone Sul não usa.
+     */
+    embalagem: {
+      "pacote-250g": "Bolsa de 250 g",
+      "pacote-500g": "Bolsa de 500 g",
+      "pacote-1kg": "Bolsa de 1 kg",
+      "caixa-4x500g": "Caja con 4 bolsas de 500 g",
+      "caixa-3x250g": "Caja con 3 bolsas de 250 g",
+      "caixa-1x250g-de-cada": "Caja con 1 bolsa de 250 g de cada",
+      "display-10-saches": "Display con 10 sobres",
+      "caixas-3-saches-30": "3 cajas — 30 sobres",
+      "caixas-6-saches-60": "6 cajas — 60 sobres",
+      "caixas-1-capsulas-10": "1 caja — 10 cápsulas",
+      "caixas-3-capsulas-30": "3 cajas — 30 cápsulas",
+      "caixas-4-capsulas-40": "4 cajas — 40 cápsulas",
+      "caixas-6-capsulas-60": "6 cajas — 60 cápsulas",
+    },
+    atributo: {
+      arabica: "100% arábica",
+      "origem-unica": "Origen único de la Serra da Canastra",
+      /** `Carbono cero`, o mesmo que o português diz — não neutralidade. */
+      "carbono-zero": "Carbono cero",
+      "energia-fotovoltaica": "100% energía fotovoltaica",
+      "sem-gluten": "Sin gluten",
+      vegano: "Vegano",
+    },
+    /**
+     * A sobrancelha continua em inglês porque é o que a caixa estampa, e em
+     * espanhol ela NÃO colide com `especial` — a plaqueta sai igual à da
+     * embalagem, "Specialty / Especial / SCA 80+".
+     */
+    selo: {
+      especial: "Especial",
+      gourmet: "Gourmet",
+      sobrancelha: "Specialty",
+    },
     ordenacao: {
       relevancia: "Relevancia",
       "preco-asc": "Menor precio",
@@ -1040,6 +1277,10 @@ const es: Dicionario = {
           "Puntuación de 0 a 100 dada en cata a ciegas según el protocolo de la SCA. De 80 en adelante el café se clasifica como especial; por debajo es gourmet. Donde el sitio muestra 80+, el número es el piso que el empaque declara para toda la colección, no la nota de ese café; donde muestra un número sin el +, es la nota que la marca publica para esa línea.",
         preparo: "Los métodos en los que esta línea suele rendir mejor.",
       },
+    },
+    alt: {
+      sabor: "{embalagem} de {nome} sobre fondo claro",
+      pacote: "{embalagem} de {nome}",
     },
   },
   pdp: {

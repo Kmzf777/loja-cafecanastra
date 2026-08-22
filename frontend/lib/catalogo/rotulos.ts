@@ -3,8 +3,9 @@ import type { Locale } from "../i18n/tipos";
 import type { Linha } from "./tipos";
 
 /**
- * Apresentacao do catalogo: a cor de cada linha e os dois rotulos de CHAVE
- * ABERTA — a nota de sabor e o ponto de torra.
+ * Apresentacao do catalogo: a cor de cada linha e os rotulos de CHAVE ABERTA —
+ * a nota de sabor, o ponto de torra, o rotulo de embalagem e o atributo da
+ * marca.
  *
  * O TEXTO NAO MORA MAIS AQUI, e essa e a mudanca. `LINHAS`, `PONTO_TORRA` e
  * `NOTAS_IRREGULARES` eram tabelas de valor unico em portugues, e alimentavam
@@ -13,12 +14,13 @@ import type { Linha } from "./tipos";
  * chaveado pelo proprio valor do contrato; quem quer o rotulo de um valor
  * fechado le `d.catalogo.moagem.grao` direto, como le `d.nav.cafes`.
  *
- * SO SOBRARAM FUNCOES PARA AS DUAS CHAVES ABERTAS, e e por isso que elas sao
- * funcao: as duas podem receber uma chave que o dicionario nao tem, e sem um
- * fallback a tela mostraria `undefined`. As `notas` continuam gravadas em
+ * SO SOBRARAM FUNCOES PARA AS CHAVES ABERTAS, e e por isso que elas sao
+ * funcao: todas podem receber uma chave que o dicionario nao tem — porque a
+ * chave vem de `data/catalogo-canastra.json`, que compilador nenhum le — e sem
+ * um fallback a tela mostraria `undefined`. As `notas` continuam gravadas em
  * kebab-case sem acento no contrato (`castanha-do-para`) porque sao chave de
- * filtro; a forma legivel e responsabilidade desta camada, nunca do
- * componente.
+ * filtro; o mesmo vale para `rotuloChave` e `atributosChaves`. A forma legivel
+ * e responsabilidade desta camada, nunca do componente.
  *
  * IMPORTS RELATIVOS, nao `@/`: o vitest.config.ts nao resolve o alias.
  */
@@ -73,9 +75,58 @@ export function rotuloPontoTorra(valor: number, locale: Locale): string {
  */
 export function rotuloNota(nota: string, locale: Locale): string {
   const notas: Record<string, string> = dicionario(locale).catalogo.nota;
-  return (
-    notas[nota] ?? nota.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase())
-  );
+  return notas[nota] ?? humanizar(nota);
+}
+
+/**
+ * A ÚLTIMA REDE, e ela nunca deveria ser alcançada por chave do catálogo.
+ *
+ * `castanha-do-para` vira "Castanha do para" — sem acento e sem hífen, ou
+ * seja, feio de propósito: é legível o bastante para não quebrar a tela e
+ * errado o bastante para alguém notar que falta uma linha no dicionário.
+ * Quem chega aqui de direito é a nota que o editorial já grava traduzida
+ * (`molasses`), que passa longe do mapa e só precisa da maiúscula.
+ */
+function humanizar(chave: string): string {
+  return chave.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
+
+/**
+ * O rótulo da embalagem PARA A TELA, no idioma da página — "Pacote com 250 g",
+ * "3 boxes — 30 capsules".
+ *
+ * NÃO USE ISTO PARA GRAVAR NADA, E ESSA É A METADE IMPORTANTE DA REGRA. O campo
+ * `rotuloEmbalagem` do item continua em PORTUGUÊS, sempre, porque ele é dado
+ * gravado: entra no `size` e no nome do item da sacola, sobrevive à sessão no
+ * `localStorage`, e vira dimensão do `add_to_cart` do GA4. É a mesma decisão que
+ * `PainelCompra` já documenta para a moagem — um relatório que recebesse
+ * "Ground" e "Moído" contaria o mesmo produto duas vezes, e uma sacola pt-BR
+ * (spec §1) mostraria a etiqueta na língua em que a pessoa navegava ontem.
+ *
+ * Recebe o ITEM e não a chave para que o português dele seja o fallback natural:
+ * sem `rotuloChave` — fixture de teste, variante montada à mão pelo Clube — o
+ * rótulo fica como está, em vez de virar "pacote-250g" na tela.
+ */
+export function rotuloDaEmbalagem(
+  item: { rotuloChave?: string; rotuloEmbalagem: string },
+  locale: Locale,
+): string {
+  const rotulos: Record<string, string> = dicionario(locale).catalogo.embalagem;
+  const traduzido = item.rotuloChave ? rotulos[item.rotuloChave] : undefined;
+  return traduzido ?? item.rotuloEmbalagem;
+}
+
+/**
+ * Os selos da coleção — "100% arábica", "Zero carbon", "Sin gluten".
+ *
+ * Chave aberta pelo mesmo motivo da nota: ela vem de `marca.atributosChaves`,
+ * num JSON que compilador nenhum confere. `produtos.test.ts` casa a lista com o
+ * dicionário nos três idiomas, então o fallback aqui é rede de segurança para o
+ * dia em que alguém acrescentar um selo no JSON e esquecer o texto.
+ */
+export function rotuloDoAtributo(chave: string, locale: Locale): string {
+  const atributos: Record<string, string> = dicionario(locale).catalogo.atributo;
+  return atributos[chave] ?? humanizar(chave);
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Serra } from "@/components/marca/Serra";
 import { BotaoLink } from "@/components/ui/Botao";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale } from "@/lib/i18n/tipos";
 import {
   HOSPEDEIRO_DA_BASE,
@@ -51,6 +51,12 @@ export async function generateMetadata({
     title: t.metaTitulo,
     description: t.metaDescricao,
     alternates: alternativasDeIdioma("/rastreabilidade", locale),
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/rastreabilidade",
+      titulo: t.metaTitulo,
+      descricao: t.metaDescricao,
+    }),
   };
 }
 

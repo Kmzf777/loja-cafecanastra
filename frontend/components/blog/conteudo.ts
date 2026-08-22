@@ -12,9 +12,6 @@ import { TAG_BCP47, type Locale } from "../../lib/i18n/tipos";
  * `PostDoBlog` é o formato que o <SecaoDoBlog> já sabe renderizar; a única
  * peça que muda no dia da integração é o corpo de `listarPostsDoBlog()`.
  * O que MAIS falta nesse dia está escrito lá — para ninguém descobrir tarde.
- *
- * IMPORT RELATIVO, não `@/`: o vitest.config.ts não resolve o alias, e este
- * módulo é importado pelo teste ao lado (mesma nota de lib/i18n/rotas.ts).
  */
 
 /** Quantos posts a home mostra. estetica.md §7.1 reserva três no bloco APRENDER. */

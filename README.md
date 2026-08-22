@@ -134,18 +134,29 @@ explica variável por variável; o resumo é este:
 ## Verificação
 
 ```bash
-npm --prefix backend test   # 398 testes: pagamento, banco (RLS, migrações, RPCs),
+npm --prefix backend test   # pagamento, banco (RLS, migrações, RPCs),
                             # cupons, Bling, LGPD, avaliações e Clube.
                             # Sobe um PostgreSQL temporário POR ARQUIVO — sem
                             # disco livre o initdb falha e ~175 testes caem em
                             # bloco. É a máquina, não o código
-npm test                    # a vitrine no vitest: 45 arquivos e ao menos 658
-                            # testes em 22/08/2026. O número é um PISO — sobe a
-                            # cada onda, e o que não pode é cair. Rode de dentro
-                            # de frontend/, senão o vitest.config.ts nem carrega
+npm test                    # a vitrine no vitest. Atalho para
+                            # `npm --prefix frontend run test` — o prefix já
+                            # entra em frontend/, então o vitest.config.ts
+                            # carrega. O que NÃO funciona é `npx vitest run`
+                            # da RAIZ: sem o config ele varre o backend junto
+                            # e 44 arquivos quebram de uma vez
 npm run verifica:rls        # a fronteira de RLS contra uma instância Supabase real
 npm run verifica            # 37 checagens num Chromium (exige tudo no ar)
 ```
+
+**Não confie em número de teste escrito em documento — rode e leia o rodapé.**
+Três documentos deste repositório já carregaram três contagens diferentes da
+mesma suíte, todas verdadeiras no dia em que foram escritas e nenhuma no dia em
+que foram lidas. O que vale é o piso: em **22/08/2026**, `npm test` fechava
+**806 testes em 62 arquivos** e `npm --prefix backend test`, **398**. Esse
+número **sobe a cada onda; o que não pode é cair** — ele subiu de 787 para 799
+no intervalo de dez minutos enquanto esta frase era escrita, e de 799 para 806
+antes de ela ser commitada.
 
 `npm run verifica:rls` é o único que sai da máquina: ele prova o **caminho**
 (GoTrue → Kong → PostgREST → política), e não só a política. Degrada sozinho —

@@ -26,6 +26,7 @@ vi.mock("@/lib/sacola/sacola", () => ({
 }));
 
 import { PainelCompra } from "./PainelCompra";
+import { VAR_ALTURA_DO_AVISO } from "@/components/layout/BannerCookies";
 import { lotesDoLocale } from "@/lib/catalogo/produtos";
 import type { Lote } from "@/lib/catalogo/tipos";
 
@@ -130,6 +131,33 @@ describe("PainelCompra", () => {
     expect(html(<PainelCompra lote={CLASSICO} locale="es" />)).toContain(
       "Cómo preparar",
     );
+  });
+
+  it("apoia a barra de compra fixa na altura que o aviso de cookies publica", () => {
+    // O DEFEITO QUE ISTO IMPEDE, medido em 360×800: o aviso de cookies ia de
+    // y=642,8 a 800 e a barra fixa de y=727 a 800 — a barra INTEIRA por baixo
+    // do aviso, nos três idiomas, e "Adicionar à sacola" intocável justamente
+    // na primeira visita de um telefone.
+    //
+    // A constante vem importada do próprio banner de propósito: se o nome da
+    // variável mudar lá, muda aqui junto, e um teste que a escrevesse à mão
+    // continuaria verde com a barra de volta por baixo do aviso.
+    const saida = html(<PainelCompra lote={CLASSICO} locale="pt" />);
+    expect(saida).toContain(`bottom:var(${VAR_ALTURA_DO_AVISO}, 0px)`);
+    // E não pode sobrar o `bottom-0` que colava a barra na base da janela.
+    expect(saida).not.toContain("bottom-0");
+  });
+
+  it("põe piso de toque nos botões que escolhem o que vai ser comprado", () => {
+    // §10 pede 44×44. Medidos antes: 79,5×41,5 nos três pesos. `min-h-12` é o
+    // mesmo piso que o seletor de moagem já usava duas fieldsets acima — o de
+    // peso e o de embalagem repetiam a classe sem ele.
+    const saida = html(<PainelCompra lote={CLASSICO} locale="pt" />);
+    const pesos = saida.split("<button").filter((p) => /\d+ g<|1 kg</.test(p));
+    expect(pesos.length).toBeGreaterThan(0);
+    for (const botao of pesos) {
+      expect(botao).toContain("min-h-12");
+    }
   });
 
   it("continua em português quando ninguém passa idioma", () => {

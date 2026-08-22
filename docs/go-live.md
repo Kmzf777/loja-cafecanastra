@@ -97,6 +97,40 @@ detalhados em `producao.md`; a lista curta é:
 Depois de tudo: faça **um cadastro completo e uma compra de R$ 1** em um
 navegador limpo. É a única prova que vale.
 
+### 3.1 O que as duas ondas do site único acrescentaram a este checklist
+
+A fusão dos dois sites (spec `2026-08-22-site-unico-producao-design.md`) pôs
+três idiomas no ar e mudou o que precisa ser conferido no deploy. Nada disto
+existia na lista antes.
+
+- [ ] **`NEXT_PUBLIC_SITE_URL` agora alimenta também o `hreflang`.** Ela sempre
+      alimentou `metadataBase`, `sitemap.xml` e JSON-LD; depois da fusão o
+      `sitemap.xml` são **42 URLs** (14 rotas canônicas × 3 idiomas), cada uma
+      com o conjunto recíproco de alternativas. Domínio errado aqui não erra só
+      o canônico: **um conjunto de `hreflang` que o sitemap contradiz é
+      descartado inteiro pelo buscador**, e o que some do índice são justamente
+      as páginas em inglês e espanhol. É a §10, e agora ela custa mais caro.
+- [ ] **Nenhuma regra de nginx para `/pt/*` nem para `/en/checkout`.** A própria
+      aplicação já responde 308 nesses dois casos; uma segunda camada fazendo o
+      mesmo produz laço no dia em que uma delas mudar. Detalhe na §10.
+- [ ] **Abrir `/en/cafes` e `/es/cafes` à mão depois do deploy.** O
+      `npm run verifica` não abre uma única URL fora do português — as 37
+      checagens do Chromium são todas em `pt`. A trava que existe é de build (o
+      dicionário quebra a compilação por chave faltando), e ela não vê página
+      publicada.
+- [ ] **Conferir que o build imprime 51 rotas prerenderizadas.** É o número
+      medido em 22/08/2026, contra 27 com o defeito de pé. `ƒ` na PLP `/cafes` é o
+      esperado (ela lê `searchParams`); `ƒ` numa institucional é regressão —
+      `docs/performance-dev.md` §7.1.
+- [ ] **A revisão jurídica tem de cobrir os três idiomas.** Os termos e a
+      política passaram a existir em `en` e `es`, e o aviso de "sem revisão"
+      são **três remoções, não uma**. Está detalhado na §7.
+
+> **Não abra chamado sobre laço de redirecionamento no middleware.** Um
+> verificador reportou laço infinito de 308 em `next dev` e estava errado —
+> mediu um arquivo colhido no meio de uma escrita. O caso está medido e
+> encerrado em `docs/performance-dev.md` §7.2.
+
 ---
 
 ## 4. Bling e nota fiscal — o que só o seu contador resolve
@@ -238,14 +272,20 @@ e o runbook explica o agendamento. Falta:
 ## 9. Verificação final
 
 ```bash
-npm --prefix backend test      # 398 testes: banco, RLS, pagamento, cupons,
-                               # Bling, LGPD, Clube
-npm --prefix frontend run test # 579 testes: vitrine, checkout, SEO, analytics,
-                               # i18n e o dicionário dos três idiomas
+npm --prefix backend test      # banco, RLS, pagamento, cupons, Bling, LGPD, Clube
+npm --prefix frontend run test # vitrine, checkout, SEO, analytics, i18n e o
+                               # dicionário dos três idiomas
 npm --prefix frontend run build # prova que generateStaticParams dá conta de
                                # idioma × slug e que não falta chave no dicionário
 npm run verifica:rls           # a fronteira de RLS contra uma instância real
 ```
+
+**O número de testes não está escrito acima de propósito.** Este documento já
+afirmou "579", enquanto o README dizia "658" e o `producao.md` dizia "317" — da
+mesma suíte, no mesmo dia. Contagem em documento envelhece mentindo. O que vale
+é o piso medido em **22/08/2026**: **799 testes em 62 arquivos** na vitrine e
+**398** no backend. Rode e leia o rodapé da execução; se o número tiver caído,
+alguma coisa quebrou.
 
 A suíte do backend **sobe um PostgreSQL temporário por arquivo de teste**. Ela
 precisa de disco livre e de RAM: com pouco espaço, o `initdb` falha e ~175

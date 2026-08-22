@@ -4,7 +4,7 @@ import { PaginaTexto, AvisoJuridico } from "@/components/layout/PaginaTexto";
 import { BotaoReverCookies } from "@/components/layout/BotaoReverCookies";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { FormDescadastroNewsletter } from "@/components/layout/FormDescadastroNewsletter";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import {
   PRIVACIDADE,
@@ -52,6 +52,12 @@ export async function generateMetadata({
     // `generateMetadata` e não um `metadata` constante porque o canônico
     // precisa ser a PRÓPRIA página, no próprio idioma — ver lib/i18n/rotas.ts.
     alternates: alternativasDeIdioma("/politica-de-privacidade", locale),
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/politica-de-privacidade",
+      titulo: meta.titulo,
+      descricao: meta.descricao,
+    }),
   };
 }
 

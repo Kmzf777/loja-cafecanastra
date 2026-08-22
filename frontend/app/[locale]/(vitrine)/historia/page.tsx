@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Serra } from "@/components/marca/Serra";
 import { BotaoLink } from "@/components/ui/Botao";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
+import { LOCALES, comoLocale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { HISTORIA } from "./conteudo";
 
@@ -39,19 +39,6 @@ import { HISTORIA } from "./conteudo";
  */
 
 /**
- * `og:locale` exige `idioma_TERRITÓRIO`, então não dá para reaproveitar o
- * `TAG_BCP47` de lib/i18n/tipos.ts, que devolve `en` e `es` secos. O território
- * aqui é convenção de crawler, não afirmação sobre o público: quem lê em
- * espanhol é sobretudo Chile e Argentina, mas `es_ES` é o valor que o Facebook
- * documenta como padrão da língua.
- */
-const OG_LOCALE: Record<Locale, string> = {
-  pt: "pt_BR",
-  en: "en_US",
-  es: "es_ES",
-};
-
-/**
  * As três versões saem prontas do build — e esta é a página que mais tinha a
  * perder sem isso: todo o conteúdo dela é constante de `conteudo.ts`, sem uma
  * única leitura de rede, e mesmo assim o segmento `[locale]` sem
@@ -80,25 +67,23 @@ export async function generateMetadata({
     title: meta.titulo,
     description: meta.descricao,
     alternates: alternativasDeIdioma("/historia", locale),
-    openGraph: {
-      title: meta.titulo,
-      description: meta.descricao,
-      type: "article",
-      locale: OG_LOCALE[locale],
-      // A imagem é REDECLARADA porque o Next SUBSTITUI o bloco `openGraph` do
-      // layout raiz em vez de fundir campo a campo: sem esta linha, o card
-      // compartilhado desta página sairia sem imagem nenhuma. É o mesmo banner
-      // do layout (1280x720) e não o `nossa-historia.png`, que tem 3,7 MB e
-      // demoraria mais para o crawler buscar do que a página inteira.
-      images: [
-        {
-          url: "/imagem-banner.jpg",
-          width: 1280,
-          height: 720,
-          alt: "Café Canastra — Serra da Canastra, Minas Gerais",
-        },
-      ],
-    },
+    /**
+     * `type: "article"` é o único desvio do padrão desta página: ela é texto
+     * corrido para ler, não uma vitrine de produto. Todo o resto — `siteName`,
+     * `og:locale`, `og:url` e a imagem — vem de `openGraphDaPagina()`, que é a
+     * ÚNICA fonte do `og:locale` do site. Este arquivo já teve uma tabela
+     * própria, e ela discordava da de /bio.
+     *
+     * A imagem fica a do banner, por omissão: o `nossa-historia.png` tem 3,7 MB
+     * e o crawler demoraria mais para buscá-lo do que para ler a página inteira.
+     */
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/historia",
+      titulo: meta.titulo,
+      descricao: meta.descricao,
+      tipo: "article",
+    }),
   };
 }
 

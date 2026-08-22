@@ -1,4 +1,6 @@
 import type { Lote, Variante } from "../catalogo/tipos";
+import { LOCALE_PADRAO, TAG_BCP47, type Locale } from "../i18n/tipos";
+import { href } from "../i18n/rotas";
 
 /**
  * Builders de JSON-LD (schema.org) da vitrine.
@@ -46,6 +48,16 @@ export function serializarJsonLd(dados: object): string {
   return JSON.stringify(dados).replace(/</g, "\\u003c");
 }
 
+/**
+ * A marca. NÃO TEM `inLanguage`, E ISSO ESTÁ CERTO — não é esquecimento.
+ *
+ * Este nó descreve a EMPRESA, não um documento: nome próprio, logo, ano de
+ * fundação e o estado. Nenhum desses campos muda entre /cafes, /en/cafes e
+ * /es/cafes, e `inLanguage` no schema.org é propriedade de CreativeWork — quem
+ * a carrega aqui é o `websiteJsonLd()` logo abaixo, que descreve o site. Cravar
+ * um idioma nesta função seria repetir, num nó que não fala idioma nenhum, o
+ * defeito que o `websiteJsonLd` acabou de corrigir; o teste ao lado trava isso.
+ */
 export function organizationJsonLd(base: string = urlDoSite()) {
   return {
     "@context": "https://schema.org",
@@ -62,19 +74,42 @@ export function organizationJsonLd(base: string = urlDoSite()) {
   };
 }
 
-export function websiteJsonLd(base: string = urlDoSite()) {
+/**
+ * O site, no idioma da página que está emitindo o bloco.
+ *
+ * O `locale` VEM PRIMEIRO E É O PARÂMETRO QUE IMPORTA. `inLanguage` estava
+ * cravado em `"pt-BR"`, e a moldura (`app/moldura-da-loja.tsx`) emite este nó
+ * em TODA página da loja — /en e /es inclusive. O resultado era um dado
+ * estruturado dizendo "esta página é portuguesa" ao lado do `hreflang` que
+ * existe justamente para dizer o contrário: das duas afirmações, a que o
+ * crawler encontra dentro do documento é esta.
+ *
+ * `url` e a busca também acompanham o idioma, e não por simetria: a caixa de
+ * busca do cabeçalho tem `action={href(locale, "/cafes")}` (ver
+ * components/layout/Cabecalho.tsx), então em /en ela vai para `/en/cafes?q=…`.
+ * Uma SearchAction apontando para `/cafes` prometeria ao Google um endereço de
+ * busca que aquela versão do site não usa.
+ */
+export function websiteJsonLd(
+  locale: Locale = LOCALE_PADRAO,
+  base: string = urlDoSite(),
+) {
+  // A home DESTE idioma: `/` em português, `/en` e `/es` nos outros. Sem barra
+  // final, porque `${base}/` e `${base}` são duas URLs para a mesma página — e
+  // esta é a que o canônico da home anuncia (ver `alternativasDeIdioma`).
+  const home = href(locale, "/");
+
   return {
     "@context": "https://schema.org",
     "@type": "WebSite",
     name: "Café Canastra",
-    url: base,
-    inLanguage: "pt-BR",
-    // Casa com a caixa de busca do cabeçalho: form GET para /cafes?q=…
+    url: home === "/" ? base : `${base}${home}`,
+    inLanguage: TAG_BCP47[locale],
     potentialAction: {
       "@type": "SearchAction",
       target: {
         "@type": "EntryPoint",
-        urlTemplate: `${base}/cafes?q={termo}`,
+        urlTemplate: `${base}${href(locale, "/cafes")}?q={termo}`,
       },
       "query-input": "required name=termo",
     },
@@ -87,12 +122,19 @@ const ESGOTADO = "https://schema.org/OutOfStock";
 /**
  * Product + Offers de uma PDP — ou `null` quando o bloco não é elegível.
  *
- * Uma Offer por `skuLoja` ÚNICO: as seis variantes moídas de um mesmo peso
- * compartilham SKU, preço e estoque (ver o comentário de `Variante` em
- * tipos.ts) — seis Offers idênticas seriam ruído para o crawler. Variante sem
+ * Uma Offer por `skuLoja` ÚNICO. Grão e moído de um mesmo peso são produtos
+ * distintos com SKU próprio, mas caixa fechada e pacote avulso podem repetir
+ * SKU — e duas Offers idênticas seriam ruído para o crawler. Variante sem
  * preço (`preco <= 0`, caso real dos formatos esgotados sem preço na loja)
  * fica FORA: o schema.org exige `price`, e inventar um número aqui seria
  * mentir exatamente onde o Google confere.
+ *
+ * O `locale` VEM PRIMEIRO E É OBRIGATÓRIO, como em `websiteJsonLd`. Um valor
+ * padrão aqui já custou caro três vezes nesta branch: `@id`, `url` e as `url`
+ * de cada Offer apontavam para a PDP em português mesmo na página em inglês,
+ * contradizendo o canônico da própria página. E `@id` igual nos três idiomas
+ * faz o Google FUNDIR as três páginas num nó só — o oposto do que o hreflang
+ * ao lado está tentando dizer. Sem padrão, quem esquecer não compila.
  *
  * E quando NENHUMA variante tem preço (caso real da linha Canela, esgotada na
  * captura), o retorno é `null` e a PDP não emite Product nenhum: um Product
@@ -110,12 +152,13 @@ const ESGOTADO = "https://schema.org/OutOfStock";
 export type AvaliacoesParaJsonLd = { media: number; contagem: number };
 
 export function productJsonLd(
+  locale: Locale,
   lote: Lote,
   variantes: Variante[] = lote.variantes,
   base: string = urlDoSite(),
   avaliacoes?: AvaliacoesParaJsonLd | null,
 ) {
-  const urlDaPdp = `${base}/cafes/${lote.slug}`;
+  const urlDaPdp = `${base}${href(locale, `/cafes/${lote.slug}`)}`;
 
   const porSku = new Map<string, Variante>();
   for (const v of variantes) {
@@ -154,6 +197,11 @@ export function productJsonLd(
     // âncora #product distingue a COISA da PÁGINA que a descreve).
     "@id": `${urlDaPdp}#product`,
     url: urlDaPdp,
+    // Diferente do Organization logo acima, que NÃO tem `inLanguage` de
+    // propósito (a marca não tem idioma), o Product descreve uma página: nome
+    // e descrição saem daqui já traduzidos, e sem declarar em que língua o
+    // crawler tem de adivinhar.
+    inLanguage: TAG_BCP47[locale],
     name: lote.nome,
     description: lote.descricao,
     image: [absoluta(lote.fotos.pacote.src, base)],

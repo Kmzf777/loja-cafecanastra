@@ -9,9 +9,6 @@ import type { Locale } from "../../../../lib/i18n/tipos";
  * espanhol apontar para o lugar errado — e ninguém revisita a /bio em espanhol
  * para descobrir. Aqui o endereço existe UMA vez, em `PRINCIPAIS`, e o idioma
  * só decide como ele se chama.
- *
- * IMPORT RELATIVO, não `@/`: o vitest.config.ts não resolve o alias, e este
- * módulo é importado pelo teste ao lado (mesma nota de lib/i18n/rotas.ts).
  */
 
 /** Os quatro caminhos que a marca quer que o visitante do Instagram tome. */

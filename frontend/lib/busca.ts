@@ -10,8 +10,6 @@ import { LOCALE_PADRAO, type Locale } from "./i18n/tipos";
  * contrato (linha, torra, formato), enquanto isto aqui é casamento de texto
  * livre — regra de apresentação, não de catálogo. Função pura para o teste
  * rodar em node sem tocar fetch.
- *
- * IMPORTS RELATIVOS, não `@/`: o vitest.config.ts não resolve o alias.
  */
 
 /** Minúsculas e sem acento: "Clássico" e "classico" são a mesma busca. */

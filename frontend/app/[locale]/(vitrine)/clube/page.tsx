@@ -4,7 +4,7 @@ import { traduzirLote } from "@/lib/catalogo/produtos";
 import { DESCONTO_DO_CLUBE, opcoesDoClube } from "@/lib/clube";
 import { AssinaturaWizard } from "./AssinaturaWizard";
 import { ORDEM_DO_FAQ, textosDoClube } from "./conteudo";
-import { alternativasDeIdioma } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, LOCALE_PADRAO, comoLocale } from "@/lib/i18n/tipos";
 
 /**
@@ -56,6 +56,12 @@ export async function generateMetadata({
     title: t.meta.titulo,
     description: t.meta.descricao,
     alternates: alternativasDeIdioma("/clube", locale),
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/clube",
+      titulo: t.meta.titulo,
+      descricao: t.meta.descricao,
+    }),
   };
 }
 

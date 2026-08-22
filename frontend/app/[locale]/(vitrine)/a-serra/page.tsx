@@ -6,7 +6,7 @@ import { MARCA } from "@/lib/catalogo/produtos";
 import { rotuloPontoTorra } from "@/lib/catalogo/rotulos";
 import { Serra } from "@/components/marca/Serra";
 import { BotaoLink } from "@/components/ui/Botao";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { MARCO_DE_ORIGEM, textosDaSerra } from "./conteudo";
@@ -49,6 +49,12 @@ export async function generateMetadata({
     title: t.metaTitulo,
     description: t.metaDescricao,
     alternates: alternativasDeIdioma("/a-serra", locale),
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/a-serra",
+      titulo: t.metaTitulo,
+      descricao: t.metaDescricao,
+    }),
   };
 }
 

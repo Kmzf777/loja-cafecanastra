@@ -15,7 +15,7 @@ import type {
 import { rotuloPontoTorra } from "@/lib/catalogo/rotulos";
 import { CardCafe } from "@/components/catalogo/CardCafe";
 import { BotaoLink } from "@/components/ui/Botao";
-import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
+import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import {
@@ -89,6 +89,12 @@ export async function generateMetadata({
     title: t.metaTitulo,
     description: t.metaDescricao,
     alternates: alternativasDeIdioma("/cafes", locale),
+    openGraph: openGraphDaPagina({
+      locale,
+      caminho: "/cafes",
+      titulo: t.metaTitulo,
+      descricao: t.metaDescricao,
+    }),
   };
 }
 

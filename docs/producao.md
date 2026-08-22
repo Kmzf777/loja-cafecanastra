@@ -663,10 +663,15 @@ escreve nessa tabela.
 Depois de qualquer mudança em migração, schema ou seed:
 
 ```bash
-npm --prefix backend test   # 366 testes: pagamento, banco (RLS, migrações, seed, RPCs),
+npm --prefix backend test   # pagamento, banco (RLS, migrações, seed, RPCs),
                             # cupons, Bling, LGPD, avaliações e Clube
-npm test                    # 317 testes da vitrine (vitest)
+npm test                    # a vitrine (vitest)
 ```
+
+Piso medido em **22/08/2026**: **398** no backend, **799 testes em 62 arquivos**
+na vitrine. O número está datado porque ele sobe a cada onda — o que importa é
+que **não caia**. Não o copie para outro documento: as três contagens diferentes
+que este repositório carregou vieram exatamente disso.
 
 Os testes de banco sobem um Postgres embutido, aplicam as migrações de verdade e
 verificam cada política **nos dois sentidos** — o caso positivo e, principalmente,

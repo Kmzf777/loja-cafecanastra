@@ -64,7 +64,29 @@ export type Variante = {
   pesoGramas: PesoGramas;
   /** 1 = pacote avulso; >1 = caixa fechada. */
   pacotes: number;
+  /**
+   * O rótulo da embalagem, EM PORTUGUÊS E SEMPRE — "Pacote com 250 g".
+   *
+   * Não é texto de tela: nenhuma superfície da vitrine o imprime (o seletor da
+   * PDP compõe o próprio rótulo a partir do dicionário). O que ele faz é ser
+   * GRAVADO — vira o `size` e o nome do item na sacola, sobrevive no
+   * `localStorage` até a sessão seguinte e vira `item_name` no GA4. É a mesma
+   * decisão que `PainelCompra` documenta para a moagem, e por isso ele não
+   * atravessa `traduzirLote()`.
+   */
   rotuloEmbalagem: string;
+  /**
+   * A chave estável do rótulo acima (`rotuloChave` em
+   * data/catalogo-canastra.json), para quando ele PRECISAR ir à tela: é por ela
+   * que `rotuloDaEmbalagem()` acha o texto em `catalogo.embalagem`.
+   *
+   * OPCIONAL PORQUE HÁ VARIANTE MONTADA À MÃO — fixture de teste, cálculo do
+   * Clube — que nunca passou pelo JSON e não tem chave para declarar. Sem
+   * chave, `rotuloDaEmbalagem()` devolve o próprio `rotuloEmbalagem`, que é a
+   * queda para o português de sempre. Que TODA variante do catálogo real a
+   * tenha é afirmação de `produtos.test.ts`, não do tipo.
+   */
+  rotuloChave?: string;
   /** Em centavos. 3970 = R$ 39,70 */
   preco: number;
   estoque: number;
@@ -80,8 +102,23 @@ export type FormatoEspecial = {
   skuLoja: string;
   produtoId?: string;
   formato: Extract<Formato, "drip" | "capsula">;
+  /**
+   * O nome cru do SKU na loja ("Café Canastra Drip Coffee Suave - Display com
+   * 10 unidades"). NENHUMA TELA O MOSTRA hoje — a PDP lista estes formatos pelo
+   * `rotuloEmbalagem`, que é o que distingue um do outro dentro da mesma linha.
+   * Continua no contrato porque é a rastreabilidade até o catálogo da loja, e
+   * por isso também não se traduz: traduzir texto que ninguém lê é inventar
+   * manutenção.
+   */
   nome: string;
+  /**
+   * Em português e sempre — ver o campo homônimo em `Variante`. Este é dos que
+   * VÃO à tela (a lista "Também nesta linha" da PDP, o card de kit), e quem o
+   * desenha o traduz na hora com `rotuloDaEmbalagem()`.
+   */
   rotuloEmbalagem: string;
+  /** A chave estável do rótulo — ver `Variante.rotuloChave`. */
+  rotuloChave?: string;
   unidades: number;
   /** Em centavos. 0 quando a loja não exibe preço por estar esgotado. */
   preco: number;
@@ -101,8 +138,21 @@ export type Kit = {
   sku: string;
   skuLoja: string;
   produtoId?: string;
+  /**
+   * O nome da caixa, JÁ NO IDIOMA DA PÁGINA. Ao contrário do nome de linha,
+   * que é nome próprio impresso no pacote, o nome de kit é descrição — "Caixa
+   * com 1 pacote de 250 gramas de cada" não é marca nenhuma. Quem o troca é
+   * `traduzirKit()`, com o texto de `data/catalogo-canastra.i18n.json`.
+   */
   nome: string;
+  /**
+   * Em português e sempre — ver o campo homônimo em `Variante`. Este é dos que
+   * VÃO à tela (a lista "Também nesta linha" da PDP, o card de kit), e quem o
+   * desenha o traduz na hora com `rotuloDaEmbalagem()`.
+   */
   rotuloEmbalagem: string;
+  /** A chave estável do rótulo — ver `Variante.rotuloChave`. */
+  rotuloChave?: string;
   formato: Formato;
   /** Linha "dominante" do kit no catálogo — define fita de cor e imagem. */
   linha: Linha;
@@ -153,6 +203,16 @@ export type Preparo = {
 export type Origem = {
   regiao: string;
   estado: string;
+  /**
+   * OS SELOS DA COLEÇÃO, E AQUI ESTÁ GUARDADA A CHAVE, NUNCA O TEXTO —
+   * `carbono-zero`, e não "Carbono zero".
+   *
+   * É a mesma regra das tabelas lá embaixo, e ela chegou tarde neste campo: a
+   * lista vinha de `marca.atributos` em português e ia crua para os chips da
+   * `<FichaLavoura>`, numa ficha cujo rótulo e cuja definição já estavam
+   * traduzidos. O texto está em `catalogo.atributo` no dicionário; quem o lê é
+   * `rotuloDoAtributo()`.
+   */
   atributos: string[];
 };
 

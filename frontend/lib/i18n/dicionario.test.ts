@@ -52,6 +52,16 @@ const IGUAIS_DE_PROPOSITO: Record<Exclude<Locale, "pt">, string[]> = {
     "catalogo.metodo.aeropress",
     // Nome do produto impresso na caixa da loja.
     "catalogo.formato.drip",
+    // A PLAQUETA DA EMBALAGEM, e as duas linhas são o mesmo caso por dois
+    // caminhos. `sobrancelha` é a palavra que a caixa de Drip Coffee estampa
+    // acima de "ESPECIAL": ela é reprodução do que está impresso, não tradução,
+    // e por isso é idêntica nos três idiomas — em inglês ela coincide com
+    // `selo.especial`, e é essa coincidência que o <SeloSCA> detecta para não
+    // escrever "Specialty" duas vezes na mesma plaqueta.
+    "catalogo.selo.sobrancelha",
+    // `Gourmet` é empréstimo do francês nas três línguas, e é o que está
+    // impresso no pacote do Néctar de Minas.
+    "catalogo.selo.gourmet",
   ],
   es: [
     "nav.principal",
@@ -99,6 +109,19 @@ const IGUAIS_DE_PROPOSITO: Record<Exclude<Locale, "pt">, string[]> = {
     // "Notas de cacao" é como o espanhol escreve — a mesma forma do português.
     // Em inglês a ficha de prova diz "tasting notes", e lá a chave diverge.
     "pdp.notasDe",
+    // "5 de 5" se lê igual nas duas línguas — o mesmo caso de
+    // `avaliacoes.deCinco`, agora na régua do ponto de torra.
+    "catalogo.escala.deCinco",
+    // Os dois selos que se escrevem igual: "100% arábica" com o mesmo acento, e
+    // "Vegano" com a mesma forma. Os outros quatro divergem e não estão aqui.
+    "catalogo.atributo.arabica",
+    "catalogo.atributo.vegano",
+    // A plaqueta da embalagem. Em espanhol a classificação também é "Especial",
+    // e a sobrancelha em inglês é a que a caixa estampa — a plaqueta sai igual
+    // à do pacote, "Specialty / Especial / SCA 80+". Ver a nota do `en`.
+    "catalogo.selo.especial",
+    "catalogo.selo.gourmet",
+    "catalogo.selo.sobrancelha",
   ],
 };
 
