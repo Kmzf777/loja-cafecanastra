@@ -196,6 +196,26 @@ function FormularioDeCadastro() {
           Abra o link no mesmo navegador em que você se cadastrou. Se não
           chegar em alguns minutos, confira o lixo eletrônico.
         </p>
+        {/*
+          A PERDA DITA EM VOZ ALTA, e ela é a regra e não a exceção: com
+          confirmação de e-mail ligada este é o caminho de TODO MUNDO, e nele o
+          `signUp` não devolve sessão — `garantir_cliente` não roda, e o número
+          não tem onde ser guardado. Ele não pode ir junto no link: telefone não
+          viaja em `user_metadata` (o JWT desta instância compartilhada
+          acompanha a pessoa para outros projetos), e guardá-lo no navegador
+          quebraria justamente quem abre o link no celular.
+
+          Calar isto seria a pior versão: a pessoa digitou o número num campo
+          obrigatório, leu que avisaríamos o pedido, e ficaria esperando uma
+          mensagem que nunca sai. A frase transforma a perda silenciosa numa
+          instrução de uma linha — e o bloco de WhatsApp da área da conta é
+          quem a cumpre.
+        */}
+        <p className="mt-4 text-[15px] text-fuligem-55">
+          Seu WhatsApp não vai junto no link. Depois de confirmar, deixe o
+          número na sua conta — é aí que passamos a avisar os pedidos por
+          mensagem.
+        </p>
 
         {reenvio && reenvio !== "enviando" ? (
           <p role="status" className="mt-5 text-[14px] text-fuligem-80">
