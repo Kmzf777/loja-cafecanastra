@@ -31,6 +31,22 @@
 **Ordem:** as três tasks são independentes e podem ser feitas em qualquer ordem, ou em
 paralelo. A Task 4 (verificação final) roda depois das três.
 
+### Disciplina de teste: ver o teste morder
+
+Ver o teste falhar antes de implementar não basta — ele pode falhar pelo motivo errado
+(um `TypeError` de import ausente falha em qualquer teste, inclusive num que não afirma
+nada). Depois de o teste passar, **quebre a implementação de propósito** e confirme que o
+teste específico falha:
+
+- apague a linha que o teste diz guardar;
+- rode só aquele arquivo;
+- confirme a falha, restaure, confirme que volta a passar.
+
+Isto não é zelo excessivo: a primeira versão da Task 1 tinha uma asserção que passava
+mesmo com a implementação inteira apagada, porque casava com um literal fixo do template.
+Só a mutação revelou. Se o teste sobrevive à mutação, ele não guarda o que o nome dele
+promete — reescreva-o antes de commitar.
+
 ---
 
 ## Estrutura de arquivos
@@ -76,7 +92,7 @@ Criar `backend/test/email_status.test.js`:
  * EMAIL_PASS2, e `pgPool` so constroi o Pool (nao conecta).
  */
 
-const { test, after } = require("node:test");
+const { test } = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
@@ -89,17 +105,14 @@ const PEDIDO = {
   total_amount: 149.9,
 };
 
-after(async () => {
-  // O Pool nunca conectou, entao isto resolve na hora; e a garantia de que o
-  // runner nao fica pendurado num handle aberto.
-  await require("../src/pgPool.js").end().catch(() => {});
-});
+// SEM after() fechando o pgPool: as duas funcoes sao puras e o Pool e
+// preguicoso — nada conectou, entao nao ha handle para o runner segurar.
 
 test("o nome do cliente sai escapado no corpo do e-mail", () => {
   const conteudo = conteudoDoStatus(
     "aprovado",
     PEDIDO,
-    '<img src=x onerror=alert(1)>',
+    "<img src=x onerror=alert(1)>",
     null,
   );
   const html = corpoDoEmailDeStatus(conteudo, PEDIDO);
@@ -126,9 +139,11 @@ test("a quebra de linha do rastreio continua virando <br/>", () => {
   const conteudo = conteudoDoStatus("enviado", PEDIDO, "Ana", "PY123BR");
   const html = corpoDoEmailDeStatus(conteudo, PEDIDO);
 
-  // O escape nao pode comer o <br/> que o template injeta: escaparHtml nao
-  // toca \n, entao o replace acontece DEPOIS e continua produzindo marcacao.
-  assert.ok(html.includes("<br/>"), "o \\n deveria ter virado <br/>");
+  // O \n tem de chegar como <br/> DE VERDADE, e a assercao precisa provar isso:
+  // `includes("<br/>")` sozinho passaria pelo <br/> FIXO do template (o que fica
+  // antes do link "Ver Meus Pedidos"), e por isso nao falharia nem se o replace
+  // fosse apagado inteiro. Ancorar no texto seguinte e o que a torna real.
+  assert.match(html, /<br\/>Seu código de rastreio é: PY123BR/);
   assert.ok(!html.includes("&lt;br/&gt;"), "o <br/> do template foi escapado");
 });
 
@@ -608,8 +623,13 @@ test("retirada segue devolvendo zero sem cotar", async () => {
 test("com frete gratis, o casamento por nome ainda identifica a opcao", async () => {
   // Piso default de 0009: 14900 centavos. Acima dele TODA opcao vira price 0
   // (ShippingController) — e o preco sozinho deixa de distinguir qualquer coisa.
+  //
+  // QUANTIDADE 2, DE PROPOSITO: com 3 ou mais a Entrega Local ja custa 0 pela
+  // regra local (ShippingController:91), e o teste passaria sem nunca exercitar
+  // o piso. Com 2 o preco base e 5, entao o zero so pode ter vindo do frete
+  // gratis. 2 × R$ 80 = R$ 160 = 16000 centavos, acima do piso de 14900.
   const itensCaros = [
-    { product_id: "11111111-0000-0000-0000-000000000001", quantity: 4, price: 50 },
+    { product_id: "11111111-0000-0000-0000-000000000001", quantity: 2, price: 80 },
   ];
 
   const conferido = await conferirFrete({
