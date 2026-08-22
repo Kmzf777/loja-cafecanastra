@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Serra } from "@/components/marca/Serra";
 import { BotaoLink } from "@/components/ui/Botao";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale, type Locale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { HISTORIA } from "./conteudo";
 
@@ -50,6 +50,19 @@ const OG_LOCALE: Record<Locale, string> = {
   en: "en_US",
   es: "es_ES",
 };
+
+/**
+ * As três versões saem prontas do build — e esta é a página que mais tinha a
+ * perder sem isso: todo o conteúdo dela é constante de `conteudo.ts`, sem uma
+ * única leitura de rede, e mesmo assim o segmento `[locale]` sem
+ * `generateStaticParams` a fazia renderizar de novo a cada visita. Por não ter
+ * dado que envelhece, ela também não precisa de `revalidate`: o HTML gerado no
+ * build vale até o próximo deploy. A explicação longa está na home
+ * ((vitrine)/page.tsx).
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 /**
  * `generateMetadata` e não um `metadata` constante porque o canônico precisa
@@ -207,9 +220,22 @@ export default async function PaginaHistoria({
             key={registro.ancora}
             id={registro.ancora}
             aria-labelledby={`${registro.ancora}-titulo`}
-            // O cabeçalho é `sticky` (72px em telefone, 92px a partir de md):
-            // sem `scroll-mt`, clicar no índice esconde o ano atrás dele.
-            className={`scroll-mt-[72px] py-12 md:scroll-mt-[92px] md:py-20 ${tom.secao}`}
+            // O CABEÇALHO GRUDENTO, MEDIDO — sem `scroll-mt`, clicar num ano
+            // do índice para com o registro atrás da barra.
+            //
+            // O CORTE É `xl`, NÃO `md`. Esta página foi escrita quando a barra
+            // crescia em 768px; depois dela, a costura moveu a barra alta para
+            // 1280px (components/layout/Cabecalho.tsx explica por quê: em
+            // inglês a navegação só cabe a partir de 1.185px). O desconto
+            // ficou para trás — entre 768px e 1279px ele reservava 92px para
+            // uma barra que voltou a medir 72, e a rolagem parava com um vão
+            // de 13px onde o desenho pede o registro encostado.
+            //
+            // E OS NÚMEROS CERTOS SÃO 79 E 99, não 72 e 92: o que cobre o
+            // registro é o bloco grudento INTEIRO — a linha da barra (72px,
+            // `xl:92px`) mais a serra de 6px que a fecha mais o filete de 1px.
+            // Com 72, em telefone, o topo da seção parava 7px atrás da barra.
+            className={`scroll-mt-[79px] py-12 md:py-20 xl:scroll-mt-[99px] ${tom.secao}`}
           >
             <div className="mx-auto max-w-[1440px] px-4 md:px-10">
               <div
@@ -223,10 +249,16 @@ export default async function PaginaHistoria({
 
                   `md:sticky` é o que faz a coluna virar linha do tempo — o ano
                   acompanha a leitura do próprio capítulo e sai de cena quando
-                  o próximo empurra. 108px = os 92px do cabeçalho mais folga.
+                  o próximo empurra.
+
+                  O `top` acompanha o mesmo corte do `scroll-mt` acima, pela
+                  mesma medição: 79px de cabeçalho até `xl`, 99px a partir
+                  dele, mais 16px de folga. O valor único de 108px vinha de
+                  quando a barra alta começava em 768px, e deixava o ano
+                  boiando 29px abaixo da barra em todo o intervalo de tablet.
                 */}
                 <p
-                  className={`font-dado text-[2rem] leading-none tracking-[-0.02em] md:sticky md:top-[108px] md:self-start md:text-[2.75rem] ${tom.ano}`}
+                  className={`font-dado text-[2rem] leading-none tracking-[-0.02em] md:sticky md:top-[95px] md:self-start md:text-[2.75rem] xl:top-[115px] ${tom.ano}`}
                 >
                   {registro.rotuloDoAno}
                 </p>

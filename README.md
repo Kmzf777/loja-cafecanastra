@@ -18,12 +18,32 @@ assinatura. Café de origem única da Serra da Canastra, em Minas Gerais.
 Português, inglês e espanhol. **As URLs em português não mudaram**: `pt` é o
 padrão e não aparece no endereço — o middleware faz um *rewrite* interno de
 `/cafes` para `/pt/cafes`, então nenhum link, nenhum backlink e nenhuma entrada
-de sitemap existente quebrou. `/en/cafes` e `/es/cafes` são reais e têm
-`hreflang` completo e recíproco.
+de sitemap existente quebrou. `/en/cafes` e `/es/cafes` são reais, e o
+`hreflang` deles é completo e recíproco porque sai das **mesmas** funções de
+`lib/i18n/rotas.ts` que montam o sitemap — um conjunto que o sitemap
+contradissesse seria descartado inteiro pelo buscador.
 
-**Traduzido:** home, catálogo (PLP e PDP, com o editorial dos cinco cafés),
-`/clube`, `/a-serra`, `/historia`, `/bio`, `/rastreabilidade`, termos,
-privacidade, cabeçalho e rodapé.
+**Vivem sob `[locale]`, e portanto existem nos três endereços:** home, catálogo
+(PLP e PDP, com o editorial dos cinco cafés), `/clube`, `/a-serra`,
+`/historia`, `/bio`, `/rastreabilidade`, termos, privacidade, mais o cabeçalho
+e o rodapé, que a moldura monta para os dois grupos de rota.
+
+**O que trava tradução esquecida, e até onde a trava chega.** Todo texto
+traduzido entra por um de dois lugares: `frontend/lib/i18n/dicionario.ts`, cujo
+`pt` é a fonte do tipo, ou um `conteudo.ts` ao lado da página, tipado
+`Record<Locale, …>`. Nos dois casos **falta de chave em `en` ou `es` quebra o
+build**, e é isso que impede uma tradução esquecida de virar `undefined` na
+tela. Mas a trava só alcança o que passa por ali: **uma string escrita direto
+no JSX não passa por tipo nenhum**, e não existe varredura automática contra
+português cravado na superfície traduzida. Enquanto não existir, a conferência
+é esta, e ela custa dez segundos:
+
+```bash
+# Toda página da vitrine tem de ler o dicionário ou um conteudo.ts ao lado.
+# Saída vazia é o estado correto; o que aparecer aqui serve português
+# dentro de /en e /es, respondendo 200 e sem quebrar nada.
+grep -rL "i18n/dicionario\|\./conteudo" --include="page.tsx" 'frontend/app/[locale]'
+```
 
 **Não traduzido, e isto é decisão do cliente, não pendência:** sacola,
 checkout, conta, `/pedido/[id]`, e-mails e painel. O frete é Melhor Envio (só
@@ -119,7 +139,10 @@ npm --prefix backend test   # 398 testes: pagamento, banco (RLS, migrações, RP
                             # Sobe um PostgreSQL temporário POR ARQUIVO — sem
                             # disco livre o initdb falha e ~175 testes caem em
                             # bloco. É a máquina, não o código
-npm test                    # 579 testes da vitrine (vitest, 42 arquivos)
+npm test                    # a vitrine no vitest: 45 arquivos e ao menos 658
+                            # testes em 22/08/2026. O número é um PISO — sobe a
+                            # cada onda, e o que não pode é cair. Rode de dentro
+                            # de frontend/, senão o vitest.config.ts nem carrega
 npm run verifica:rls        # a fronteira de RLS contra uma instância Supabase real
 npm run verifica            # 37 checagens num Chromium (exige tudo no ar)
 ```
@@ -134,7 +157,9 @@ painel, login pelo GoTrue, as rotas do painel, os 29 SKUs, PLP, PDP, sacola e
 checkout. Exige backend, Next e banco no ar ao mesmo tempo, e o caminho do
 Chromium está fixo no script (`frontend/scripts/verifica-fluxo.mjs`) — ajuste-o
 para a sua máquina. Ele **não** cobre as superfícies mais novas: cupom, cartão,
-Clube, avaliações e `/pedido/[id]` só têm cobertura nas suítes acima.
+Clube, avaliações e `/pedido/[id]` só têm cobertura nas suítes acima. **E ele
+não abre uma única URL em `/en` ou `/es`** — o i18n é verificado por tipo (o
+dicionário quebrando o build) e pelo vitest, não por este script.
 
 ---
 
@@ -178,8 +203,9 @@ frontend/
                               páginas — 42 URLs, rota × idioma
   lib/i18n/                   os três idiomas: tipos, o dicionário tipado (o
                               `pt` é a fonte do tipo, e o build quebra se
-                              faltar chave em `en` ou `es`) e o `href()` por
-                              onde TODO link da vitrine passa
+                              faltar chave em `en` ou `es`) e o `href()`, por
+                              onde os links da vitrine passam para não jogar
+                              quem lê em inglês de volta no português
   lib/supabase/               clientes do navegador e do servidor, tipos, ambiente
   lib/catalogo/               contrato do catálogo, a fusão do comercial ao vivo
                               e a fusão do editorial traduzido

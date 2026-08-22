@@ -1,12 +1,26 @@
+import { dicionario } from "../i18n/dicionario";
+import type { Locale } from "../i18n/tipos";
 import type { Linha } from "./tipos";
 
 /**
- * Rotulos de exibicao e mapas de cor.
+ * Apresentacao do catalogo: a cor de cada linha e os dois rotulos de CHAVE
+ * ABERTA — a nota de sabor e o ponto de torra.
  *
- * Ficam aqui, ao lado de MOAGENS em tipos.ts, para que os componentes nao
- * inventem cada um a sua traducao. As `notas` sao gravadas em kebab-case sem
- * acento no contrato (`castanha-do-para`) porque sao chave de filtro; a forma
- * legivel e responsabilidade desta camada, nunca do componente.
+ * O TEXTO NAO MORA MAIS AQUI, e essa e a mudanca. `LINHAS`, `PONTO_TORRA` e
+ * `NOTAS_IRREGULARES` eram tabelas de valor unico em portugues, e alimentavam
+ * os filtros da PLP, os chips, a escala de torra e a ficha da PDP em qualquer
+ * idioma. Todo o texto passou para `lib/i18n/dicionario.ts`, em `catalogo.*`,
+ * chaveado pelo proprio valor do contrato; quem quer o rotulo de um valor
+ * fechado le `d.catalogo.moagem.grao` direto, como le `d.nav.cafes`.
+ *
+ * SO SOBRARAM FUNCOES PARA AS DUAS CHAVES ABERTAS, e e por isso que elas sao
+ * funcao: as duas podem receber uma chave que o dicionario nao tem, e sem um
+ * fallback a tela mostraria `undefined`. As `notas` continuam gravadas em
+ * kebab-case sem acento no contrato (`castanha-do-para`) porque sao chave de
+ * filtro; a forma legivel e responsabilidade desta camada, nunca do
+ * componente.
+ *
+ * IMPORTS RELATIVOS, nao `@/`: o vitest.config.ts nao resolve o alias.
  */
 
 /**
@@ -14,61 +28,53 @@ import type { Linha } from "./tipos";
  * inventada. Preto (Clássico), kraft (Suave), vermelho (Canela) vêm da tabela
  * de ativos do §1; o barro do Microlote vem do papel do stand-up pouch, e a
  * mata do Néctar de Minas o separa do Clássico, com quem divide o pacote preto.
+ *
+ * SÓ A COR: o nome da linha saiu daqui para `catalogo.linha` no dicionário.
+ * Cor não tem idioma, e era a mistura das duas coisas num mapa só que fazia
+ * um componente importar a tabela de cores para escrever um rótulo.
  */
-export const LINHAS: Record<Linha, { rotulo: string; corVar: string }> = {
-  classico: { rotulo: "Clássico", corVar: "var(--color-fuligem)" },
-  suave: { rotulo: "Suave", corVar: "var(--color-juta)" },
-  canela: { rotulo: "Canela", corVar: "var(--color-vermelho)" },
-  microlote: { rotulo: "Microlote", corVar: "var(--color-barro)" },
-  "nectar-de-minas": { rotulo: "Néctar de Minas", corVar: "var(--color-mata)" },
+export const COR_DA_LINHA: Record<Linha, string> = {
+  classico: "var(--color-fuligem)",
+  suave: "var(--color-juta)",
+  canela: "var(--color-vermelho)",
+  microlote: "var(--color-barro)",
+  "nectar-de-minas": "var(--color-mata)",
 };
 
-/** estetica.md §5.3 — a escala 1-5 sempre acompanhada do texto, nunca so a barra. */
-export const PONTO_TORRA: Record<number, string> = {
-  1: "Torra clara",
-  2: "Torra clara-média",
-  3: "Torra média",
-  4: "Torra média-escura",
-  5: "Torra escura",
-};
+/**
+ * O texto da escala 1-5 (estetica.md §5.3: a barra NUNCA aparece sozinha).
+ *
+ * Recebe `number` e não `1 | 2 | 3 | 4 | 5` porque o valor também chega da
+ * querystring da PLP (`?torraMin=9`), que não passa por tipo nenhum. Fora da
+ * escala, devolve a palavra "Torra" — o mesmo rótulo de eixo que a ficha da
+ * PDP usa, no idioma certo, em vez de um `undefined` no chip do filtro.
+ */
+export function rotuloPontoTorra(valor: number, locale: Locale): string {
+  const d = dicionario(locale);
+  // O dicionário tipa a escala com as cinco chaves literais; aqui a leitura é
+  // por número aberto, e é este alias que diz isso ao compilador.
+  const escala: Record<number, string> = d.catalogo.pontoTorra;
+  return escala[valor] ?? d.catalogo.ficha.rotulo.torra;
+}
 
-const NOTAS_IRREGULARES: Record<string, string> = {
-  "castanha-do-para": "Castanha-do-pará",
-  "doce-de-leite": "Doce de leite",
-  "amendoim-torrado": "Amendoim torrado",
-  "chocolate-meio-amargo": "Chocolate meio amargo",
-  "laranja-da-terra": "Laranja-da-terra",
-  "milho-torrado": "Milho torrado",
-  amadeirado: "Amadeirado",
-  especiarias: "Especiarias",
-  chocolate: "Chocolate",
-  castanha: "Castanha",
-  jabuticaba: "Jabuticaba",
-  // As três que entraram com as notas publicadas pela marca. Ficam aqui, e não
-  // no fallback, porque o fallback só sabe trocar hífen por espaço: ele
-  // devolveria "Melaco" e "Citrico", sem os acentos que a palavra tem.
-  caramelo: "Caramelo",
-  melaco: "Melaço",
-  citrico: "Cítrico",
-  frutado: "Frutado",
-  floral: "Floral",
-  amendoa: "Amêndoa",
-  pessego: "Pêssego",
-  baunilha: "Baunilha",
-  rapadura: "Rapadura",
-  cacau: "Cacau",
-  canela: "Canela",
-  cravo: "Cravo",
-  doce: "Doçura",
-  cana: "Cana",
-  mel: "Mel",
-};
-
-/** Kebab-case do contrato para texto de tela. */
-export function rotuloNota(nota: string): string {
+/**
+ * Kebab-case do contrato para texto de tela, no idioma da página.
+ *
+ * DUAS PORTAS, E AS DUAS PRECISAM EXISTIR:
+ *
+ *   1. A chave canônica em português (`melaco`, `citrico`) está no dicionário
+ *      nos três idiomas. Era aqui que estava o defeito: um mapa só, em
+ *      português, aplicado em qualquer idioma — a ficha em inglês recebia
+ *      "Melaço", com cedilha.
+ *   2. A chave que o editorial traduzido grava já no idioma dele (`molasses`,
+ *      `melaza`) não está no dicionário de propósito, e cai no fallback, que
+ *      só troca hífen por espaço e sobe a primeira letra. É o que devolve
+ *      "Molasses" para o inglês sem uma segunda tabela por idioma.
+ */
+export function rotuloNota(nota: string, locale: Locale): string {
+  const notas: Record<string, string> = dicionario(locale).catalogo.nota;
   return (
-    NOTAS_IRREGULARES[nota] ??
-    nota.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase())
+    notas[nota] ?? nota.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase())
   );
 }
 

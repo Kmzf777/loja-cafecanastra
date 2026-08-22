@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { PaginaTexto, AvisoJuridico } from "@/components/layout/PaginaTexto";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale, type Locale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import {
   TERMOS,
   AVISO_DE_TRADUCAO,
@@ -28,6 +28,22 @@ import { aceitaCartao } from "./pagamento";
  * cada `<h2>` — sem ele, uma âncora compartilhada (`#trocas-e-devolucoes`) para
  * debaixo do cabeçalho grudento e o leitor cai no meio da cláusula anterior.
  */
+
+/**
+ * As três versões saem prontas do build, e esta página já dependia disso sem
+ * declarar: `pagamento.ts` diz, com todas as letras, que a condicional do
+ * cartão "funciona porque os dois lados são resolvidos em tempo de BUILD: a
+ * página é estática". Ao entrar no segmento `[locale]` ela deixou de ser, e a
+ * afirmação virou meia verdade — a `NEXT_PUBLIC_*` continuava assada no
+ * bundle, mas o HTML passou a ser remontado a cada visita para chegar sempre
+ * ao mesmo resultado. A explicação longa está na home ((vitrine)/page.tsx).
+ *
+ * Sem `revalidate`: o texto só muda por deploy, que é quando o documento
+ * jurídico de fato muda.
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 export async function generateMetadata({
   params,

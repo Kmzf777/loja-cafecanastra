@@ -68,6 +68,8 @@
  * de novo. Ver `novoSelo()` e o bloco de divergência em `executarFusao`.
  */
 import { MOAGENS } from "../catalogo/tipos";
+import { dicionario } from "../i18n/dicionario";
+import { LOCALE_PADRAO } from "../i18n/tipos";
 import { recuperarSessao } from "../conta/sessao";
 import { clienteNavegador } from "../supabase/cliente";
 import type { ItemParaFundir, Tabelas } from "../supabase/tipos";
@@ -208,10 +210,18 @@ function chaveDoItem(item: { product_id: string; moagem?: string }): string {
 const GRAO = /\bgr[aã]os?\b/;
 
 export function normalizarMoagem(bruto: string): string {
-  // Os rótulos saem de MOAGENS e não de literais: renomear "Moído" na vitrine
-  // sem trazer a sacola junto criaria de novo duas grafias para a mesma coisa.
+  // Os rótulos saem do dicionário e não de literais: renomear "Moído" na
+  // vitrine sem trazer a sacola junto criaria de novo duas grafias para a
+  // mesma coisa.
+  //
+  // E SEMPRE EM PORTUGUÊS, EM QUALQUER IDIOMA DA VITRINE: a sacola, o checkout
+  // e a conta são pt-BR por decisão (spec §1), e este rótulo é DADO GRAVADO —
+  // ele entra em `chaveDoItem`, viaja para a RPC e volta na próxima sessão.
+  // Gravar "Ground" para quem comprou em /en e "Moído" para quem comprou em
+  // /pt partiria o mesmo produto em duas linhas na tela do cliente.
   const [grao, moido] = MOAGENS;
-  return GRAO.test(bruto.toLowerCase()) ? grao.rotulo : moido.rotulo;
+  const rotulos = dicionario(LOCALE_PADRAO).catalogo.moagem;
+  return GRAO.test(bruto.toLowerCase()) ? rotulos[grao] : rotulos[moido];
 }
 
 /**

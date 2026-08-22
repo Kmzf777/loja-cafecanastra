@@ -11,6 +11,10 @@ import { buscarCep, cepCompleto, formatarCep, limparCep } from "@/lib/cep";
 // Receita, já cobertos por lib/cpf.test.ts. Nada de segunda implementação.
 import { formatarCpf, limparCpf, validarCpf } from "@/lib/cpf";
 import { clienteNavegador } from "@/lib/supabase/cliente";
+import { dicionario } from "@/lib/i18n/dicionario";
+import { href } from "@/lib/i18n/rotas";
+import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
+import { textosDoClube } from "./conteudo";
 import { buscarEndereco, type Endereco } from "@/lib/sacola/checkout";
 import {
   FREQUENCIAS_DIAS,
@@ -20,6 +24,7 @@ import {
   preSelecaoDaQuery,
   precoPorEnvio,
   varianteDoClube,
+  type FalhaDaAssinatura,
   type FrequenciaDias,
   type OpcaoDoClube,
 } from "@/lib/clube";
@@ -40,6 +45,15 @@ import {
  * Mercado Pago — é LÁ que o cliente autoriza a cobrança recorrente. Sem
  * sessão, vai ao login com ?de=/clube e volta — com o RASCUNHO
  * (`CHAVE_DO_RASCUNHO`) reidratando os três passos, endereço incluído.
+ *
+ * O `locale` ENTRA POR PROP, e é o que fecha a pendência declarada aqui: o
+ * texto inteiro deste formulário — rótulos, erros de validação, títulos de
+ * passo, botões e o resumo — vinha de constantes em português e saía assim nos
+ * três idiomas. Esta é a tela em que o cliente AUTORIZA COBRANÇA RECORRENTE:
+ * texto ambíguo aqui custa dinheiro, e texto em outra língua custa a adesão
+ * inteira. As frases vivem em `conteudo.ts`, ao lado da página; os rótulos de
+ * moagem continuam vindo do dicionário, para PDP, PLP e wizard dizerem a mesma
+ * palavra.
  *
  * O foco acompanha a troca de passo (`tituloDoPasso`): o fieldset desmonta
  * inteiro, e sem isso o teclado ficava perdido no `body`.
@@ -105,6 +119,16 @@ type Rascunho = {
 };
 
 /**
+ * A recusa exibida, com a procedência da frase.
+ *
+ * `doServidor` decide como ela é DESENHADA fora do português: a frase do
+ * backend é pt-BR por decisão (spec §1) e específica demais para se jogar
+ * fora, mas mostrá-la crua no meio de uma página em inglês faz o site parecer
+ * quebrado. Ver `FalhaDaAssinatura` em lib/clube.ts.
+ */
+type ErroExibido = { texto: string; doServidor: boolean };
+
+/**
  * O CPF que a conta JÁ tem (`canastra.clientes.cpf`), para quem comprou avulso
  * antes não redigitar o número na adesão — a mesma cortesia do endereço salvo
  * logo acima. A política `clientes_dono_le` (0006) garante que só o dono lê a
@@ -155,6 +179,41 @@ function consumirRascunho(): Rascunho | null {
   }
 }
 
+/**
+ * A recusa na tela.
+ *
+ * Em português a frase do servidor É a resposta. Fora dele, a tela diz a
+ * genérica traduzida e mostra a do servidor abaixo, rotulada e marcada
+ * `lang="pt-BR"` — o leitor de tela troca de voz em vez de soletrar português
+ * com fonemas ingleses, e o visitante entende que aquilo é a loja falando, não
+ * a página quebrada.
+ *
+ * FORA DO COMPONENTE de propósito: definida dentro, ela seria um tipo novo a
+ * cada render e o React remontaria o alerta a cada tecla digitada — o que
+ * refaz o anúncio do `role="alert"` do zero.
+ */
+function Recusa({
+  erro,
+  textos,
+  locale,
+}: {
+  erro: ErroExibido;
+  textos: ReturnType<typeof textosDoClube>["wizard"]["erros"];
+  locale: Locale;
+}) {
+  const separar = erro.doServidor && locale !== LOCALE_PADRAO;
+  return (
+    <div role="alert" className="mt-4 text-[14px] text-cal">
+      <p>{separar ? textos.falha : erro.texto}</p>
+      {separar ? (
+        <p className="mt-1.5 text-[13px] text-cal/70">
+          {textos.respostaDaLoja} <span lang="pt-BR">{erro.texto}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function botaoDeOpcao(ativo: boolean, existe = true) {
   return [
     "border px-3 py-2.5 text-left text-[13px] transition-colors",
@@ -166,8 +225,22 @@ function botaoDeOpcao(ativo: boolean, existe = true) {
   ].join(" ");
 }
 
-export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
+export function AssinaturaWizard({
+  opcoes,
+  locale,
+}: {
+  opcoes: OpcaoDoClube[];
+  locale: Locale;
+}) {
   const router = useRouter();
+
+  const t = textosDoClube(locale).wizard;
+  /**
+   * "Grão" e "Moído" vêm do DICIONÁRIO, e não de `conteudo.ts`, porque o mesmo
+   * par de palavras rotula o seletor da PDP e o filtro da PLP. Duas fontes para
+   * o mesmo rótulo é como um site passa a chamar a mesma coisa de dois nomes.
+   */
+  const rotuloDaMoagem = dicionario(locale).catalogo.moagem;
 
   const [passo, setPasso] = useState<1 | 2 | 3>(1);
   const [slug, setSlug] = useState(opcoes[0]?.slug ?? "");
@@ -182,7 +255,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
   // do passo 3 não PISCAR para quem está logado enquanto a checagem corre.
   const [sessaoConferida, setSessaoConferida] = useState(false);
   const [assinando, setAssinando] = useState(false);
-  const [erro, setErro] = useState<string | null>(null);
+  const [erro, setErro] = useState<ErroExibido | null>(null);
 
   const opcao = useMemo(
     () => opcoes.find((o) => o.slug === slug) ?? opcoes[0],
@@ -342,17 +415,22 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
   const porEnvio = variante ? precoPorEnvio(variante.precoCentavos, quantidade) : 0;
   const economia = variante ? economiaPorEnvio(variante.precoCentavos, quantidade) : 0;
 
+  /** Recusa nascida AQUI: sempre no idioma da página. */
+  function recusar(texto: string) {
+    setErro({ texto, doServidor: false });
+  }
+
   async function aoAssinar() {
     if (!variante || esgotado) return;
     setErro(null);
 
     // Contingência (API fora): sem preço do banco não se promete cobrança.
     if (!variante.aoVivo) {
-      setErro("Não conseguimos falar com a loja agora. Tente de novo em instantes.");
+      recusar(t.erros.semLoja);
       return;
     }
     if (!enderecoCompleto) {
-      setErro("Preencha o endereço de entrega: CEP, rua, número, cidade e UF.");
+      recusar(t.erros.endereco);
       return;
     }
     /**
@@ -363,9 +441,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
      * conferência aqui só evita a ida inútil e diz o motivo na hora.
      */
     if (!cpfValido) {
-      setErro(
-        "Informe um CPF válido: ele é o dado da nota fiscal de cada envio.",
-      );
+      recusar(t.erros.cpf);
       return;
     }
 
@@ -385,7 +461,15 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
         cpf,
         endereco,
       });
-      router.push("/account/login?de=/clube");
+      /**
+       * O `?de=` VOLTA PARA A /clube DO IDIOMA EM QUE A PESSOA ESTAVA. Cravar
+       * "/clube" mandava quem entrou por /en/clube de volta ao português no
+       * meio da adesão — e o rascunho reidratava três passos numa página que
+       * ela não sabe ler. O login é pt-BR por decisão (spec §1) e por isso o
+       * caminho dele não passa por `href()`; o destino da volta passa.
+       */
+      const volta = encodeURIComponent(href(locale, "/clube"));
+      router.push(`/account/login?de=${volta}`);
       return;
     }
 
@@ -400,12 +484,20 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
           cpf: cpfDigitos,
           endereco,
         }),
+        fetch,
+        { falha: t.erros.falha, semInitPoint: t.erros.semInitPoint },
       );
       // A autorização acontece NO Mercado Pago; a volta cai em
       // /account?assinatura=confirmada (back_url do preapproval).
       window.location.assign(initPoint);
     } catch (e) {
-      setErro(e instanceof Error ? e.message : "Não foi possível assinar agora.");
+      const falha = e as Partial<FalhaDaAssinatura>;
+      setErro({
+        texto: falha?.message || t.erros.falha,
+        // Só a frase que o servidor mandou é pt-BR garantido; qualquer outra
+        // coisa que caia aqui (rede, JSON quebrado) sai no idioma da página.
+        doServidor: falha?.doServidor === true,
+      });
       setAssinando(false);
     }
   }
@@ -425,7 +517,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
         aria-live="polite"
         className="font-dado text-[12px] uppercase tracking-[0.1em] text-juta"
       >
-        Passo {passo} de 3
+        {t.passoDeTres(passo)}
       </p>
       <div className="mt-3 grid grid-cols-3 gap-px bg-cal/20" aria-hidden>
         {[1, 2, 3].map((n) => (
@@ -436,10 +528,10 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
       {passo === 1 ? (
         <fieldset className="mt-8">
           <legend ref={tituloDoPasso} tabIndex={-1} className={TITULO_DO_PASSO}>
-            Qual café, e como?
+            {t.passo1.titulo}
           </legend>
 
-          <p className={`mt-6 ${ROTULO_MATA}`}>Café</p>
+          <p className={`mt-6 ${ROTULO_MATA}`}>{t.passo1.cafe}</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {opcoes.map((o) => (
               <button
@@ -461,30 +553,30 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
             ))}
           </div>
 
-          <p className={`mt-6 ${ROTULO_MATA}`}>Moagem</p>
+          <p className={`mt-6 ${ROTULO_MATA}`}>{t.passo1.moagem}</p>
           {/* §5.5: combinação inexistente é DESABILITADA, nunca escondida.
               Duas colunas fixas desde que a moagem virou grão ou moído: com
               dois botões, `sm:grid-cols-3` deixava um deles órfão na linha. */}
           <div className="mt-3 grid grid-cols-2 gap-2">
             {MOAGENS.map((m) => {
-              const existe = moagensValidas.has(m.valor);
+              const existe = moagensValidas.has(m);
               return (
                 <button
-                  key={m.valor}
+                  key={m}
                   type="button"
-                  onClick={() => setMoagem(m.valor)}
+                  onClick={() => setMoagem(m)}
                   disabled={!existe}
-                  aria-pressed={moagem === m.valor}
-                  title={existe ? undefined : "Não disponível para este café"}
-                  className={botaoDeOpcao(moagem === m.valor, existe)}
+                  aria-pressed={moagem === m}
+                  title={existe ? undefined : t.passo1.semEsteCafe}
+                  className={botaoDeOpcao(moagem === m, existe)}
                 >
-                  {m.rotulo}
+                  {rotuloDaMoagem[m]}
                 </button>
               );
             })}
           </div>
 
-          <p className={`mt-6 ${ROTULO_MATA}`}>Peso do pacote</p>
+          <p className={`mt-6 ${ROTULO_MATA}`}>{t.passo1.peso}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {PESOS.map((g) => {
               const existe = pesosValidos.has(g);
@@ -497,18 +589,20 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
                   aria-pressed={peso === g}
                   className={`font-dado ${botaoDeOpcao(peso === g, existe)}`}
                 >
+                  {/* Grama e quilo se escrevem igual nos três idiomas: é
+                      unidade do SI, não texto a traduzir. */}
                   {g === 1000 ? "1 kg" : `${g} g`}
                 </button>
               );
             })}
           </div>
 
-          <p className={`mt-6 ${ROTULO_MATA}`}>Pacotes por envio</p>
+          <p className={`mt-6 ${ROTULO_MATA}`}>{t.passo1.quantidade}</p>
           <div className="mt-3 flex items-center border border-cal/30 w-fit">
             <button
               type="button"
               onClick={() => setQuantidade((q) => Math.max(1, q - 1))}
-              aria-label="Diminuir quantidade"
+              aria-label={t.passo1.diminuir}
               className="h-12 w-12 text-[18px] leading-none hover:bg-cal/10"
             >
               −
@@ -520,7 +614,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               type="button"
               onClick={() => setQuantidade((q) => Math.min(teto, q + 1))}
               disabled={quantidade >= teto}
-              aria-label="Aumentar quantidade"
+              aria-label={t.passo1.aumentar}
               className="h-12 w-12 text-[18px] leading-none hover:bg-cal/10 disabled:cursor-not-allowed disabled:text-cal/30"
             >
               +
@@ -529,13 +623,13 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
 
           {esgotado ? (
             <p role="status" className="mt-4 text-[14px] text-cal/70">
-              Esta combinação está esgotada. Tente outro peso ou outra moagem.
+              {t.passo1.esgotado}
             </p>
           ) : variante ? (
             <p className="mt-4 font-dado text-[15px]">
-              {formatarPreco(porEnvio)} por envio{" "}
+              {t.passo1.porEnvio(formatarPreco(porEnvio))}{" "}
               <span className="text-juta">
-                (economia de {formatarPreco(economia)})
+                {t.passo1.economia(formatarPreco(economia))}
               </span>
             </p>
           ) : null}
@@ -547,7 +641,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               onClick={() => setPasso(2)}
               className="disabled:cursor-not-allowed disabled:bg-cal/20 disabled:text-cal/50"
             >
-              Continuar
+              {t.botoes.continuar}
             </Botao>
           </div>
         </fieldset>
@@ -556,14 +650,13 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
       {passo === 2 ? (
         <fieldset className="mt-8">
           <legend ref={tituloDoPasso} tabIndex={-1} className={TITULO_DO_PASSO}>
-            De quanto em quanto tempo?
+            {t.passo2.titulo}
           </legend>
           {/* A frase é a MESMA da FAQ desta página, e por obrigação: a versão
               anterior prometia "adiar um envio sem cancelar" e não existe porta
               para adiar em lugar nenhum — quem pausa é o Mercado Pago. */}
           <p className="mt-2 text-[15px] leading-relaxed text-cal/80">
-            Dá para pausar a assinatura no Mercado Pago sem cancelar — e cancelar
-            quando quiser, pela sua conta, sem multa.
+            {t.passo2.pausa}
           </p>
           <div className="mt-6 flex flex-wrap gap-2">
             {FREQUENCIAS_DIAS.map((dias) => (
@@ -574,16 +667,16 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
                 aria-pressed={frequencia === dias}
                 className={`font-dado ${botaoDeOpcao(frequencia === dias)}`}
               >
-                A cada {dias} dias
+                {t.passo2.aCada(dias)}
               </button>
             ))}
           </div>
           <div className="mt-8 flex gap-3">
             <Botao variante="secundario" onClick={() => setPasso(1)}>
-              Voltar
+              {t.botoes.voltar}
             </Botao>
             <Botao variante="primarioEscuro" onClick={() => setPasso(3)}>
-              Continuar
+              {t.botoes.continuar}
             </Botao>
           </div>
         </fieldset>
@@ -593,17 +686,16 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
         <div className="mt-8 grid gap-10 md:grid-cols-[1fr_auto]">
           <fieldset>
             <legend ref={tituloDoPasso} tabIndex={-1} className={TITULO_DO_PASSO}>
-              Onde o café chega?
+              {t.passo3.titulo}
             </legend>
             <p className="mt-2 max-w-[46ch] text-[14px] leading-relaxed text-cal/70">
-              A entrega recorrente usa ESTE endereço, guardado na assinatura —
-              mudar o endereço da conta depois não muda os envios do Clube.
+              {t.passo3.explicacao}
             </p>
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <div>
                 <label htmlFor="clube-cep" className={ROTULO_MATA}>
-                  CEP
+                  {t.passo3.cep}
                 </label>
                 <input
                   id="clube-cep"
@@ -618,7 +710,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               </div>
               <div>
                 <label htmlFor="clube-numero" className={ROTULO_MATA}>
-                  Número
+                  {t.passo3.numero}
                 </label>
                 <input
                   id="clube-numero"
@@ -629,7 +721,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               </div>
               <div className="sm:col-span-2">
                 <label htmlFor="clube-rua" className={ROTULO_MATA}>
-                  Rua
+                  {t.passo3.rua}
                 </label>
                 <input
                   id="clube-rua"
@@ -641,7 +733,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               </div>
               <div>
                 <label htmlFor="clube-complemento" className={ROTULO_MATA}>
-                  Complemento (opcional)
+                  {t.passo3.complemento}
                 </label>
                 <input
                   id="clube-complemento"
@@ -654,7 +746,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               </div>
               <div>
                 <label htmlFor="clube-bairro" className={ROTULO_MATA}>
-                  Bairro
+                  {t.passo3.bairro}
                 </label>
                 <input
                   id="clube-bairro"
@@ -667,7 +759,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               </div>
               <div>
                 <label htmlFor="clube-cidade" className={ROTULO_MATA}>
-                  Cidade
+                  {t.passo3.cidade}
                 </label>
                 <input
                   id="clube-cidade"
@@ -679,7 +771,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
               </div>
               <div>
                 <label htmlFor="clube-uf" className={ROTULO_MATA}>
-                  UF
+                  {t.passo3.uf}
                 </label>
                 <input
                   id="clube-uf"
@@ -699,10 +791,11 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
                 exatamente o mesmo motivo: cada envio do Clube emite nota, e o
                 ERP recusa pedido sem contato identificado. Quem já tem CPF no
                 cadastro encontra o campo PREENCHIDO (ver `lerCpfDoCadastro`) e
-                não digita nada. */}
+                não digita nada. Em inglês e espanhol a explicação diz o que a
+                sigla é — a sigla fica, porque é o nome do documento. */}
             <div className="mt-8 max-w-[280px]">
               <label htmlFor="clube-cpf" className={ROTULO_MATA}>
-                CPF
+                {t.passo3.cpf}
               </label>
               <input
                 id="clube-cpf"
@@ -716,11 +809,11 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
                 className={`mt-2 font-dado ${CAMPO_MATA}`}
               />
               <p id="clube-cpf-ajuda" className="mt-2 text-[12px] text-cal/60">
-                Usamos o CPF para emitir a nota fiscal de cada envio.
+                {t.passo3.cpfAjuda}
               </p>
               {cpfDigitos.length === 11 && !cpfValido ? (
                 <p role="alert" className="mt-1.5 text-[13px] text-cal">
-                  Este CPF não confere. Confira os dígitos.
+                  {t.passo3.cpfInvalido}
                 </p>
               ) : null}
             </div>
@@ -734,46 +827,42 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
             <hr className="mt-4 border-cal/30" />
             <dl className="mt-4 space-y-2 font-dado text-[14px]">
               <div className="flex justify-between gap-4">
-                <dt className="text-cal/70">Café</dt>
+                <dt className="text-cal/70">{t.resumo.cafe}</dt>
                 <dd>{opcao?.nome}</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-cal/70">Moagem</dt>
-                <dd>{MOAGENS.find((m) => m.valor === moagem)?.rotulo}</dd>
+                <dt className="text-cal/70">{t.resumo.moagem}</dt>
+                <dd>{rotuloDaMoagem[moagem]}</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-cal/70">Peso</dt>
+                <dt className="text-cal/70">{t.resumo.peso}</dt>
                 <dd>
                   {quantidade > 1 ? `${quantidade} × ` : ""}
                   {peso === 1000 ? "1 kg" : `${peso} g`}
                 </dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-cal/70">Frequência</dt>
-                <dd>a cada {frequencia} dias</dd>
+                <dt className="text-cal/70">{t.resumo.frequencia}</dt>
+                <dd>{t.resumo.aCada(frequencia)}</dd>
               </div>
               <div
                 className="flex justify-between gap-4 border-t border-cal/30 pt-3 text-[16px]"
-                aria-label={`Por envio: ${precoParaLeitor(porEnvio)}`}
+                aria-label={t.resumo.porEnvioLeitor(precoParaLeitor(porEnvio))}
               >
-                <dt>Por envio</dt>
+                <dt>{t.resumo.porEnvio}</dt>
                 <dd>{formatarPreco(porEnvio)}</dd>
               </div>
             </dl>
             <p className="mt-2 font-dado text-[12px] text-juta">
-              economia de {formatarPreco(economia)} · entrega incluída
+              {t.resumo.economiaEEntrega(formatarPreco(economia))}
             </p>
-            <p className="mt-5 text-[14px] text-cal/80">
-              Você autoriza a cobrança no Mercado Pago e cancela quando quiser,
-              sem multa, pela sua conta.
-            </p>
+            <p className="mt-5 text-[14px] text-cal/80">{t.resumo.autorizacao}</p>
             {/* Dito ANTES do clique, não depois: a assinatura precisa de dono,
                 e descobrir isso só no "Assinar" é a hora errada. O que já foi
                 preenchido volta com a pessoa (ver `guardarRascunho`). */}
             {sessaoConferida && !sessao ? (
               <p className="mt-3 text-[13px] leading-relaxed text-cal/70">
-                Assinar pede uma conta — você entra na próxima tela e volta para
-                cá com tudo isto preenchido.
+                {t.resumo.precisaDeConta}
               </p>
             ) : null}
             <div className="mt-6 flex flex-col gap-3">
@@ -783,7 +872,7 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
                 disabled={assinando || esgotado}
                 className="w-full disabled:cursor-not-allowed disabled:bg-cal/20 disabled:text-cal/50"
               >
-                {assinando ? "Criando sua assinatura…" : "Assinar"}
+                {assinando ? t.botoes.assinando : t.botoes.assinar}
               </Botao>
               <Botao
                 variante="secundario"
@@ -791,13 +880,11 @@ export function AssinaturaWizard({ opcoes }: { opcoes: OpcaoDoClube[] }) {
                 disabled={assinando}
                 className="w-full"
               >
-                Voltar
+                {t.botoes.voltar}
               </Botao>
             </div>
             {erro ? (
-              <p role="alert" className="mt-4 text-[14px] text-cal">
-                {erro}
-              </p>
+              <Recusa erro={erro} textos={t.erros} locale={locale} />
             ) : null}
           </div>
         </div>

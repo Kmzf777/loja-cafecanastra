@@ -7,7 +7,7 @@ import { SecaoDoBlog } from "@/components/blog/SecaoDoBlog";
 import { BotaoLink } from "@/components/ui/Botao";
 import { Serra } from "@/components/marca/Serra";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale, type Locale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { MARCO_DE_ORIGEM } from "./a-serra/conteudo";
 
@@ -32,6 +32,27 @@ import { MARCO_DE_ORIGEM } from "./a-serra/conteudo";
  */
 
 export const revalidate = 3600;
+
+/**
+ * AS TRÊS HOMES SAEM DO BUILD — e sem esta função nenhuma delas sai.
+ *
+ * Um segmento dinâmico só é prerenderizado se alguém disser QUAIS valores ele
+ * assume. Sem `generateStaticParams`, o `[locale]` faz o Next tratar a rota
+ * como sob demanda, e aí `revalidate` acima já não guarda um HTML pronto: cada
+ * visita paga render de servidor MAIS o `fetch` a `/dashboard`. Foi
+ * exatamente o que aconteceu quando a vitrine entrou no segmento de idioma —
+ * `.next/prerender-manifest.json` ficou só com as 15 PDPs, que são as únicas
+ * que já declaravam a função. docs/performance-dev.md §7 tem o preço disso
+ * medido: a PLP estática servia em 46-90 ms.
+ *
+ * Nada aqui lê `cookies()`, `headers()` nem `searchParams` — o repositório do
+ * catálogo é `fetch` com `next: { revalidate }`, que é justamente a leitura
+ * que sobrevive à geração estática —, então a home é elegível e volta a ser
+ * HTML pronto com revalidação de hora em hora.
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 /**
  * `alternates` é o que impede `/`, `/en` e `/es` de concorrerem entre si no
@@ -397,7 +418,21 @@ export default async function Home({
               <BotaoLink href={href(locale, "/a-serra")} variante="secundario">
                 {d.comum.conhecerASerra}
               </BotaoLink>
-              <BotaoLink href={href(locale, "/historia")} variante="texto">
+              {/* ALVO DE TOQUE: `min-h-[44px]` porque a variante `texto` é a
+                  única das quatro do <BotaoLink> que não recebe a altura
+                  `h-12` — e o BASE dela traz `leading-none`, então o alvo
+                  fecharia em ~13px de altura, um terço dos 44px que o §10
+                  exige. O conserto certo é no componente (ver o comentário
+                  igual em /a-serra e /rastreabilidade), mas
+                  components/ui/Botao.tsx não é desta tarefa; enquanto isso, o
+                  mínimo vem de fora. `inline-flex items-center` do BASE
+                  centraliza o texto na altura, e o sublinhado continua só
+                  embaixo da palavra. */}
+              <BotaoLink
+                href={href(locale, "/historia")}
+                variante="texto"
+                className="min-h-[44px]"
+              >
                 {d.nav.historia}
               </BotaoLink>
             </div>

@@ -150,10 +150,20 @@ function monta(linha: LinhaBruta): Lote {
     torra: linha.torra,
     corpo: linha.corpo,
     preparoSugerido: linha.preparoSugerido,
+    // AS VARIEDADES NÃO ENTRAM AQUI, e isto é o conserto de um dado que se
+    // espalhava sozinho. `bruto.marca.variedades` é dado da MARCA — as três
+    // cultivares que a casa planta na serra, declaradas uma vez em
+    // `marca.variedades_observacao`. Esta linha copiava a lista para CADA
+    // lote, e a PDP então afirmava "Blend 100% arábica das variedades Araras,
+    // Caturra 2SL e Paraíso" em todas as cinco, inclusive nas duas em que a
+    // fonte não alcança: o Microlote é um lote separado por definição, e o
+    // Néctar de Minas é marca irmã, com pacote e pontuação próprios. Nenhuma
+    // das duas tem composição publicada, e afirmar por herança é inventar.
+    // A afirmação continua onde é verdadeira: `/a-serra` lê `MARCA.variedades`
+    // e a apresenta como o que ela é, "As variedades da Canastra".
     origem: {
       regiao: bruto.marca.origem,
       estado: "MG",
-      variedades: bruto.marca.variedades,
       atributos: bruto.marca.atributos,
     },
     fotos: {

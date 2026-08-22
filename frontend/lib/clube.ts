@@ -194,6 +194,40 @@ function cabecalhos(token: string) {
 }
 
 /**
+ * A recusa de uma adesão, com a procedência da frase.
+ *
+ * `doServidor` É O QUE A TELA PRECISA SABER PARA NÃO MENTIR DE IDIOMA. O
+ * backend é pt-BR por decisão (spec §1) e as frases dele são específicas —
+ * "estoque insuficiente", "CPF obrigatório". Numa página em inglês, mostrá-las
+ * sem aviso faz o site parecer quebrado; traduzi-las seria inventar o que o
+ * servidor disse; trocá-las por um "não deu" genérico apagaria o único motivo
+ * real que a pessoa tinha. Com a marca, o wizard mostra a frase genérica
+ * traduzida e a do servidor abaixo, rotulada e marcada `lang="pt-BR"`.
+ */
+export type FalhaDaAssinatura = Error & { doServidor: boolean };
+
+function falha(mensagem: string, doServidor: boolean): FalhaDaAssinatura {
+  return Object.assign(new Error(mensagem), { doServidor });
+}
+
+/**
+ * As duas frases que ESTE módulo inventa quando o servidor não dá nenhuma.
+ *
+ * Vêm por parâmetro porque quem chama sabe o idioma da página e este módulo
+ * não: o wizard passa as suas, de `clube/conteudo.ts`, nos três idiomas. O
+ * padrão em português atende quem chama sem idioma na mão (os testes, e
+ * qualquer caminho fora da vitrine traduzida).
+ */
+export type MensagensDeAssinatura = { falha: string; semInitPoint: string };
+
+const MENSAGENS_PADRAO: MensagensDeAssinatura = {
+  falha: "Não foi possível criar a assinatura.",
+  semInitPoint:
+    "A assinatura foi criada mas não recebemos a página de autorização. " +
+    "Confira em Minha conta antes de tentar de novo.",
+};
+
+/**
  * Cria a assinatura e devolve a URL de aprovação do MP (`initPoint`) — é LÁ
  * que o cliente autoriza a cobrança recorrente; sem o redirect ela fica
  * pendente para sempre.
@@ -202,6 +236,7 @@ export async function assinarClube(
   token: string,
   corpo: CorpoDeAssinatura,
   fetchFn: typeof fetch = fetch,
+  mensagens: MensagensDeAssinatura = MENSAGENS_PADRAO,
 ): Promise<{ initPoint: string }> {
   const r = await fetchFn(`${API_BASE}/clube/assinar`, {
     method: "POST",
@@ -211,13 +246,11 @@ export async function assinarClube(
   });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) {
-    throw new Error(d.details || d.error || "Não foi possível criar a assinatura.");
+    const doServidor = Boolean(d.details || d.error);
+    throw falha(d.details || d.error || mensagens.falha, doServidor);
   }
   if (typeof d.initPoint !== "string" || !d.initPoint) {
-    throw new Error(
-      "A assinatura foi criada mas não recebemos a página de autorização. " +
-        "Confira em Minha conta antes de tentar de novo.",
-    );
+    throw falha(mensagens.semInitPoint, false);
   }
   return { initPoint: d.initPoint };
 }

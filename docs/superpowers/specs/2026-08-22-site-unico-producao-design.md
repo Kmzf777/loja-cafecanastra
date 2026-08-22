@@ -310,13 +310,18 @@ nunca responde deixa a promessa pendurada para sempre.
 Em produção isso trava a home, a PLP e a revalidação da PDP. Recebe timeout e
 teste. É a única correção autorizada fora do relatório.
 
+> **Feito na onda 1.** `ESPERA_MAXIMA_MS = 3000` e `AbortSignal.timeout` estão
+> em `frontend/lib/catalogo/repositorio.ts`. O relatório de performance foi
+> atualizado junto — não procure a pendência lá.
+
 ---
 
 ## 6. Verificação
 
-- As duas suítes verdes. Baseline medido nesta branch: **407 testes da vitrine em
-  28 arquivos**, mais a suíte do backend. Nenhum agente entrega com teste
-  vermelho.
+- As duas suítes verdes. Baseline no início do trabalho: **407 testes da vitrine
+  em 28 arquivos**, mais a suíte do backend. Ao fim da onda 2: **658 em 45
+  arquivos**, e 398 no backend. Nenhum agente entrega com teste vermelho, e
+  nenhum desses números pode cair.
 - `npm run build` de produção passa — é ele que prova que `generateStaticParams`
   dá conta de locale × slug e que o dicionário está completo.
 - Nenhuma string em português cravada na superfície traduzida. Verificado por
@@ -324,7 +329,58 @@ teste. É a única correção autorizada fora do relatório.
 - Mobile-first conferido em 360 px de largura.
 - Nenhum link quebrado entre as rotas novas.
 
-## 7. Fora de escopo
+## 7. O que a execução fechou, e o que ela deixou
+
+*Escrito ao fim da onda 2 (22/08/2026), para o próximo leitor não ter de
+reconstruir isto do `git log`. Um spec que só descreve a intenção envelhece
+mentindo; este parágrafo é o que impede isso.*
+
+O trabalho saiu em duas ondas na branch `producao-site-unico`. A **onda 1**
+(`15755de`) montou a estrutura: o segmento `[locale]`, o rewrite do middleware,
+o dicionário tipado, `app/(transacional)/` fora do idioma, as páginas novas, a
+separação `Moagem`/`Metodo` e o timeout de `lib/catalogo/repositorio.ts`. A
+**onda 2** existiu para consertar o que os verificadores acharam depois.
+
+### Fechado
+
+| O que | Onde ficou |
+|---|---|
+| As afirmações falsas de tela — "quarenta anos na mesma serra", "SCA 80+" no Néctar de 75 pontos | `a-serra/conteudo.ts` ("Quarenta anos de café, dezoito na Canastra"); `SeloSCA` passou a imprimir o número real de cada linha |
+| Microlote 86 SCA e Néctar 75 SCA, contra o "80+" genérico do catálogo antigo | catálogo e selo, com o dado da marca vencendo (§2) |
+| `Moagem` = `grao \| moido`, `Metodo` separado, filtro de moagem fora da PLP | `lib/catalogo/tipos.ts` e os 21 arquivos que citavam `moagem` |
+| Sacola antiga com `moagem: "aeropress"` | `lib/sacola/fusao.ts` trata valor desconhecido como `moido`, com teste — era o pior bug possível aqui (§2) |
+| O texto do catálogo saindo de tabelas em português cravadas | `lib/catalogo/rotulos.ts` guarda **só a cor**; todo rótulo foi para `dicionario.catalogo.*` |
+| `/clube` respondia nos três endereços servindo português | `clube/conteudo.ts`, `Record<Locale, …>` como as outras |
+| **21 páginas saíram da geração estática** ao entrar no `[locale]`, sem erro nenhum | `generateStaticParams` nas sete institucionais × três idiomas, com trava em `paginas-estaticas.test.ts`. Custo medido em `docs/performance-dev.md` §7.1 |
+| Documentação afirmando o que o código já não fazia | README, `docs/performance-dev.md` §5 e §7.1, o comentário de `lib/i18n/tipos.ts` que apontava para um `app/[locale]/layout.tsx` inexistente |
+| "Torramos na terça e enviamos na quarta" promovida a **cláusula contratual** em três idiomas | saiu dos Termos. É microcopy (estetica.md §11, barra de aviso do `seed.js`), não calendário apurado — e num Termos de uso vira obrigação. A cláusula ficou em "torra sob demanda", sem data inventada no lugar |
+
+**O `<AvisoJuridico>` FICOU**, e isto era condicional no §3: ele só sairia se o
+texto importado fosse definitivo. Não é. Duas das três fontes de referência
+eram o contrato de licenciamento de **outra empresa** (o "SISTEMA ZPRO", com
+CNPJ e foro próprios) com o nome trocado — está registrado por extenso no
+cabeçalho de `termos-de-uso/conteudo.ts`. Material assim não passou por
+advogado, e remover um aviso de "sem revisão jurídica" de um texto que continua
+sem revisão seria a mesma mentira que esta branch existiu para tirar.
+
+### Não fechado, e é preciso saber
+
+- **Nenhum `npm run build` foi rodado na onda 2.** Três agentes escreviam na
+  mesma árvore e o build é global. As duas suítes estão verdes; o que falta ver
+  é a saída do build confirmando as 21 páginas de volta como `●`/`○`, e o
+  `generateStaticParams` dando conta de locale × slug (§6).
+- **Não existe varredura automática contra português cravado na superfície
+  traduzida.** O §6 pedia "verificado por varredura, não por confiança", e a
+  trava que existe é de outro tipo: o dicionário quebra o build por chave
+  faltando, mas não vê uma string escrita direto no JSX. A conferência é o
+  `grep` documentado no README.
+- **`npm run verifica` não abre uma única URL em `/en` ou `/es`.** As 37
+  checagens do Chromium são todas em português.
+- **`app/[locale]/(vitrine)/cafes/[slug]/not-found.tsx` linka `/cafes` cru**, em
+  vez de `href(locale, "/cafes")`: um 404 dentro de `/en` devolve o visitante ao
+  português.
+
+## 8. Fora de escopo
 
 Blog completo com admin; `/ANUGA`; tradução de checkout, conta e e-mails; produtos
 novos (Blend Espresso, moedor, granel 2 kg); deploy na VPS; a decisão de domínio.

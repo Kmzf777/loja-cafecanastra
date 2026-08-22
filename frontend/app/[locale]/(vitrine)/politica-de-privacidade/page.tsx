@@ -5,7 +5,7 @@ import { BotaoReverCookies } from "@/components/layout/BotaoReverCookies";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { FormDescadastroNewsletter } from "@/components/layout/FormDescadastroNewsletter";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale, type Locale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import {
   PRIVACIDADE,
   AVISO_DE_TRADUCAO,
@@ -26,6 +26,18 @@ import {
  * chama a API e o "Rever cookies" mata o gtag na hora. O conteúdo diz ONDE cada
  * um entra, na sequência de blocos; a página sabe QUAL é.
  */
+
+/**
+ * As três versões saem prontas do build. O texto é constante e os dois pontos
+ * vivos da página — o "Rever cookies" e o descadastro da newsletter — são
+ * componentes de CLIENTE, que rodam no navegador de quem lê e por isso não
+ * pedem render de servidor nenhum: o HTML estático é a casca deles. Sem esta
+ * função, o `[locale]` cobrava esse render mesmo assim. A explicação longa
+ * está na home ((vitrine)/page.tsx).
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 export async function generateMetadata({
   params,

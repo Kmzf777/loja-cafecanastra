@@ -7,8 +7,16 @@ import { type Locale } from "../../../../lib/i18n/tipos";
  * site institucional (github.com/Kmzf777/cafecanastrablog), que descrevia um
  * "site informativo" com blog e newsletter e não sabia nada de pedido, frete ou
  * assinatura. O que descrevia aquele site saiu; o que descreve ESTA loja — os
- * meios de pagamento, a torra de terça, o Melhor Envio, o Clube — ficou, e é a
- * parte que já era da loja.
+ * meios de pagamento, o Melhor Envio, o Clube — ficou, e é a parte que já era
+ * da loja.
+ *
+ * O QUE NÃO PASSOU: o dia da semana da torra. "Torramos na terça, enviamos na
+ * quarta" atravessa a loja como microcopy (estetica.md §11, a barra de aviso
+ * inicial do `seed.js`, o selo do PainelCompra), mas não existe no repositório
+ * uma fonte que diga que esse é o calendário de operação — e um Termos de uso
+ * transforma tom de voz em obrigação contratual, em três idiomas de uma vez.
+ * A cláusula ficou com o que a loja pratica e sustenta: torra sob demanda, sem
+ * data. Ver a nota longa na seção "Torra e envio" de `pt`.
  *
  * DUAS FONTES FORAM DESCARTADAS INTEIRAS, e vale registrar por quê. O arquivo
  * `politica.md` que veio junto do material de referência **não é do Café
@@ -222,9 +230,20 @@ const pt: ConteudoLegal = {
       ancora: "torra-e-envio",
       titulo: "Torra e envio",
       blocos: [
+        /**
+         * SEM DIA DA SEMANA AQUI, E ISSO É DECISÃO. "Torramos na terça,
+         * enviamos na quarta" é microcopy de vitrine — está no estetica.md
+         * §11 como exemplo de tom, e é o valor INICIAL da barra de aviso que
+         * o `seed.js` grava numa coluna que o painel edita a qualquer hora.
+         * Nenhuma dessas três coisas é um calendário de operação conferido, e
+         * num Termos de uso um dia da semana deixa de ser tom de voz e vira
+         * OBRIGAÇÃO: um pedido postado na quinta passa a ser descumprimento
+         * de cláusula. O que fica é o que a loja de fato pratica e consegue
+         * sustentar — torra sob demanda —, sem número que ninguém apurou.
+         */
         {
           paragrafo:
-            "Torramos sob demanda, em lotes pequenos: torramos na terça e enviamos na quarta. Pedido feito depois da terça entra na semana seguinte.",
+            "Torramos sob demanda, em lotes pequenos: o pedido é postado depois de o lote dele ficar pronto, e não sai de estoque torrado parado. Por isso o prazo até a postagem acompanha a torra.",
         },
         {
           paragrafo:
@@ -282,7 +301,7 @@ const pt: ConteudoLegal = {
               { forte: "cancelar a qualquer momento" },
               ", sem multa e sem carência, na sua conta (Minha conta → Minha assinatura). O cancelamento interrompe as próximas cobranças na hora; envios já cobrados são entregues normalmente.",
             ],
-            "Cada cobrança confirmada gera um pedido com os mesmos prazos de torra e envio das compras avulsas: torramos na terça, enviamos na quarta.",
+            "Cada cobrança confirmada gera um pedido com as mesmas regras de torra e envio das compras avulsas, descritas acima.",
           ],
         },
       ],
@@ -568,8 +587,10 @@ const en: ConteudoLegal = {
       titulo: "Roasting and shipping",
       blocos: [
         {
+          // Sem dia da semana, pelo mesmo motivo do português — ver a nota na
+          // seção "Torra e envio" de `pt`.
           paragrafo:
-            "We roast to order, in small batches: we roast on Tuesday and ship on Wednesday. An order placed after Tuesday goes into the following week.",
+            "We roast to order, in small batches: an order is dispatched once its batch is ready, never out of roasted stock left sitting. The time until dispatch therefore follows the roast.",
         },
         {
           paragrafo:
@@ -624,7 +645,7 @@ const en: ConteudoLegal = {
               { forte: "cancel at any time" },
               ", with no penalty and no minimum term, from your account (My account → My subscription). Cancelling stops the next charges immediately; deliveries already charged for are shipped as normal.",
             ],
-            "Each confirmed charge creates an order with the same roasting and shipping schedule as one-off purchases: we roast on Tuesday and ship on Wednesday.",
+            "Each confirmed charge creates an order under the same roasting and shipping rules as one-off purchases, described above.",
           ],
         },
       ],
@@ -884,8 +905,10 @@ const es: ConteudoLegal = {
       titulo: "Tueste y envío",
       blocos: [
         {
+          // Sem dia da semana, pelo mesmo motivo do português — ver a nota na
+          // seção "Torra e envio" de `pt`.
           paragrafo:
-            "Tostamos bajo pedido, en lotes pequeños: tostamos el martes y enviamos el miércoles. Un pedido hecho después del martes entra en la semana siguiente.",
+            "Tostamos bajo pedido, en lotes pequeños: el pedido se despacha cuando su lote está listo, y no sale de tueste guardado. Por eso el plazo hasta el despacho acompaña al tueste.",
         },
         {
           paragrafo:
@@ -937,7 +960,7 @@ const es: ConteudoLegal = {
               { forte: "cancelar en cualquier momento" },
               ", sin multa y sin permanencia, en su cuenta (Mi cuenta → Mi suscripción). La cancelación interrumpe los próximos cobros al instante; los envíos ya cobrados se entregan normalmente.",
             ],
-            "Cada cobro confirmado genera un pedido con los mismos plazos de tueste y envío de las compras sueltas: tostamos el martes y enviamos el miércoles.",
+            "Cada cobro confirmado genera un pedido con las mismas reglas de tueste y envío de las compras sueltas, descritas arriba.",
           ],
         },
       ],

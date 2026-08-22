@@ -138,11 +138,21 @@ export type Preparo = {
  * exatamente onde a marca tenta ganhá-la.
  *
  * O que ficou aqui é o que a marca de fato afirma, e vale para toda a coleção.
+ *
+ * `variedades` SAIU DAQUI, e é o mesmo princípio uma segunda vez. Araras,
+ * Caturra 2SL e Paraíso são as variedades que A CASA planta — dado da MARCA,
+ * declarado uma vez em `marca.variedades` e explicado em
+ * `marca.variedades_observacao`. `monta()` copiava essa lista para CADA lote e
+ * a PDP escrevia "Blend 100% arábica das variedades Araras, Caturra 2SL e
+ * Paraíso" em toda linha, inclusive onde a fonte não alcança: o Microlote é,
+ * por definição, um lote separado do resto da lavoura, e o Néctar de Minas é
+ * marca irmã, com 75 pontos e pacote próprio. Nenhum dos dois tem composição
+ * publicada. A afirmação continua viva onde é verdadeira — em `/a-serra`, que
+ * lê `MARCA.variedades` e a apresenta como "As variedades da Canastra".
  */
 export type Origem = {
   regiao: string;
   estado: string;
-  variedades: string[];
   atributos: string[];
 };
 
@@ -220,40 +230,69 @@ export type Ordenacao =
   | "torra-asc"
   | "torra-desc";
 
-export const ORDENACOES: { valor: Ordenacao; rotulo: string }[] = [
-  { valor: "relevancia", rotulo: "Relevância" },
-  { valor: "preco-asc", rotulo: "Menor preço" },
-  { valor: "preco-desc", rotulo: "Maior preço" },
-  { valor: "torra-asc", rotulo: "Torra mais clara" },
-  { valor: "torra-desc", rotulo: "Torra mais escura" },
+/**
+ * AS TABELAS DO CONTRATO GUARDAM VALOR, NUNCA TEXTO — e é esta a mudança.
+ *
+ * Elas eram `{ valor, rotulo }[]` com UM rótulo só, em português, e
+ * alimentavam os filtros da PLP, os chips, os botões da PDP e o resumo do
+ * Clube em QUALQUER idioma: `/en/cafes` mostrava "Menor preço" porque o texto
+ * morava aqui, onde idioma não existe. Guardar rótulo num arquivo de contrato
+ * é o que tornava a tradução impossível sem duplicar texto dentro de cada
+ * componente.
+ *
+ * O texto passou inteiro para `lib/i18n/dicionario.ts`, chaveado pelo PRÓPRIO
+ * VALOR desta lista: `d.catalogo.ordenacao["preco-asc"]`,
+ * `d.catalogo.moagem.grao`. Quem tem o valor na mão acha o rótulo sem
+ * procurar, e o TypeScript cobra a chave nos três idiomas.
+ *
+ * A ORDEM DESTAS LISTAS É A ORDEM DA TELA: é ela que decide a sequência dos
+ * <option> do filtro e dos botões do seletor. Não é alfabética por acaso —
+ * "Relevância" vem primeiro porque é o padrão, os preços crescem, e a torra
+ * vai de clara a escura, na mesma direção da barra do <PontoTorra>.
+ */
+export const ORDENACOES: Ordenacao[] = [
+  "relevancia",
+  "preco-asc",
+  "preco-desc",
+  "torra-asc",
+  "torra-desc",
 ];
 
 /** As duas formas de comprar o pacote. É desta lista que a PDP faz os botões. */
-export const MOAGENS: { valor: Moagem; rotulo: string }[] = [
-  { valor: "grao", rotulo: "Grão" },
-  { valor: "moido", rotulo: "Moído" },
-];
+export const MOAGENS: Moagem[] = ["grao", "moido"];
 
 /**
- * Os seis métodos de preparo, com o rótulo que a tela mostra.
+ * Os seis métodos de preparo.
  *
  * Saíram de `MOAGENS` e continuam aqui inteiros: a seção "Como preparar" da
  * PDP é conteúdo bom e não tinha por que morrer junto com o seletor de sete
- * botões. Quem renderiza receita lê DAQUI — nenhum componente traduz método
- * por conta própria.
+ * botões. Quem renderiza receita lê DAQUI — nenhum componente inventa a sua
+ * própria lista, nem o seu próprio rótulo.
  */
-export const METODOS: { valor: Metodo; rotulo: string }[] = [
-  { valor: "espresso", rotulo: "Espresso" },
-  { valor: "coado-papel", rotulo: "Coado (papel)" },
-  { valor: "coador-pano", rotulo: "Coador de pano" },
-  { valor: "prensa-francesa", rotulo: "Prensa francesa" },
-  { valor: "italiana-moka", rotulo: "Italiana / Moka" },
-  { valor: "aeropress", rotulo: "Aeropress" },
+export const METODOS: Metodo[] = [
+  "espresso",
+  "coado-papel",
+  "coador-pano",
+  "prensa-francesa",
+  "italiana-moka",
+  "aeropress",
 ];
 
-export const FORMATOS: { valor: Formato; rotulo: string }[] = [
-  { valor: "graos", rotulo: "Em grãos" },
-  { valor: "moido", rotulo: "Moído" },
-  { valor: "drip", rotulo: "Drip Coffee" },
-  { valor: "capsula", rotulo: "Cápsulas" },
+export const FORMATOS: Formato[] = ["graos", "moido", "drip", "capsula"];
+
+/**
+ * As cinco linhas, na ordem em que a vitrine as apresenta.
+ *
+ * Estava em `rotulos.ts` como `Record<Linha, { rotulo, corVar }>`, misturando
+ * três coisas num mapa só: a lista de valores, o texto e a cor da embalagem.
+ * A lista ficou aqui, com as outras do contrato; a cor continua em
+ * `COR_DA_LINHA` (rotulos.ts), que é onde mora apresentação; o nome está no
+ * dicionário, em `catalogo.linha`, como todo o resto do texto.
+ */
+export const LINHAS: Linha[] = [
+  "classico",
+  "suave",
+  "canela",
+  "microlote",
+  "nectar-de-minas",
 ];

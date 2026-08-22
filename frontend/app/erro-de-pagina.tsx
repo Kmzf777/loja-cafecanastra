@@ -3,8 +3,9 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { href, localeDaRota } from "@/lib/i18n/rotas";
+import { ehCaminhoTransacional, href, localeDaRota } from "@/lib/i18n/rotas";
 import { dicionario } from "@/lib/i18n/dicionario";
+import { LOCALE_PADRAO } from "@/lib/i18n/tipos";
 
 /**
  * estetica.md §11 — o erro explica e resolve; nunca pede desculpa, nunca mostra
@@ -34,7 +35,28 @@ export function ErroDePagina({
    * os dois, e `href("pt", …)` devolve o caminho cru nos dois. Os dois lados
    * chegam ao mesmo HTML, que é o que a hidratação exige.
    */
-  const locale = localeDaRota(usePathname() ?? "/");
+  const caminho = usePathname() ?? "/";
+
+  /**
+   * O PT-BR DO CAMINHO DE COMPRA ESTÁ ESCRITO, NÃO HERDADO — e é isto que
+   * permite traduzir esta tela sem quebrar a decisão do cliente.
+   *
+   * Este mesmo componente é o conteúdo das DUAS fronteiras de erro: a da
+   * vitrine (`app/[locale]/(vitrine)/error.tsx`) e a do caminho de compra
+   * (`app/(transacional)/error.tsx`), que é pt-BR por decisão porque o frete é
+   * Melhor Envio e o pagamento é Mercado Pago BR (spec §1).
+   *
+   * `localeDaRota("/checkout")` já devolveria `"pt"` hoje, por acidente feliz:
+   * as rotas transacionais vivem fora do `[locale]` e portanto nunca carregam
+   * prefixo. Só que "por acidente" não é decisão — bastaria alguém dar um
+   * prefixo a `/sacola` um dia para o checkout começar a falhar em inglês sem
+   * ninguém ter escolhido isso. `ehCaminhoTransacional` é a MESMA lista que o
+   * middleware e o `href()` leem, e escrevê-la aqui torna a garantia
+   * verificável — é o que `erro-de-pagina.test.tsx` cobra.
+   */
+  const locale = ehCaminhoTransacional(caminho)
+    ? LOCALE_PADRAO
+    : localeDaRota(caminho);
   const d = dicionario(locale);
 
   useEffect(() => {
@@ -44,18 +66,17 @@ export function ErroDePagina({
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-20 md:px-10 md:py-28">
       <h1 className="max-w-[20ch] titulo-secao text-[clamp(2rem,4.5vw,3.25rem)] leading-[1.05]">
-        Não foi possível carregar esta página.
+        {d.erro.titulo}
       </h1>
       <p className="mt-5 max-w-[56ch] text-[17px] leading-relaxed text-fuligem-80">
-        A conexão pode ter caído no meio do caminho. Tentar de novo costuma
-        resolver.
+        {d.erro.texto}
       </p>
       <div className="mt-8 flex flex-wrap gap-3">
         <button
           onClick={reset}
           className="h-12 rounded-bt bg-vermelho px-6 text-[13px] font-semibold uppercase tracking-[0.08em] text-white transition-colors hover:bg-vermelho-esc focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-fuligem"
         >
-          Tentar de novo
+          {d.erro.tentarDeNovo}
         </button>
         <Link
           href={href(locale, "/cafes")}
@@ -66,7 +87,7 @@ export function ErroDePagina({
       </div>
       {error.digest ? (
         <p className="mt-8 font-dado text-[12px] text-fuligem-55">
-          Código: {error.digest}
+          {d.erro.codigo}: {error.digest}
         </p>
       ) : null}
     </div>

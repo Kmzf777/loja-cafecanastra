@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { classificacaoSca, formatarSca, rotuloNota } from "./rotulos";
+import {
+  classificacaoSca,
+  formatarSca,
+  rotuloNota,
+  rotuloPontoTorra,
+} from "./rotulos";
 import { LOTES } from "./produtos";
+import { dicionario } from "../i18n/dicionario";
+import { LOCALES } from "../i18n/tipos";
 
 /**
  * A PONTUAÇÃO SCA É O ÚNICO NÚMERO DESTA VITRINE QUE PODE VIRAR PROPAGANDA
@@ -79,7 +86,7 @@ describe("rótulos de nota de sabor", () => {
     for (const lote of LOTES) {
       expect(lote.notas.length, lote.slug).toBeGreaterThan(0);
       for (const nota of lote.notas) {
-        const rotulo = rotuloNota(nota);
+        const rotulo = rotuloNota(nota, "pt");
         expect(rotulo, `${lote.slug} · ${nota}`).not.toContain("-");
         expect(rotulo[0], `${lote.slug} · ${nota}`).toBe(rotulo[0].toUpperCase());
       }
@@ -95,5 +102,80 @@ describe("rótulos de nota de sabor", () => {
         expect(nota, `${lote.slug} · ${nota}`).toMatch(/^[a-z]+(-[a-z]+)*$/);
       }
     }
+  });
+});
+
+/**
+ * O DEFEITO QUE ESTE BLOCO EXISTE PARA NÃO VOLTAR.
+ *
+ * `rotuloNota` e a escala de torra eram mapas em português, únicos, aplicados
+ * em QUALQUER idioma. A ficha em inglês recebia "Melaço" — com cedilha — e o
+ * filtro da PLP em espanhol oferecia "Torra escura". O texto passou para
+ * `catalogo.*` no dicionário; o que sobrou aqui são as duas funções, e elas
+ * são funções porque as duas chaves são ABERTAS e precisam de fallback.
+ */
+describe("rotuloNota no idioma de quem lê", () => {
+  it("a chave canônica em português sai traduzida em cada idioma", () => {
+    // O caso concreto: `melaco` é a chave que o catálogo em português grava, e
+    // ela pode ser alcançada de qualquer página. Devolver "Melaço" em /en era
+    // o defeito.
+    expect(rotuloNota("melaco", "pt")).toBe("Melaço");
+    expect(rotuloNota("melaco", "en")).toBe("Molasses");
+    expect(rotuloNota("melaco", "es")).toBe("Melaza");
+
+    expect(rotuloNota("citrico", "en")).toBe("Citrus");
+    expect(rotuloNota("cacau", "en")).toBe("Cocoa");
+    expect(rotuloNota("rapadura", "es")).toBe("Panela");
+  });
+
+  it("a chave que já vem traduzida do editorial cai no fallback, não no português", () => {
+    // `molasses` e `melaza` são as chaves que data/catalogo-canastra.i18n.json
+    // grava, cada uma na sua língua. Elas NÃO estão no dicionário de propósito:
+    // o fallback só capitaliza, e é isso que devolve a palavra certa sem uma
+    // segunda tabela por idioma.
+    expect(rotuloNota("molasses", "en")).toBe("Molasses");
+    expect(rotuloNota("melaza", "es")).toBe("Melaza");
+    expect(rotuloNota("cocoa", "en")).toBe("Cocoa");
+  });
+
+  it("kebab-case vira espaço, e a primeira letra sobe", () => {
+    expect(rotuloNota("nota-que-ninguem-cadastrou", "pt")).toBe(
+      "Nota que ninguem cadastrou",
+    );
+  });
+
+  it("nenhuma nota do dicionário sai em kebab-case ou vazia", () => {
+    for (const locale of LOCALES) {
+      for (const chave of Object.keys(dicionario(locale).catalogo.nota)) {
+        const rotulo = rotuloNota(chave, locale);
+        expect(rotulo.trim(), `${locale}.${chave}`).not.toBe("");
+        expect(rotulo, `${locale}.${chave}`).not.toMatch(/^[a-z]/);
+      }
+    }
+  });
+});
+
+describe("rotuloPontoTorra", () => {
+  it("descreve a mesma torra em cada idioma", () => {
+    expect(rotuloPontoTorra(5, "pt")).toBe("Torra escura");
+    expect(rotuloPontoTorra(5, "en")).toBe("Dark roast");
+    expect(rotuloPontoTorra(5, "es")).toBe("Tueste oscuro");
+  });
+
+  it("cobre a escala inteira, de 1 a 5, nos três idiomas", () => {
+    for (const locale of LOCALES) {
+      for (const n of [1, 2, 3, 4, 5]) {
+        expect(rotuloPontoTorra(n, locale).trim(), `${locale}.${n}`).not.toBe("");
+      }
+    }
+  });
+
+  it("fora da escala devolve a palavra do eixo, e não `undefined`", () => {
+    // `?torraMin=9` na URL chega aqui sem passar por tipo nenhum, e o chip do
+    // filtro escrevia o valor cru. O fallback é o rótulo de eixo da ficha —
+    // no idioma da página, que era o outro metade do defeito.
+    expect(rotuloPontoTorra(9, "pt")).toBe("Torra");
+    expect(rotuloPontoTorra(0, "en")).toBe("Roast");
+    expect(rotuloPontoTorra(-1, "es")).toBe("Tueste");
   });
 });

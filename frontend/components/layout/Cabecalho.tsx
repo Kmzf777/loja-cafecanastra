@@ -149,10 +149,13 @@ function Logo({ locale, d }: { locale: Locale; d: Dicionario }) {
     >
       <Image
         src="/logo-canastra.png"
-        // O `alt` NÃO se traduz: ele descreve o lockup impresso na embalagem,
-        // que diz "Café Canastra · Desde 1985" nos três idiomas. Traduzir aqui
-        // descreveria uma imagem que não existe.
-        alt="Café Canastra, desde 1985"
+        // O `alt` VEM DO DICIONÁRIO. A regra antiga ("não se traduz, porque
+        // descreve o lockup impresso") confundia transcrição com descrição: o
+        // `alt` é o que a pessoa que não enxerga ouve, e ela ouve no idioma
+        // da página. Aqui o nome acessível do link já vem do `aria-label`
+        // acima; no rodapé a mesma marca aparece FORA de link, e lá este
+        // texto é o único que existe — por isso os dois leem a mesma chave.
+        alt={d.comum.logoAlt}
         width={3508}
         height={2481}
         priority
@@ -204,9 +207,14 @@ export function Cabecalho({ locale }: { locale: Locale }) {
               <ul className="flex items-center gap-6 2xl:gap-8">
                 {nav.map((item) => (
                   <li key={item.caminho}>
+                    {/* `flex h-11 items-center` só para o alvo de toque: os
+                        links da barra tinham 14px de altura — a altura da
+                        própria letra —, e o §10 pede 44px. Em largura já
+                        passavam ("CAFÉS", o mais curto, mede 52px), e a
+                        barra tem 92px, então o alvo cresce sem mover nada. */}
                     <Link
                       href={href(locale, item.caminho)}
-                      className="text-[13px] font-semibold uppercase tracking-[0.12em] transition-colors hover:text-vermelho focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
+                      className="flex h-11 items-center text-[13px] font-semibold uppercase tracking-[0.12em] transition-colors hover:text-vermelho focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
                     >
                       {item.rotulo}
                     </Link>
@@ -229,12 +237,17 @@ export function Cabecalho({ locale }: { locale: Locale }) {
           </div>
 
           {/* Em mobile a sacola fica FORA do acordeao: é o atalho que a pessoa
-              mais procura e não pode depender de abrir o menu antes. A CONTA
-              NÃO: `conta={false}` é o que devolve a barra de 360px para dentro
-              da tela — a medição está no comentário do <AtalhosDoCliente>, e o
-              atalho reaparece dentro do acordeão, logo abaixo. */}
-          <div className="flex items-center gap-2 xl:hidden">
-            <AtalhosDoCliente r={atalhos} conta={false} />
+              mais procura e não pode depender de abrir o menu antes. Ela vem
+              em GLIFO, com a contagem pendurada no canto — `variante="telefone"`
+              —, e é isso que devolve a barra de 360px para dentro da tela em
+              todos os estados de sacola. A medição está no <AtalhosDoCliente>.
+              A conta não entra aqui; ela vive no acordeão, logo abaixo.
+
+              `gap-3` E NÃO `gap-2`: a contagem é `absolute` e transborda uns
+              3px à direita do quadrado da sacola. Com 8px de vão sobrariam 5px
+              até o filete do Menu; com 12px, os 9px medidos. */}
+          <div className="flex items-center gap-3 xl:hidden">
+            <AtalhosDoCliente r={atalhos} variante="telefone" />
 
             {/* Acordeao de mobile — sem JS. O `xl:hidden` mora só no <div>
                 pai, que já esconde tudo isto no desktop. */}
@@ -311,10 +324,12 @@ export function Cabecalho({ locale }: { locale: Locale }) {
                 </Link>
 
                 {/* O seletor de idioma entra AQUI, e não na barra de cima, em
-                    telefone: em 360px o cabeçalho já carrega logo, conta,
-                    sacola e o botão de menu, e um quinto elemento reduziria
-                    todos abaixo dos 44px. A variante "painel" já traz o filete
-                    inferior que continua o ritmo das linhas do menu. */}
+                    telefone. A barra de 360px passou a sobrar 57px depois que
+                    a sacola virou glifo — e o seletor não é um botão: são TRÊS
+                    destinos lado a lado, 130px medidos na variante "barra".
+                    Não cabe, e não é por pouco. Aqui ele tem linha própria,
+                    alvo de sobra e o idioma por extenso; a variante "painel"
+                    já traz o filete que continua o ritmo das linhas do menu. */}
                 <SeletorDeIdiomaDaPagina id="idioma-mobile" locale={locale} />
 
                 {/* mt-auto empurra a assinatura para o rodape do painel: o

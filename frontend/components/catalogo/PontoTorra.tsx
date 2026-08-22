@@ -1,4 +1,5 @@
-import { PONTO_TORRA } from "@/lib/catalogo/rotulos";
+import { rotuloPontoTorra } from "@/lib/catalogo/rotulos";
+import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 
 /**
  * estetica.md §5.3 — escala 1-5.
@@ -12,11 +13,27 @@ type Props = {
   valor: number;
   /** Em `compacto`, o rotulo fica na mesma linha da barra (uso no card). */
   compacto?: boolean;
+  /**
+   * O idioma da pagina. Tem padrao pelo mesmo motivo do <CardCafe>: o card
+   * aparece em lugares que nao recebem os parametros de rota (o "not-found" da
+   * PDP e um deles). "Torra media" era portugues em /en e em /es ate aqui.
+   *
+   * AS OUTRAS TRES STRINGS DESTE COMPONENTE — "Clara", "Escura" e "de 5" —
+   * continuam em portugues, e isso e pendencia declarada, nao descuido: elas
+   * sao da interface do componente e nao da tabela de rotulos do catalogo, que
+   * e o que esta mudanca cobre.
+   */
+  locale?: Locale;
   className?: string;
 };
 
-export function PontoTorra({ valor, compacto = false, className = "" }: Props) {
-  const rotulo = PONTO_TORRA[valor] ?? "Torra";
+export function PontoTorra({
+  valor,
+  compacto = false,
+  locale = LOCALE_PADRAO,
+  className = "",
+}: Props) {
+  const rotulo = rotuloPontoTorra(valor, locale);
 
   const barra = (
     <span

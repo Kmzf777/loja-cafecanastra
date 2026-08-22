@@ -130,8 +130,13 @@ export function MolduraDaLoja({
         <Rodape locale={locale} />
         {/* Conveniencias fixas da moldura: o botao so existe com a env de
             WhatsApp; o GA4 so carrega com env definida E consentimento do
-            banner — ver os comentarios de cada componente. */}
-        <BotaoWhatsApp />
+            banner — ver os comentarios de cada componente.
+
+            O `locale` desce até o botão de WhatsApp pelo mesmo motivo que
+            desce até o cabeçalho e o rodapé: o nome acessível dele é o único
+            texto que ele tem, e ele acompanha /en e /es como qualquer outra
+            peça fixa. */}
+        <BotaoWhatsApp locale={locale} />
         <BannerCookies locale={locale} />
         <ScriptsAnalytics />
       </div>

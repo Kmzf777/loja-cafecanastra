@@ -3,7 +3,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Serra } from "@/components/marca/Serra";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale, TAG_BCP47, type Locale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale, TAG_BCP47, type Locale } from "@/lib/i18n/tipos";
 import {
   PRINCIPAIS,
   SECUNDARIOS,
@@ -34,6 +34,18 @@ import {
  * bloco sobe 4px e o carimbo aparece embaixo. Sem isso, o retorno visual do
  * toque na página seria zero.
  */
+
+/**
+ * As três versões saem prontas do build — e aqui isso vale mais do que em
+ * qualquer outra rota do site: /bio é o endereço colado no perfil do
+ * Instagram, aberto de dentro do app, em rede de celular, por gente que dá
+ * quatro segundos de atenção. É uma lista de links constante; sem esta função
+ * o `[locale]` a obrigava a um render de servidor por toque. A explicação
+ * longa está na home ((vitrine)/page.tsx).
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 export async function generateMetadata({
   params,

@@ -23,7 +23,9 @@ function lotesDeTeste(): Lote[] {
     torra: "",
     corpo: "",
     preparoSugerido: "",
-    origem: { regiao: "Serra da Canastra", estado: "MG", variedades: [], atributos: [] },
+    // `variedades` saiu de `Origem`: variedade e dado da MARCA, nao de cada
+    // lote (ver o comentario do tipo em lib/catalogo/tipos.ts).
+    origem: { regiao: "Serra da Canastra", estado: "MG", atributos: [] },
     fotos: {
       sabor: { src: "/x.png", alt: "x", w: 500, h: 500 },
       pacote: { src: "/x.png", alt: "x", w: 500, h: 500 },
@@ -303,5 +305,68 @@ describe("montarCorpoDeAssinatura + assinarClube", () => {
         endereco,
       }, recusa),
     ).rejects.toThrow(/Frequência inválida/);
+  });
+
+  /**
+   * A PROCEDÊNCIA DA FRASE, que é o que a /clube em inglês precisa saber.
+   *
+   * O backend é pt-BR por decisão (spec §1). Numa página em inglês, a recusa
+   * dele mostrada crua faz o site parecer quebrado; traduzida, seria invenção;
+   * engolida, apagaria o único motivo real. O wizard resolve mostrando a frase
+   * genérica traduzida e a do servidor abaixo, marcada `lang="pt-BR"` — e para
+   * isso ele precisa distinguir uma da outra.
+   */
+  it("marca como do servidor só a frase que o servidor mandou", async () => {
+    const corpo = {
+      sku: "CLA-250M",
+      quantidade: 1,
+      frequenciaDias: 15 as const,
+      endereco,
+    };
+
+    const comDetalhe = vi.fn(async () => ({
+      ok: false,
+      json: async () => ({ details: "Estoque insuficiente." }),
+    })) as unknown as typeof fetch;
+    await expect(assinarClube("token", corpo, comDetalhe)).rejects.toMatchObject({
+      message: "Estoque insuficiente.",
+      doServidor: true,
+    });
+
+    // 500 sem corpo JSON: a frase é inventada por este módulo, e o wizard tem
+    // de mostrá-la no idioma da página em vez de rotulá-la como fala da loja.
+    const mudo = vi.fn(async () => ({
+      ok: false,
+      json: async () => {
+        throw new Error("não é JSON");
+      },
+    })) as unknown as typeof fetch;
+    await expect(assinarClube("token", corpo, mudo)).rejects.toMatchObject({
+      doServidor: false,
+    });
+  });
+
+  it("usa as frases que quem chama passou, e o padrão em português sem elas", async () => {
+    const corpo = {
+      sku: "CLA-250M",
+      quantidade: 1,
+      frequenciaDias: 15 as const,
+      endereco,
+    };
+    const semInitPoint = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ assinatura: { id: "a1" } }),
+    })) as unknown as typeof fetch;
+
+    await expect(assinarClube("token", corpo, semInitPoint)).rejects.toThrow(
+      /página de autorização/,
+    );
+
+    await expect(
+      assinarClube("token", corpo, semInitPoint, {
+        falha: "We could not create the subscription.",
+        semInitPoint: "The subscription was created but we did not get the page.",
+      }),
+    ).rejects.toThrow("The subscription was created but we did not get the page.");
   });
 });

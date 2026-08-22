@@ -2,7 +2,15 @@
 
 **Data da medição:** 22 de agosto de 2026
 **Máquina:** a do cliente — a mesma em que o sintoma acontece
-**Escopo:** diagnóstico. Nenhuma linha de código foi alterada por este trabalho.
+**Escopo:** diagnóstico. Nenhuma linha de código foi alterada **para medir**.
+
+> **O que mudou depois da medição, e este documento acompanha.** Os dois únicos
+> defeitos daqui que valiam em produção **já foram corrigidos** — não procure
+> por eles: o `fetch` sem timeout do catálogo (§5) e as 21 páginas que a fusão
+> dos dois sites tirou da geração estática (§7.1, achado que não existia quando
+> as medições foram feitas). Todos os números medidos abaixo são de **antes** do
+> segmento `[locale]`; o resto do documento continua sendo o diagnóstico de
+> `dev` que ele sempre foi, e o veredito dele continua sendo *não mexa*.
 
 O cliente relatou: *"clico em um produto e demora dias para abri-lo"*, e
 confirmou que é **local, em `npm run dev`**, não no site publicado. Pediu
@@ -22,10 +30,18 @@ escrito que não há.
 | **H3 · API fora do ar** | 2,5 ms no servidor; **até 2,4 s por carga de página no navegador** | não (mas ver §5) | **culpado parcial, e o conserto é grátis: subir a API** |
 | **H4 · `next/image` no PNG de 3,7 MB** | 209 ms uma vez, 4 ms depois | não | **inocentado. E ele nem está na PDP** |
 | **A máquina** | 866 MB de RAM livre, 2,5 GB de disco livre em 475 GB | não | **o multiplicador de todos os números acima** |
+| **`fetch` sem timeout no catálogo** | 307 s pendurados com a API muda | **SIM** | **corrigido:** `AbortSignal.timeout(3000)`, §5 |
+| **21 páginas fora do build** (achado posterior) | um render de servidor por visita, no lugar de 15–17 ms | **SIM** | **corrigido:** `generateStaticParams` nas sete institucionais, §7.1 |
 
-E o que ninguém tinha medido: **`lib/catalogo/repositorio.ts:38` fica pendurado
-307 segundos** quando a API aceita a conexão e não responde. Esse é o único
-defeito desta lista que também vale em produção. Está em §5.
+E o que ninguém tinha medido: **`lib/catalogo/repositorio.ts` ficava pendurado
+307 segundos** quando a API aceita a conexão e não responde. Cinco minutos de
+home, PLP e PDP travadas, com o banco perfeitamente de pé. **Já corrigido nesta
+árvore** — §5 tem o antes e o depois.
+
+O segundo achado entrou depois da medição original e não é de `dev`: **21
+páginas deixaram de ser geradas no build ao entrar no `[locale]`**, sem erro
+nenhum, sem aviso e sem teste vermelho. Também já corrigido, e desta vez com
+trava. Está em §7.1.
 
 ---
 
@@ -123,8 +139,12 @@ e `GET /cafes 200 in 5.103 ms`. O cache encurta a compilação, não a elimina.
 ### Isto afeta produção?
 
 **Não.** Em `next build`, `/cafes/[slug]` é gerada estaticamente (a saída do
-build marca `● SSG` com os cinco slugs) e o `next start` a serve em **15 ms**.
-Os 3 segundos do clique a frio viram 106 ms.
+build marca `● SSG` com os cinco slugs — hoje são quinze, cinco por idioma) e o
+`next start` a serve em **15 ms**. Os 3 segundos do clique a frio viram 106 ms.
+
+A PDP foi a única rota que a fusão dos dois sites **não** tirou do build, e por
+isso este parágrafo continua valendo palavra por palavra. As outras tiveram de
+ser devolvidas: §7.1.
 
 ### Custo de correção
 
@@ -332,10 +352,15 @@ minutos depois de a API voltar.
 
 ---
 
-## 5. O defeito que também vale em produção — e não é desta tarefa
+## 5. O defeito que também valia em produção — MEDIDO AQUI, CORRIGIDO DEPOIS
 
-`lib/catalogo/repositorio.ts:38` faz `fetch` **sem timeout**. O irmão dele,
-`lib/avaliacoes/servidor.ts:47`, tem 3 s, e o comentário de lá descreve
+> **Estado: corrigido.** Este documento nasceu como diagnóstico e mediu o
+> defeito; a correção veio na onda seguinte, na mesma branch. Quem chegar aqui
+> procurando o que consertar não vai achar — vai achar o número que justificou
+> a prioridade, que é para o que esta seção serve agora.
+
+`lib/catalogo/repositorio.ts` fazia `fetch` **sem timeout**. O irmão dele,
+`lib/avaliacoes/servidor.ts`, já tinha 3 s, e o comentário de lá descrevia
 exatamente o cenário. Faltava o número. Aqui está ele.
 
 Três modos de falha, medidos contra servidores construídos para cada um:
@@ -347,15 +372,25 @@ Três modos de falha, medidos contra servidores construídos para cada um:
 | **servidor que aceita a conexão e nunca responde** | **307,1 s — cinco minutos e sete segundos** | `UND_ERR_HEADERS_TIMEOUT` |
 | o mesmo servidor mudo, com `AbortSignal.timeout(3000)` | 3.009 ms | timeout, e a vitrine cai para o JSON |
 
-**Cinco minutos.** É o `headersTimeout` padrão do undici, e é o que segura a
+**Cinco minutos.** É o `headersTimeout` padrão do undici, e é o que segurava a
 home, a PLP e a revalidação da PDP quando a API aceita a conexão e trava — o
 caso de um Express vivo com o pool do banco esgotado, que é o jeito mais comum
 de um backend morrer sem cair.
 
-Não é hipótese de dev: é produção. A correção — `AbortSignal.timeout`, no mesmo
-desenho de `lib/avaliacoes/servidor.ts` — pertence à tarefa **2A**, que é dona de
-`frontend/lib/catalogo/**`. Este documento só entrega o número que justifica a
-prioridade.
+Não era hipótese de dev: era produção.
+
+### A correção, e onde ela está
+
+`frontend/lib/catalogo/repositorio.ts` exporta hoje `ESPERA_MAXIMA_MS = 3000` e
+passa `signal: AbortSignal.timeout(ESPERA_MAXIMA_MS)` no `fetch` do
+`/dashboard?limit=200`. **3 segundos, o mesmo número do irmão, de propósito:**
+são duas leituras de contingência do mesmo tipo, e dois tetos diferentes seriam
+duas conversas sobre o mesmo problema. Estourado o prazo, o `fetch` rejeita e
+cai no `catch` que já existia — mapa vazio, e a vitrine vende pelo JSON
+versionado. A linha da tabela acima que descreve o comportamento de hoje é a
+última: **3.009 ms, e a vitrine cai para o JSON.**
+
+Para conferir sem subir nada: `grep -n "AbortSignal" frontend/lib/catalogo/repositorio.ts`.
 
 ---
 
@@ -435,6 +470,59 @@ O build de produção também mostra que os bundles estão saudáveis: 104 kB de
 JavaScript compartilhado, 197 kB de primeira carga na PDP. Não há gordura de
 produção a cortar.
 
+### 7.1 · 21 páginas saíram do build ao entrar no `[locale]` — e voltaram
+
+**Todos os números acima foram medidos ANTES de a vitrine entrar no segmento
+`[locale]`** — é por isso que a linha diz `26 páginas estáticas geradas` e a §2
+fala em "os cinco slugs". Depois da fusão, esse `26` não descreve mais nada.
+
+#### O defeito
+
+A fusão dos dois sites pôs um segmento dinâmico novo (`[locale]`) acima de toda
+página da vitrine. **Uma rota só sai do build se todos os segmentos dinâmicos
+do caminho dela forem enumerados por `generateStaticParams`.** Depois da fusão,
+uma única rota fazia isso: a PDP, que monta o produto cartesiano `idioma × slug`
+na própria folha (3 × 5 = 15 endereços; o comentário de lá explica por que na
+folha e não nos segmentos).
+
+Todas as outras foram junto. As **sete rotas institucionais** — home, `/a-serra`,
+`/historia`, `/bio`, `/rastreabilidade`, termos e política — são texto puro:
+não leem `cookies()`, `headers()` nem `searchParams`, e o build as resolveria
+uma vez para servir como arquivo. Sem enumeração do `[locale]`, passaram a pagar
+render de servidor **a cada visita**, nos três idiomas: **7 × 3 = 21 páginas.**
+
+O que torna este defeito desagradável é que ele **não deu erro nenhum**. Build
+verde, testes verdes, nenhum aviso — só o site mais lento em produção. É o
+oposto do resto deste documento, que é sintoma sem defeito: aqui era defeito sem
+sintoma visível.
+
+#### A correção
+
+As sete declaram `generateStaticParams` devolvendo os três idiomas, e há uma
+trava para o defeito não voltar do mesmo jeito silencioso:
+`frontend/app/[locale]/(vitrine)/paginas-estaticas.test.ts` lê o **código-fonte**
+das sete e falha se a função sumir. Ela lê o texto do módulo em vez de importar
+a página porque importar `page.tsx` no Vitest arrastaria `next/image`, o
+repositório do catálogo e a árvore de componentes de servidor para um ambiente
+que não é o do Next — e o que precisa ser verdade é uma propriedade do fonte.
+
+`/clube` ganhou a mesma enumeração de brinde. Ficam de fora, e é decisão: a PLP
+`/cafes` lê `searchParams` (`app/[locale]/(vitrine)/cafes/page.tsx:118`) e é
+dinâmica por natureza, com `[locale]` ou sem ele.
+
+**Nenhum `npm run build` foi rodado para conferir isto.** Três agentes escreviam
+nesta árvore ao mesmo tempo e o build é global — rodá-lo teria colidido. O que
+está verificado é o fonte (`grep -rn "generateStaticParams" frontend/app`) e a
+suíte. **Quem arbitra de verdade é a saída do build**, que imprime `○`, `●` e
+`ƒ` rota a rota: é lá que se confere que as 21 voltaram.
+
+#### O tamanho disto
+
+Com os números que a §7 já tem: uma rota estática servida por `next start`
+responde em **15–17 ms**; a mesma rota renderizada a cada requisição paga o
+render inteiro. Não é o sintoma de que o cliente reclamou — aquele é de `dev` —
+mas era o único item deste documento que piorava a loja **publicada**.
+
 ### Uma observação de brinde, que não é performance
 
 Durante a medição, a chamada que a PDP faz ao PostgREST
@@ -503,8 +591,13 @@ para os 8,55 ms por arquivo que produziram os 62 segundos da §3.
 build compram uma PDP de 15 ms e um clique de 106 ms. Para trabalho iterativo o
 `dev` continua sendo o certo — mas para "ver como ficou", o build ganha.
 
-**5. O timeout de `lib/catalogo/repositorio.ts:38`.** Cinco minutos de página
-pendurada, e é o único item desta lista que vale em produção. Dono: tarefa 2A.
+**5. ~~O timeout de `lib/catalogo/repositorio.ts`~~ — FEITO.** Era o único item
+desta lista que valia em produção, e os cinco minutos de página pendurada já
+não existem: `AbortSignal.timeout(3000)` está no arquivo (§5). Nada a fazer.
+
+**6. ~~Devolver ao build as rotas traduzidas~~ — FEITO (§7.1).** As 21 páginas
+institucionais voltaram a sair do build, com trava em teste. Falta só **ver a
+saída de um `npm run build`** confirmando — nenhum foi rodado nesta onda.
 
 ---
 

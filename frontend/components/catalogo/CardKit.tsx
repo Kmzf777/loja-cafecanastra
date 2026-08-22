@@ -7,10 +7,12 @@ import {
   formatarPreco,
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
-import { LINHAS } from "@/lib/catalogo/rotulos";
+import { COR_DA_LINHA } from "@/lib/catalogo/rotulos";
 import { Botao } from "@/components/ui/Botao";
 import { useSacola } from "@/lib/sacola/sacola";
 import { eventoAddToCart } from "@/lib/analytics";
+import { dicionario } from "@/lib/i18n/dicionario";
+import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 
 /**
  * Card de kit — a seção "Kits e caixas" da PLP.
@@ -29,7 +31,23 @@ import { eventoAddToCart } from "@/lib/analytics";
  * kits em si chega pronta do Server Component da PLP.
  */
 
-export function CardKit({ kit }: { kit: Kit }) {
+export function CardKit({
+  kit,
+  locale = LOCALE_PADRAO,
+}: {
+  kit: Kit;
+  /**
+   * O idioma da PLP, com o MESMO contrato do <CardCafe> ao lado — os dois
+   * dividem a mesma grade e o mesmo `locale` da página. Este card era o único
+   * dos dois que não o recebia, e por isso a seção "Kits e caixas" de
+   * /en/cafes vendia em português no meio de uma página em inglês.
+   *
+   * O padrão existe pelo mesmo motivo do card irmão: há chamador sem rota
+   * (o teste, e o dia em que um kit aparecer numa tela sem `params`).
+   */
+  locale?: Locale;
+}) {
+  const d = dicionario(locale);
   const { adicionar, itens } = useSacola();
   const [adicionado, setAdicionado] = useState(false);
   const [erroDaSacola, setErroDaSacola] = useState<string | null>(null);
@@ -63,7 +81,7 @@ export function CardKit({ kit }: { kit: Kit }) {
   const complemento = resto.join(" - ");
 
   const indisponivel = kit.estoque === 0 || kit.preco <= 0;
-  const fita = LINHAS[kit.linha].corVar;
+  const fita = COR_DA_LINHA[kit.linha];
 
   async function aoAdicionar() {
     setErroDaSacola(null);
@@ -75,9 +93,7 @@ export function CardKit({ kit }: { kit: Kit }) {
     setNoTeto(false);
 
     if (!kit.produtoId) {
-      setErroDaSacola(
-        "Não conseguimos falar com a loja agora. Tente de novo em instantes.",
-      );
+      setErroDaSacola(d.venda.semLoja);
       return;
     }
 
@@ -106,7 +122,7 @@ export function CardKit({ kit }: { kit: Kit }) {
         2500,
       );
     } catch {
-      setErroDaSacola("Não foi possível adicionar à sacola.");
+      setErroDaSacola(d.venda.naoDeuParaAdicionar);
     }
   }
 
@@ -138,7 +154,8 @@ export function CardKit({ kit }: { kit: Kit }) {
             {kit.unidades ? (
               <>
                 <span aria-hidden> · </span>
-                <span className="font-dado">{kit.unidades} unidades</span>
+                <span className="font-dado">{kit.unidades}</span>{" "}
+                {d.venda.kit.unidades}
               </>
             ) : null}
           </p>
@@ -146,7 +163,7 @@ export function CardKit({ kit }: { kit: Kit }) {
           <div className="mt-auto flex flex-wrap items-center justify-between gap-3 pt-4">
             {indisponivel ? (
               <span className="text-[12px] uppercase tracking-[0.14em] text-fuligem-55">
-                Esgotado
+                {d.comum.esgotado}
               </span>
             ) : (
               <span
@@ -164,15 +181,15 @@ export function CardKit({ kit }: { kit: Kit }) {
               className="disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
             >
               {indisponivel
-                ? "Esgotado"
+                ? d.comum.esgotado
                 : adicionado
-                  ? "Na sacola"
-                  : "Adicionar à sacola"}
+                  ? d.venda.naSacola
+                  : d.venda.adicionarASacola}
             </Botao>
           </div>
 
           <p role="status" aria-live="polite" className="sr-only">
-            {adicionado ? "Kit adicionado à sacola." : ""}
+            {adicionado ? d.venda.kit.adicionado : ""}
           </p>
 
           {erroDaSacola ? (
@@ -184,13 +201,13 @@ export function CardKit({ kit }: { kit: Kit }) {
           {/* Discreto: bater no teto não é erro, é o estoque real. */}
           {noTeto ? (
             <p role="status" className="mt-3 text-[13px] text-fuligem-55">
-              Sua sacola já tem o máximo disponível deste kit.
+              {d.venda.kit.noTeto}
             </p>
           ) : null}
 
           {indisponivel ? (
             <p role="status" className="mt-3 text-[13px] text-fuligem-55">
-              Este kit está esgotado na loja. Volte em breve — a torra é semanal.
+              {d.venda.kit.esgotado}
             </p>
           ) : null}
         </div>

@@ -31,8 +31,13 @@ export const LOCALE_PADRAO: Locale = "pt";
  * O segmento `[locale]` do App Router aceita QUALQUER string: sem este
  * predicado barrando o que não é idioma, `/qualquer-coisa/cafes` responderia
  * 200 com o conteúdo em português, e cada página passaria a ter infinitas
- * URLs. Quem chama é `app/[locale]/layout.tsx`, que manda o resto para
- * `notFound()`.
+ * URLs.
+ *
+ * QUEM CHAMA É `app/[locale]/(vitrine)/layout.tsx`, que manda o resto para
+ * `notFound()`. NÃO existe um `app/[locale]/layout.tsx` — e o endereço certo
+ * importa aqui, porque quem vier conferir a trava vai procurá-la primeiro no
+ * layout do segmento. A validação mora no layout do GRUPO porque ele é o mais
+ * alto que toda rota traduzida atravessa; o comentário de lá explica o resto.
  */
 export function ehLocale(valor: string): valor is Locale {
   return (LOCALES as readonly string[]).includes(valor);

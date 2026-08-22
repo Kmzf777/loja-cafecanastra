@@ -1,7 +1,15 @@
 import { linkWhatsApp } from "@/lib/whatsapp";
+import { dicionario } from "@/lib/i18n/dicionario";
+import type { Locale } from "@/lib/i18n/tipos";
 
 /**
  * Botão flutuante de WhatsApp.
+ *
+ * O IDIOMA CHEGA POR PROP, e o dicionário é lido AQUI DENTRO — ao contrário do
+ * <AtalhosDoCliente>, que recebe um recorte de rótulos. A diferença é a
+ * fronteira: aquele é Client Component e tudo que atravessa vai serializado no
+ * payload da rota; este é servidor, o dicionário nunca sai daqui e ler a chave
+ * na origem custa zero byte de navegador.
  *
  * Server Component: não há estado nenhum — o link vem pronto de
  * `lib/whatsapp.ts` (fonte única, compartilhada com o rodapé) e o botão
@@ -29,17 +37,22 @@ function GlifoWhatsApp() {
   );
 }
 
-export function BotaoWhatsApp() {
+export function BotaoWhatsApp({ locale }: { locale: Locale }) {
   const href = linkWhatsApp();
   if (!href) return null;
+
+  // O ÚNICO TEXTO DESTE BOTÃO. Ele é só um glifo na tela, então o nome
+  // acessível e o tooltip são a peça inteira — e estavam em português em /en
+  // e /es, onde o botão acompanha a moldura como em qualquer outra rota.
+  const rotulo = dicionario(locale).comum.falarNoWhatsApp;
 
   return (
     <a
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label="Falar com a gente no WhatsApp"
-      title="Falar com a gente no WhatsApp"
+      aria-label={rotulo}
+      title={rotulo}
       className="fixed bottom-20 right-4 z-30 flex size-12 items-center justify-center rounded-bt bg-fuligem text-cal shadow-[4px_4px_0_var(--color-fuligem-20)] transition-colors hover:bg-fuligem-80 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho md:bottom-6 md:right-6"
     >
       <GlifoWhatsApp />

@@ -3,11 +3,11 @@ import Image from "next/image";
 import { listarLotes } from "@/lib/catalogo/repositorio";
 import { traduzirLote } from "@/lib/catalogo/produtos";
 import { MARCA } from "@/lib/catalogo/produtos";
-import { PONTO_TORRA } from "@/lib/catalogo/rotulos";
+import { rotuloPontoTorra } from "@/lib/catalogo/rotulos";
 import { Serra } from "@/components/marca/Serra";
 import { BotaoLink } from "@/components/ui/Botao";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { MARCO_DE_ORIGEM, textosDaSerra } from "./conteudo";
 
@@ -53,6 +53,19 @@ export async function generateMetadata({
 }
 
 export const revalidate = 3600;
+
+/**
+ * As três versões saem prontas do build. Sem esta função o `[locale]` deixa a
+ * rota sob demanda e o `revalidate` acima não guarda HTML nenhum — a página
+ * passa a pagar render mais o `fetch` do catálogo a cada visita. A explicação
+ * longa, com o número medido, está na home ((vitrine)/page.tsx).
+ *
+ * Esta página é elegível: lê o catálogo por `fetch` com `next: { revalidate }`
+ * e não toca `cookies()`, `headers()` nem `searchParams`.
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 export default async function PaginaSerra({
   params,
@@ -111,8 +124,16 @@ export default async function PaginaSerra({
             <p className="mt-4 max-w-[62ch] text-[17px] leading-relaxed text-fuligem-80">
               {t.origemP2}
             </p>
+            {/* `min-h-[44px]`: a variante `texto` é a única do <BotaoLink> sem
+                a altura `h-12`, e com o `leading-none` do BASE o alvo de toque
+                fecharia em ~13px — o §10 pede 44. O conserto definitivo é em
+                components/ui/Botao.tsx, que não é desta tarefa. */}
             <p className="mt-6">
-              <BotaoLink href={href(locale, "/historia")} variante="texto">
+              <BotaoLink
+                href={href(locale, "/historia")}
+                variante="texto"
+                className="min-h-[44px]"
+              >
                 {t.origemLink}
               </BotaoLink>
             </p>
@@ -186,7 +207,7 @@ export default async function PaginaSerra({
                   </span>
                   <p className="mt-1 text-[15px] font-semibold">{l.nome}</p>
                   <p className="text-[13px] text-fuligem-80">
-                    {PONTO_TORRA[l.pontoTorra]} · {l.corpo}
+                    {rotuloPontoTorra(l.pontoTorra, locale)} · {l.corpo}
                   </p>
                 </li>
               ))}

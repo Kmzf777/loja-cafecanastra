@@ -2,7 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import type { Lote } from "@/lib/catalogo/tipos";
 import { precoMinimo, formatarPreco, temEstoque } from "@/lib/catalogo/repositorio";
-import { LINHAS, rotuloNota } from "@/lib/catalogo/rotulos";
+import { COR_DA_LINHA, rotuloNota } from "@/lib/catalogo/rotulos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { href } from "@/lib/i18n/rotas";
 import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
@@ -40,7 +40,7 @@ export function CardCafe({
   locale?: Locale;
 }) {
   const d = dicionario(locale);
-  const linha = LINHAS[lote.linha];
+  const corDaLinha = COR_DA_LINHA[lote.linha];
   const preco = precoMinimo(lote);
   const disponivel = temEstoque(lote);
 
@@ -56,7 +56,7 @@ export function CardCafe({
         <span
           aria-hidden
           className="block h-1 w-full"
-          style={{ backgroundColor: linha.corVar }}
+          style={{ backgroundColor: corDaLinha }}
         />
 
         <div className="relative aspect-[4/5] overflow-hidden">
@@ -100,12 +100,17 @@ export function CardCafe({
           </h3>
 
           <p className="mt-1.5 text-[14px] text-fuligem-55">
-            {lote.notas.map(rotuloNota).join(" · ")}
+            {lote.notas.map((nota) => rotuloNota(nota, locale)).join(" · ")}
           </p>
 
           {/* mt-auto empurra torra e preco para a base: os cards da grade
               terminam alinhados mesmo com numero diferente de linhas de nota. */}
-          <PontoTorra valor={lote.pontoTorra} compacto className="mt-3 pt-1" />
+          <PontoTorra
+            valor={lote.pontoTorra}
+            compacto
+            locale={locale}
+            className="mt-3 pt-1"
+          />
 
           {/* `preco` é nulo quando a linha não tem nenhuma variante com preço
               na loja — hoje é o caso da Canela, cujos formatos capturados

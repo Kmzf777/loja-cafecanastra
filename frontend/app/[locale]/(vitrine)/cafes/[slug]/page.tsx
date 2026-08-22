@@ -9,7 +9,6 @@ import {
   precoMinimo,
   formatarPreco,
 } from "@/lib/catalogo/repositorio";
-import { METODOS } from "@/lib/catalogo/tipos";
 import { formatarSca, rotuloNota } from "@/lib/catalogo/rotulos";
 import {
   breadcrumbJsonLd,
@@ -24,9 +23,10 @@ import { CardCafe } from "@/components/catalogo/CardCafe";
 import { Avaliacoes } from "@/components/catalogo/Avaliacoes";
 import { agregadoAprovadas } from "@/lib/avaliacoes/servidor";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { LOCALES, comoLocale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { traduzirLote } from "@/lib/catalogo/produtos";
+import { moagemDaReceita } from "@/components/catalogo/receita";
 
 /**
  * PDP — estetica.md §7.3, "a pagina mais importante".
@@ -38,6 +38,20 @@ import { traduzirLote } from "@/lib/catalogo/produtos";
  * ORDEM INEGOCIAVEL (§7.3): nota de sabor ACIMA de qualquer dado tecnico, e a
  * ficha da lavoura sempre recolhida por padrao.
  */
+
+/**
+ * O território é convenção de crawler, não afirmação sobre o público: quem lê
+ * em espanhol aqui é sobretudo Chile e Argentina, mas `es_ES` é o valor que o
+ * Facebook documenta como padrão da língua. A tabela é irmã da de
+ * `app/[locale]/(vitrine)/historia/page.tsx`, e o dia em que aparecer uma
+ * terceira cópia ela tem de subir para lib/i18n/tipos.ts, ao lado do
+ * `TAG_BCP47`.
+ */
+const OG_LOCALE: Record<Locale, string> = {
+  pt: "pt_BR",
+  en: "en_US",
+  es: "es_ES",
+};
 
 export const dynamicParams = false;
 
@@ -78,14 +92,18 @@ export async function generateMetadata({
   // `description` sao montados a partir de `lote.descricao` e `lote.notas`, e
   // sem esta linha a PDP em ingles anunciava ao Google um resumo em portugues
   // — a pagina inteira traduzida e o cartao de resultado em outra lingua.
+  const d = dicionario(locale);
   const cru = await obterLote(slug);
-  if (!cru) return { title: "Café não encontrado" };
+  if (!cru) return { title: d.pdp.naoEncontrado.metaTitulo };
   const lote = traduzirLote(cru, locale);
 
-  const notas = lote.notas.map(rotuloNota).join(", ");
+  const notas = lote.notas.map((n) => rotuloNota(n, locale)).join(", ");
   // `formatarSca` e nao um template com "+": a meta description do Nectar de
   // Minas anunciava "SCA 75+" ao buscador, que e a mesma mentira da plaqueta.
-  const descricao = `${lote.descricao} Notas de ${notas.toLowerCase()}. ${formatarSca(lote.sca, lote.scaExata)}, ${lote.origem.regiao}.`;
+  // A EMENDA DAS NOTAS TAMBÉM É TRADUZIDA: as notas já vinham no idioma certo
+  // (`rotuloNota`) e o "Notas de" à frente delas não, então o cartão de
+  // resultado em inglês saía metade em português.
+  const descricao = `${lote.descricao} ${d.pdp.notasDe} ${notas.toLowerCase()}. ${formatarSca(lote.sca, lote.scaExata)}, ${lote.origem.regiao}.`;
 
   return {
     title: `${lote.nome} — Café Canastra`,
@@ -97,7 +115,11 @@ export async function generateMetadata({
       title: `${lote.nome} — Café Canastra`,
       description: descricao,
       type: "website",
-      locale: "pt_BR",
+      // `og:locale` exige `idioma_TERRITÓRIO` e por isso não reaproveita o
+      // `TAG_BCP47`, que devolve `en` e `es` secos — a mesma tabela e a mesma
+      // razão de /historia. Cravado em `pt_BR`, ele anunciava ao Facebook que
+      // a PDP em inglês era uma página em português.
+      locale: OG_LOCALE[locale],
       images: [{ url: lote.fotos.pacote.src, alt: lote.fotos.pacote.alt }],
     },
   };
@@ -170,7 +192,7 @@ export default async function PaginaLote({
             // um breadcrumb que aponta para `/cafes` numa página servida em
             // `/en/cafes/...` manda o crawler para outro idioma.
             breadcrumbJsonLd([
-              { nome: "Início", url: href(locale, "/") },
+              { nome: d.pdp.inicio, url: href(locale, "/") },
               { nome: d.nav.cafes, url: href(locale, "/cafes") },
               { nome: lote.nome, url: href(locale, `/cafes/${lote.slug}`) },
             ]),
@@ -180,7 +202,10 @@ export default async function PaginaLote({
 
       {/* ── Topo: galeria + compra ──────────────────────────── superfície cal */}
       <div className="mx-auto max-w-[1440px] px-4 py-10 md:px-10 md:py-16">
-        <nav aria-label="Trilha" className="mb-8 text-[12px] uppercase tracking-[0.14em] text-fuligem-55">
+        <nav
+          aria-label={d.pdp.trilha}
+          className="mb-8 text-[12px] uppercase tracking-[0.14em] text-fuligem-55"
+        >
           <Link href={href(locale, "/cafes")} className="hover:text-vermelho">
             {d.nav.cafes}
           </Link>
@@ -230,10 +255,14 @@ export default async function PaginaLote({
 
             {/* Nota de sabor em destaque, ACIMA de qualquer dado tecnico. */}
             <p className="mt-6 text-[19px] leading-relaxed">
-              {lote.notas.map(rotuloNota).join(" · ")}
+              {lote.notas.map((n) => rotuloNota(n, locale)).join(" · ")}
             </p>
 
-            <PontoTorra valor={lote.pontoTorra} className="mt-6 max-w-sm" />
+            <PontoTorra
+              valor={lote.pontoTorra}
+              locale={locale}
+              className="mt-6 max-w-sm"
+            />
 
             <div className="mt-8">
               <PainelCompra lote={lote} locale={locale} />
@@ -245,7 +274,7 @@ export default async function PaginaLote({
             {lote.formatosEspeciais.length ? (
               <section className="mt-10 border-t border-fuligem-20 pt-6">
                 <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
-                  Também nesta linha
+                  {d.pdp.tambemNestaLinha}
                 </h2>
                 <ul className="mt-4 grid gap-2">
                   {lote.formatosEspeciais.map((f) => (
@@ -257,7 +286,7 @@ export default async function PaginaLote({
                       <span className="font-dado text-[13px] text-fuligem-55">
                         {f.estoque > 0 && f.preco > 0
                           ? formatarPreco(f.preco)
-                          : "Esgotado"}
+                          : d.comum.esgotado}
                       </span>
                     </li>
                   ))}
@@ -266,7 +295,7 @@ export default async function PaginaLote({
             ) : null}
 
             <div className="mt-10">
-              <FichaLavoura lote={lote} />
+              <FichaLavoura lote={lote} locale={locale} />
             </div>
           </div>
         </div>
@@ -276,18 +305,31 @@ export default async function PaginaLote({
       <section className="bg-fuligem py-16 text-cal md:py-24">
         <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
-            Sobre esta linha
+            {d.pdp.sobreEstaLinha}
           </p>
           <p className="mt-6 max-w-[62ch] titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
             {lote.descricao}
           </p>
           {/* Origem única: a mesma serra para toda a coleção. O texto antigo
               afirmava sítio, safra e altitude por lote — nada disso existe num
-              blend de origem única, e nada disso vinha de fonte. */}
+              blend de origem única, e nada disso vinha de fonte.
+
+              A FRASE É COSTURADA, E SÓ AS EMENDAS SÃO DO DICIONÁRIO: região,
+              torra, corpo e preparo sugerido chegam do editorial já no idioma
+              da página (data/catalogo-canastra.i18n.json). Guardar a frase
+              inteira numa chave obrigaria a repetir o editorial dentro do
+              dicionário — dois lugares para o mesmo texto. */}
+          {/* AS VARIEDADES SAÍRAM DESTA FRASE, e a ausência é o conserto.
+              Ela afirmava "Blend 100% arábica das variedades Araras, Caturra
+              2SL e Paraíso" nas CINCO linhas, porque `monta()` copiava a lista
+              da marca para cada lote. Araras, Caturra 2SL e Paraíso são o que a
+              CASA planta; nem o Microlote (lote separado por definição) nem o
+              Néctar de Minas (marca irmã, 75 pontos, pacote próprio) têm
+              composição publicada. A afirmação continua em /a-serra, onde ela é
+              sobre a lavoura e não sobre o pacote. */}
           <p className="mt-6 max-w-[62ch] text-[17px] leading-relaxed text-cal/80">
-            Origem única da {lote.origem.regiao}. Blend 100% arábica das
-            variedades {lote.origem.variedades.join(", ")}. {lote.torra},{" "}
-            {lote.corpo.toLowerCase()}. Rende melhor em{" "}
+            {d.pdp.origemUnicaDa} {lote.origem.regiao}. {lote.torra},{" "}
+            {lote.corpo.toLowerCase()}. {d.pdp.rendeMelhorEm}{" "}
             {lote.preparoSugerido.toLowerCase()}.
           </p>
         </div>
@@ -300,21 +342,23 @@ export default async function PaginaLote({
       <section id="como-preparar" className="scroll-mt-24 bg-juta-claro py-16 md:py-24">
         <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
-            Como preparar
+            {d.pdp.comoPreparar}
           </h2>
 
           <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {lote.preparo.map((p) => {
-              const metodo =
-                METODOS.find((m) => m.valor === p.metodo)?.rotulo ?? p.metodo;
+              const metodo = d.catalogo.metodo[p.metodo];
               const linhas: [string, string][] = [
-                ["Proporção", `${p.proporcao} · ${p.gramas} g / ${p.ml} ml`],
-                ["Temperatura", `${p.temperaturaC} °C`],
                 [
-                  "Tempo",
+                  d.pdp.receita.proporcao,
+                  `${p.proporcao} · ${p.gramas} g / ${p.ml} ml`,
+                ],
+                [d.pdp.receita.temperatura, `${p.temperaturaC} °C`],
+                [
+                  d.pdp.receita.tempo,
                   `${Math.floor(p.tempoSegundos / 60)} min ${p.tempoSegundos % 60 ? `${p.tempoSegundos % 60} s` : ""}`.trim(),
                 ],
-                ["Moagem", p.moagem],
+                [d.pdp.receita.moagem, moagemDaReceita(p.moagem, d)],
               ];
               return (
                 <div key={p.metodo} className="border border-fuligem/25 bg-cal p-6">
@@ -346,7 +390,7 @@ export default async function PaginaLote({
         <div className="mx-auto max-w-[1440px] px-4 md:px-10">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
             <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
-              Da mesma serra
+              {d.pdp.daMesmaSerra}
             </h2>
             {/* Linhas sem preço (tudo esgotado) não podem entrar no mínimo:
                 `precoMinimo` devolve null nesse caso e Math.min viraria NaN. */}
@@ -356,7 +400,7 @@ export default async function PaginaLote({
                 .filter((p): p is number => p !== null);
               return precos.length ? (
                 <span className="font-dado text-[13px] text-fuligem-55">
-                  a partir de {formatarPreco(Math.min(...precos))}
+                  {d.comum.aPartirDe} {formatarPreco(Math.min(...precos))}
                 </span>
               ) : null;
             })()}
@@ -372,7 +416,7 @@ export default async function PaginaLote({
       {/* ── Avaliações ──────────────────────────── client island, ao vivo.
           A pagina e estatica; a lista busca no PostgREST ao montar (aprovadas
           apenas — RLS de 0014). Erro na busca = a secao nao aparece. */}
-      <Avaliacoes skus={skusDaLinha} />
+      <Avaliacoes skus={skusDaLinha} locale={locale} />
     </>
   );
 }

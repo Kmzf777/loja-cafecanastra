@@ -6,6 +6,8 @@ import type {
   AvaliacaoPublica,
   ResumoDeAvaliacoes,
 } from "@/lib/avaliacoes/tipos";
+import { dicionario, type Dicionario } from "@/lib/i18n/dicionario";
+import { LOCALE_PADRAO, TAG_BCP47, type Locale } from "@/lib/i18n/tipos";
 
 /**
  * Avaliações da PDP — a última seção da página (estetica.md §7.3).
@@ -24,7 +26,17 @@ import type {
  * diferente de erro: vazio é convite, e aparece.)
  */
 
-type Props = { skus: string[] };
+type Props = {
+  skus: string[];
+  /**
+   * O idioma da PDP. Ele decide o texto E OS DOIS FORMATOS DE NÚMERO desta
+   * seção: a média saía sempre com vírgula decimal ("4,8") e a data sempre em
+   * dd/mm/aaaa, que é como o Brasil escreve e não é como o leitor em inglês
+   * lê. `TAG_BCP47` é a mesma etiqueta do `<html lang>` da moldura — uma
+   * fonte só para o idioma da página e para o da formatação.
+   */
+  locale?: Locale;
+};
 
 /** Estrelas pequenas, decorativas — o valor textual está sempre ao lado. */
 function Estrelas({ nota, className = "" }: { nota: number; className?: string }) {
@@ -42,12 +54,44 @@ function Estrelas({ nota, className = "" }: { nota: number; className?: string }
   );
 }
 
-function dataBr(iso: string): string {
+/**
+ * A data de uma avaliação, escrita como o idioma da página escreve.
+ *
+ * `toLocaleDateString("pt-BR")` cravado era 03/08/2026 para todo mundo, e um
+ * leitor em inglês lê aquilo como 8 de março. `TAG_BCP47` é a MESMA etiqueta
+ * do `<html lang>` da moldura — o idioma da página e o do formato saem de uma
+ * fonte só.
+ *
+ * EXPORTADA PARA O TESTE, e a razão é a arquitetura desta ilha: a lista só
+ * existe depois do efeito que busca no PostgREST, e efeito não roda em
+ * `renderToStaticMarkup`. Sem exportar, esta regra e a do plural ficariam sem
+ * nenhuma verificação.
+ */
+export function dataDaAvaliacao(iso: string, locale: Locale): string {
   const data = new Date(iso);
-  return Number.isNaN(data.getTime()) ? "" : data.toLocaleDateString("pt-BR");
+  return Number.isNaN(data.getTime())
+    ? ""
+    : data.toLocaleDateString(TAG_BCP47[locale]);
 }
 
-export function Avaliacoes({ skus }: Props) {
+/**
+ * Singular ou plural da contagem.
+ *
+ * A REGRA DE PLURAL É POR IDIOMA, e nos três daqui ela por acaso coincide: só
+ * 1 é singular, e o zero vai para o plural ("0 avaliações", "0 reviews", "0
+ * opiniones"). Está numa função em vez de num ternário solto na JSX porque a
+ * coincidência não é lei — o francês trata 0 como singular, o russo tem três
+ * formas — e o dia em que entrar um idioma assim, o lugar de mudar já existe
+ * e é um só.
+ *
+ * Exportada pelo mesmo motivo de `dataDaAvaliacao`.
+ */
+export function contagem(n: number, d: Dicionario): string {
+  return n === 1 ? d.avaliacoes.uma : d.avaliacoes.muitas;
+}
+
+export function Avaliacoes({ skus, locale = LOCALE_PADRAO }: Props) {
+  const d = dicionario(locale);
   const [estado, setEstado] = useState<"carregando" | "pronto" | "erro">(
     "carregando",
   );
@@ -104,24 +148,24 @@ export function Avaliacoes({ skus }: Props) {
     }
   };
 
-  const mediaExibida = resumo.media.toLocaleString("pt-BR", {
+  const mediaExibida = resumo.media.toLocaleString(TAG_BCP47[locale], {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   });
 
   return (
     <section
-      aria-label="Avaliações de clientes"
+      aria-label={d.avaliacoes.deClientes}
       className="border-t border-fuligem-20 bg-cal py-16 md:py-24"
     >
       <div className="mx-auto max-w-[1440px] px-4 md:px-10">
         <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
-          Avaliações
+          {d.avaliacoes.titulo}
         </h2>
 
         {resumo.contagem === 0 ? (
           <p className="mt-6 max-w-[52ch] text-[17px] leading-relaxed text-fuligem-80">
-            Seja o primeiro a avaliar — compre e conte o que achou.
+            {d.avaliacoes.vazio}
           </p>
         ) : (
           <>
@@ -130,11 +174,12 @@ export function Avaliacoes({ skus }: Props) {
               <span className="font-dado text-[28px] leading-none">
                 {mediaExibida}
               </span>
-              <span className="text-[14px] text-fuligem-55">de 5</span>
+              <span className="text-[14px] text-fuligem-55">
+                {d.avaliacoes.deCinco}
+              </span>
               <Estrelas nota={resumo.media} className="text-[14px]" />
               <span className="font-dado text-[13px] text-fuligem-55">
-                {resumo.contagem}{" "}
-                {resumo.contagem === 1 ? "avaliação" : "avaliações"}
+                {resumo.contagem} {contagem(resumo.contagem, d)}
               </span>
             </p>
 
@@ -147,13 +192,14 @@ export function Avaliacoes({ skus }: Props) {
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                     <Estrelas nota={avaliacao.nota} className="text-[13px]" />
                     <span className="sr-only">
-                      Nota {avaliacao.nota} de 5.
+                      {d.avaliacoes.nota} {avaliacao.nota}{" "}
+                      {d.avaliacoes.deCinco}.
                     </span>
                     <span className="text-[14px] font-semibold">
                       {avaliacao.nomeExibicao}
                     </span>
                     <span className="font-dado text-[12px] text-fuligem-55">
-                      {dataBr(avaliacao.criadoEm)}
+                      {dataDaAvaliacao(avaliacao.criadoEm, locale)}
                     </span>
                   </div>
                   {avaliacao.titulo ? (
@@ -177,7 +223,7 @@ export function Avaliacoes({ skus }: Props) {
                 disabled={buscandoMais}
                 className="mt-8 border border-current px-6 py-3 text-[13px] font-semibold uppercase tracking-[0.08em] transition-colors hover:bg-fuligem hover:text-cal focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho disabled:opacity-60"
               >
-                {buscandoMais ? "Buscando…" : "Ver mais avaliações"}
+                {buscandoMais ? d.avaliacoes.buscando : d.avaliacoes.verMais}
               </button>
             ) : null}
           </>

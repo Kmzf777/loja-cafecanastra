@@ -33,6 +33,25 @@ const IGUAIS_DE_PROPOSITO: Record<Exclude<Locale, "pt">, string[]> = {
     // "item" é a mesma palavra nas duas línguas; o plural já diverge
     // ("itens"/"items") e por isso não está aqui.
     "comum.item",
+    // OS NOMES DAS CINCO LINHAS. É o que está impresso no pacote que chega na
+    // casa da pessoa: traduzir desliga o reconhecimento da marca e quebra a
+    // busca de quem chega pelo rótulo. Estão no dicionário mesmo assim para
+    // que nenhum componente invente a sua própria versão.
+    "catalogo.linha.classico",
+    "catalogo.linha.suave",
+    "catalogo.linha.canela",
+    "catalogo.linha.microlote",
+    "catalogo.linha.nectar-de-minas",
+    // Notas de prova que se escrevem igual nas duas línguas.
+    "catalogo.nota.chocolate",
+    "catalogo.nota.floral",
+    // Fruta brasileira sem nome em inglês — a roda de sabores usa o nosso.
+    "catalogo.nota.jabuticaba",
+    // Nomes de método que o inglês já empresta inteiros.
+    "catalogo.metodo.espresso",
+    "catalogo.metodo.aeropress",
+    // Nome do produto impresso na caixa da loja.
+    "catalogo.formato.drip",
   ],
   es: [
     "nav.principal",
@@ -45,6 +64,41 @@ const IGUAIS_DE_PROPOSITO: Record<Exclude<Locale, "pt">, string[]> = {
     "comum.lotes",
     // Gerúndio idêntico nas duas línguas.
     "newsletter.enviando",
+    // Os nomes das cinco linhas — ver a nota do `en`.
+    "catalogo.linha.classico",
+    "catalogo.linha.suave",
+    "catalogo.linha.canela",
+    "catalogo.linha.microlote",
+    "catalogo.linha.nectar-de-minas",
+    // Notas de prova idênticas em português e espanhol.
+    "catalogo.nota.chocolate",
+    "catalogo.nota.caramelo",
+    "catalogo.nota.citrico",
+    "catalogo.nota.floral",
+    "catalogo.nota.canela",
+    "catalogo.nota.jabuticaba",
+    "catalogo.metodo.espresso",
+    "catalogo.metodo.prensa-francesa",
+    "catalogo.metodo.aeropress",
+    "catalogo.formato.drip",
+    "catalogo.formato.capsula",
+    // A moagem fina se escreve igual nas duas línguas; as outras três da
+    // escala (média, média-fina, grossa) divergem e por isso não estão aqui.
+    "catalogo.moagemDaReceita.fina",
+    // "Temperatura" e "Peso" são a mesma palavra em português e espanhol.
+    "pdp.receita.temperatura",
+    "pdp.rotulo.peso",
+    // "Modo de compra" e "Compra única" se escrevem igual nas duas línguas —
+    // é a forma corrente em espanhol, não português deixado para trás.
+    "pdp.modoDeCompra",
+    "pdp.compraUnica",
+    // "unidades" é a mesma palavra; o singular nem existe nesta tela.
+    "venda.kit.unidades",
+    // "4,8 de 5" se lê igual nas duas línguas.
+    "avaliacoes.deCinco",
+    // "Notas de cacao" é como o espanhol escreve — a mesma forma do português.
+    // Em inglês a ficha de prova diz "tasting notes", e lá a chave diverge.
+    "pdp.notasDe",
   ],
 };
 

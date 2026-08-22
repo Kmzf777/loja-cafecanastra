@@ -123,6 +123,360 @@ const pt = {
     /** Contagem da sacola no rótulo acessível: "Sacola · 3 itens". */
     item: "item",
     itens: "itens",
+    /**
+     * O `alt` do lockup do logotipo — cabeçalho e rodapé.
+     *
+     * ERA A ÚNICA IMAGEM DA MOLDURA QUE CONTINUAVA EM PORTUGUÊS EM /en E /es.
+     * A justificativa antiga ("o `alt` descreve o que está impresso, e a
+     * embalagem não muda de idioma") trocava DESCRIÇÃO por TRANSCRIÇÃO: o
+     * `alt` não é a legenda do desenho, é o que a pessoa que não enxerga a
+     * imagem ouve — e ela ouve no idioma da página que está lendo. No rodapé
+     * a marca aparece FORA de link, e lá este texto é o único que existe (no
+     * cabeçalho o `aria-label` do link já cobre o nome acessível).
+     */
+    logoAlt: "Logotipo do Café Canastra, desde 1985",
+    /**
+     * O nome acessível e o tooltip do botão flutuante de WhatsApp. É o único
+     * texto daquele botão, e ele acompanha a moldura inteira — inclusive /en
+     * e /es. `WhatsApp` é nome próprio e não se traduz.
+     */
+    falarNoWhatsApp: "Falar com a gente no WhatsApp",
+  },
+
+  /**
+   * O VOCABULÁRIO DO CATÁLOGO — e ele estava preso em português até aqui.
+   *
+   * As tabelas de `lib/catalogo/tipos.ts` e `lib/catalogo/rotulos.ts` guardavam
+   * `{ valor, rotulo }` com UM rótulo só, em português, e alimentavam os
+   * filtros da PLP, os chips, a escala de torra e a ficha da PDP em QUALQUER
+   * idioma. Era por isso que `/en/cafes` mostrava "Menor preço" e "Torra
+   * escura" — e não havia como consertar sem duplicar texto dentro de cada
+   * componente.
+   *
+   * A REGRA PASSOU A SER UMA SÓ: a tabela guarda o VALOR, este dicionário
+   * guarda o TEXTO, e a chave do texto é o próprio valor do contrato —
+   * `catalogo.moagem.grao`, `catalogo.formato.capsula`, `catalogo.ordenacao
+   * ["preco-asc"]`. Quem tem o valor na mão sabe onde está o rótulo sem
+   * procurar, e é a mesma leitura `d.alguma.coisa` do resto do dicionário.
+   *
+   * AS DUAS EXCEÇÕES SÃO AS DE CHAVE ABERTA, e por isso passam por função em
+   * rotulos.ts: a nota de sabor (`rotuloNota`) chega do editorial já no idioma
+   * do texto — `melaco` em pt, `molasses` em en — e o ponto de torra
+   * (`rotuloPontoTorra`) pode chegar fora da escala pela querystring. As duas
+   * precisam de um fallback que uma leitura direta não tem.
+   */
+  catalogo: {
+    /**
+     * NOME PRÓPRIO, IGUAL NOS TRÊS IDIOMAS: é o que está impresso no pacote
+     * que chega na casa da pessoa, e traduzir desliga o reconhecimento da
+     * marca e a busca de quem chega pelo rótulo. Fica AQUI, e não numa tabela
+     * sem idioma, porque `Lote.nome` já é traduzível pelo editorial
+     * (data/catalogo-canastra.i18n.json) — o dia em que uma linha nova tiver
+     * nome traduzível, o lugar de dizer isso já existe. Cada uma das cinco
+     * está declarada em `IGUAIS_DE_PROPOSITO` no teste ao lado.
+     */
+    linha: {
+      classico: "Clássico",
+      suave: "Suave",
+      canela: "Canela",
+      microlote: "Microlote",
+      "nectar-de-minas": "Néctar de Minas",
+    },
+
+    /** estetica.md §5.3 — a escala 1-5 SEMPRE acompanhada do texto, nunca só a barra. */
+    pontoTorra: {
+      1: "Torra clara",
+      2: "Torra clara-média",
+      3: "Torra média",
+      4: "Torra média-escura",
+      5: "Torra escura",
+    },
+
+    /**
+     * O vocabulário de prova de xícara, chaveado pela CHAVE CANÔNICA EM
+     * PORTUGUÊS — a mesma que `data/catalogo-canastra.json` grava em kebab-case
+     * sem acento, porque ela é chave de filtro e de busca antes de ser texto.
+     *
+     * O editorial traduzido grava a nota já no idioma dele (`molasses`,
+     * `melaza`), e essas chaves não estão aqui de propósito: `rotuloNota()`
+     * capitaliza o que não encontra, e é assim que "molasses" vira "Molasses"
+     * numa página em inglês em vez de cair no português. O que ESTA tabela
+     * resolve é o caminho contrário, que era o defeito real — a chave em
+     * português alcançada numa página em inglês devolvia "Melaço", com
+     * cedilha, na ficha de quem não lê português.
+     */
+    nota: {
+      "castanha-do-para": "Castanha-do-pará",
+      "doce-de-leite": "Doce de leite",
+      "amendoim-torrado": "Amendoim torrado",
+      "chocolate-meio-amargo": "Chocolate meio amargo",
+      "laranja-da-terra": "Laranja-da-terra",
+      "milho-torrado": "Milho torrado",
+      amadeirado: "Amadeirado",
+      especiarias: "Especiarias",
+      chocolate: "Chocolate",
+      castanha: "Castanha",
+      jabuticaba: "Jabuticaba",
+      caramelo: "Caramelo",
+      melaco: "Melaço",
+      citrico: "Cítrico",
+      frutado: "Frutado",
+      floral: "Floral",
+      amendoa: "Amêndoa",
+      pessego: "Pêssego",
+      baunilha: "Baunilha",
+      rapadura: "Rapadura",
+      cacau: "Cacau",
+      canela: "Canela",
+      cravo: "Cravo",
+      doce: "Doçura",
+      cana: "Cana",
+      mel: "Mel",
+    },
+
+    /** O que se COMPRA — dois valores, porque a loja vende dois (§5.5). */
+    moagem: {
+      grao: "Grão",
+      moido: "Moído",
+    },
+
+    /**
+     * A ESPESSURA DA MOAGEM DE CADA RECEITA, que não é o mesmo eixo do
+     * `moagem` acima: lá é o que se compra (grão ou moído), aqui é quão fino
+     * se mói para aquele método — a linha "MOAGEM  Média" do cartão de
+     * preparo (estetica.md §7.3).
+     *
+     * ELA ENTRA NO DICIONÁRIO PELA PORTA DOS FUNDOS, e isso está declarado:
+     * `Preparo.moagem` é `string` livre em `lib/catalogo/produtos.ts`, escrita
+     * em português junto da receita. A PDP normaliza aquele texto para a chave
+     * daqui e cai no original quando não reconhece — nunca em vazio. O lugar
+     * certo de consertar é o tipo, trocando a string livre por estes quatro
+     * valores; enquanto isso não acontece, é esta ponte que impede um "Grossa"
+     * de aparecer no meio de uma página em inglês.
+     */
+    moagemDaReceita: {
+      fina: "Fina",
+      "media-fina": "Média-fina",
+      media: "Média",
+      grossa: "Grossa",
+    },
+
+    /** Como se PREPARA — a seção "Como preparar" da PDP, que é receita. */
+    metodo: {
+      espresso: "Espresso",
+      "coado-papel": "Coado (papel)",
+      "coador-pano": "Coador de pano",
+      "prensa-francesa": "Prensa francesa",
+      "italiana-moka": "Italiana / Moka",
+      aeropress: "Aeropress",
+    },
+
+    /** O filtro "Formato" da PLP — o eixo de variação verdadeiro do catálogo. */
+    formato: {
+      graos: "Em grãos",
+      moido: "Moído",
+      /** Nome do produto na caixa da loja, nos três idiomas. */
+      drip: "Drip Coffee",
+      capsula: "Cápsulas",
+    },
+
+    ordenacao: {
+      relevancia: "Relevância",
+      "preco-asc": "Menor preço",
+      "preco-desc": "Maior preço",
+      "torra-asc": "Torra mais clara",
+      "torra-desc": "Torra mais escura",
+    },
+
+    /**
+     * A ficha da PDP (estetica.md §5.4): o rótulo de cada linha e a definição
+     * de uma frase que o `<abbr title>` mostra.
+     *
+     * A DEFINIÇÃO ENTRA NO DICIONÁRIO JUNTO COM O RÓTULO porque ela é a metade
+     * que faz a ficha servir ao iniciante — um rótulo em inglês com a
+     * explicação em português deixa a pessoa exatamente onde ela estava.
+     *
+     * NÃO HÁ MAIS LINHA "VARIEDADES", e a ausência é decisão: variedade é dado
+     * da MARCA, não de cada pacote. Ver o comentário de `Origem` em
+     * lib/catalogo/tipos.ts.
+     */
+    ficha: {
+      titulo: "Ficha do café",
+      rotulo: {
+        origem: "Origem",
+        torra: "Torra",
+        corpo: "Corpo",
+        pontuacao: "Pontuação",
+        preparo: "Preparo",
+      },
+      definicao: {
+        origem: "A região onde o café foi cultivado, colhido e beneficiado.",
+        torra:
+          "Quanto tempo e a que temperatura o grão foi torrado. Torras mais escuras trazem mais corpo e amargor; mais claras preservam acidez e fruta.",
+        corpo: "O peso do café na boca — de aquoso e leve a denso e encorpado.",
+        pontuacao:
+          "Nota de 0 a 100 dada em prova cega segundo o protocolo da SCA. De 80 para cima o café é classificado como especial; abaixo disso é gourmet. Onde o site mostra 80+, o número é o piso que a embalagem declara para a coleção, não a nota daquele café; onde mostra um número sem o +, é a nota que a marca publica para aquela linha.",
+        preparo: "Os métodos em que esta linha costuma render melhor.",
+      },
+    },
+  },
+
+  /**
+   * A PDP — estetica.md §7.3, "a página mais importante", e a última grande
+   * superfície da vitrine que continuava falando português em /en e /es.
+   *
+   * O QUE ENTRA AQUI: o que a PÁGINA diz sobre qualquer café. O que cada café
+   * diz de si — nome, descrição, torra, corpo, notas, preparo sugerido — vem
+   * do editorial traduzido (data/catalogo-canastra.i18n.json) e não daqui;
+   * dois lugares para o mesmo texto seriam dois lugares onde ele pode estar
+   * errado.
+   */
+  pdp: {
+    /**
+     * A tela e o metadata de slug que não existe. Não é a mesma frase: o
+     * `metaTitulo` é aba de navegador e resultado de busca, o `titulo` é o H1
+     * de quem já está na página. estetica.md §11 — a tela de erro explica e
+     * resolve, e nunca pede desculpa.
+     */
+    naoEncontrado: {
+      metaTitulo: "Café não encontrado",
+      titulo: "Esse café não está no catálogo.",
+      texto:
+        "Pode ser um lote que já acabou — torramos em quantidade pequena e alguns saem de linha. Estes estão disponíveis agora.",
+    },
+
+    /**
+     * A emenda da meta description, que é montada com o editorial do lote:
+     * "{descrição} Notas de {notas}. {SCA}, {região}." Em inglês o termo da
+     * indústria é `tasting notes` e ele pede dois-pontos, por isso a
+     * pontuação viaja junto com a chave em vez de ficar no template.
+     */
+    notasDe: "Notas de",
+
+    /** Rótulo do <nav> do breadcrumb e o nome da primeira parada dele. */
+    trilha: "Trilha",
+    inicio: "Início",
+
+    /** Drip e cápsula: o que a linha tem além da matriz moagem × peso. */
+    tambemNestaLinha: "Também nesta linha",
+
+    /** A faixa fuligem com a descrição editorial. */
+    sobreEstaLinha: "Sobre esta linha",
+    /**
+     * As duas metades da frase de resumo, que é montada com dados do lote:
+     * "Origem única da {região}. {torra}, {corpo}. Rende melhor em {preparo}."
+     * Ficam separadas porque o miolo é editorial traduzido — costurar tudo
+     * numa chave só obrigaria a repetir o editorial aqui.
+     */
+    origemUnicaDa: "Origem única da",
+    rendeMelhorEm: "Rende melhor em",
+
+    comoPreparar: "Como preparar",
+    /** O cartão de receita de cada método (§7.3: "a etiqueta em estado puro"). */
+    receita: {
+      proporcao: "Proporção",
+      temperatura: "Temperatura",
+      tempo: "Tempo",
+      moagem: "Moagem",
+    },
+
+    daMesmaSerra: "Da mesma serra",
+
+    /** §5.6 — as duas abas acima do preço. */
+    modoDeCompra: "Modo de compra",
+    compraUnica: "Compra única",
+    /**
+     * O que a aba de assinatura promete. É a PORTA do Clube, não a compra: o
+     * botão leva ao wizard de /clube, e é lá que frequência, endereço e a
+     * autorização no Mercado Pago acontecem.
+     */
+    clubeExplicacao:
+      "A cada 15, 30 ou 45 dias, com a entrega incluída. Você escolhe a frequência no Clube e cancela quando quiser, sem multa.",
+    montarAssinatura: "Montar minha assinatura",
+    /** A barra fixa do mobile, onde não cabe a frase inteira (§10). */
+    assinar: "Assinar",
+
+    /** A ponte para "Como preparar", que os sete botões antigos faziam. */
+    moidoNoDia:
+      "Moído no dia do pedido. A moagem de cada método está em",
+
+    /** As legendas dos três seletores. */
+    rotulo: {
+      moagem: "Moagem",
+      peso: "Peso",
+      embalagem: "Embalagem",
+    },
+    /** §5.5 — combinação inexistente aparece DESABILITADA, com o motivo. */
+    semEstaMoagem: "Não disponível para este lote",
+    semEstePeso: "Não disponível nesta moagem",
+    umPacote: "1 pacote",
+    /** Vem colado ao número: "Caixa com 3". */
+    caixaCom: "Caixa com",
+
+    diminuirQuantidade: "Diminuir quantidade",
+    aumentarQuantidade: "Aumentar quantidade",
+    maximoEmEstoque: "Este é o máximo disponível em estoque agora.",
+    combinacaoEsgotada:
+      "Esta combinação está esgotada. Tente outro peso ou outra moagem.",
+    torramosNaTerca: "Torramos na terça, enviamos na quarta.",
+  },
+
+  /**
+   * Pôr algo na sacola A PARTIR DA VITRINE — o painel da PDP e o card de kit
+   * da PLP, que são as duas únicas superfícies traduzidas com botão de compra.
+   *
+   * A SACOLA EM SI CONTINUA SÓ EM PORTUGUÊS (spec §1), e não há contradição:
+   * o que se traduz aqui é o botão e o aviso de quem ainda está na vitrine. O
+   * rótulo GRAVADO no item — a moagem que viaja para o localStorage, para a
+   * RPC e para o funil do GA4 — é sempre o português, e quem trata disso é o
+   * `MOAGEM_NA_SACOLA` do PainelCompra.
+   *
+   * estetica.md §11: o botão diz "Adicionar à sacola", logo a confirmação diz
+   * "adicionado à sacola". O mesmo nome do começo ao fim, nos três idiomas.
+   */
+  venda: {
+    adicionarASacola: "Adicionar à sacola",
+    /** A barra fixa do mobile, onde o botão divide a linha com o preço. */
+    adicionar: "Adicionar",
+    naSacola: "Na sacola",
+    itemAdicionado: "Item adicionado à sacola.",
+    /** API fora: o botão avisa em vez de fingir que guardou. */
+    semLoja:
+      "Não conseguimos falar com a loja agora. Tente de novo em instantes.",
+    naoDeuParaAdicionar: "Não foi possível adicionar à sacola.",
+    kit: {
+      adicionado: "Kit adicionado à sacola.",
+      noTeto: "Sua sacola já tem o máximo disponível deste kit.",
+      esgotado:
+        "Este kit está esgotado na loja. Volte em breve — a torra é semanal.",
+      /** Sachês ou cápsulas, quando o formato conta por unidade. */
+      unidades: "unidades",
+    },
+  },
+
+  /**
+   * A última seção da PDP. TOM SÓBRIO (estetica.md §2/§8.1): o texto carrega a
+   * informação e as estrelas são decoração `aria-hidden` — por isso o "de 5" e
+   * a contagem precisam existir em cada idioma, e não só o número.
+   */
+  avaliacoes: {
+    /** Rótulo da <section>; o H2 visível é o `titulo`, mais curto. */
+    deClientes: "Avaliações de clientes",
+    titulo: "Avaliações",
+    /**
+     * Singular e plural da contagem. A REGRA DE PLURAL É POR IDIOMA — nestes
+     * três ela coincide (só 1 é singular; 0 vai para o plural), e é o
+     * componente que escolhe entre as duas formas, num lugar só.
+     */
+    uma: "avaliação",
+    muitas: "avaliações",
+    /** Tela vazia é convite, nunca lamento (§11). */
+    vazio: "Seja o primeiro a avaliar — compre e conte o que achou.",
+    /** O texto que o leitor de tela ouve no lugar das estrelas. */
+    nota: "Nota",
+    deCinco: "de 5",
+    buscando: "Buscando…",
+    verMais: "Ver mais avaliações",
   },
 
   /**
@@ -177,6 +531,25 @@ const pt = {
       "Digite o e-mail que você cadastrou e ele sai da lista de novidades. Os avisos sobre os seus pedidos continuam chegando.",
     sairBotao: "Sair da lista",
     sairPronto: "Pronto. Esse e-mail não está mais na lista de novidades.",
+  },
+
+  /**
+   * A fronteira de erro — `app/erro-de-pagina.tsx`.
+   *
+   * Ela serve OS DOIS GRUPOS DE ROTA: a vitrine traduzida e o caminho de
+   * compra, que é pt-BR por decisão do cliente. Quem resolve isso é o próprio
+   * componente, que força `pt` em caminho transacional; estas chaves existem
+   * para o lado traduzido, onde até agora uma falha em /en/cafes respondia em
+   * português a quem não lê português.
+   */
+  erro: {
+    titulo: "Não foi possível carregar esta página.",
+    /** §11: o erro explica e resolve. Nunca pede desculpa, nunca culpa. */
+    texto:
+      "A conexão pode ter caído no meio do caminho. Tentar de novo costuma resolver.",
+    tentarDeNovo: "Tentar de novo",
+    /** Prefixo do `digest` do Next — o que o cliente repete para o suporte. */
+    codigo: "Código do erro",
   },
 };
 
@@ -269,6 +642,203 @@ const en: Dicionario = {
     lotes: "lots",
     item: "item",
     itens: "items",
+    logoAlt: "Café Canastra logo, since 1985",
+    falarNoWhatsApp: "Message us on WhatsApp",
+  },
+  catalogo: {
+    /** Nome próprio do produto: idêntico nos três idiomas, por decisão. */
+    linha: {
+      classico: "Clássico",
+      suave: "Suave",
+      canela: "Canela",
+      microlote: "Microlote",
+      "nectar-de-minas": "Néctar de Minas",
+    },
+    /**
+     * `roast` é a palavra da indústria e ela vem DEPOIS do adjetivo: uma
+     * torrefação escreve "Light roast", nunca "Clear toast". A escala é a
+     * mesma nas três línguas — uma torra 5 é escura em qualquer idioma — e
+     * `produtos.test.ts` trava a igualdade contra o editorial traduzido.
+     */
+    pontoTorra: {
+      1: "Light roast",
+      2: "Light-medium roast",
+      3: "Medium roast",
+      4: "Medium-dark roast",
+      5: "Dark roast",
+    },
+    nota: {
+      /** O nome que a castanha tem em inglês é o do país de onde ela sai. */
+      "castanha-do-para": "Brazil nut",
+      /** Empréstimo já corrente em inglês; traduzir viraria "milk jam". */
+      "doce-de-leite": "Dulce de leche",
+      "amendoim-torrado": "Roasted peanut",
+      "chocolate-meio-amargo": "Semisweet chocolate",
+      "laranja-da-terra": "Bitter orange",
+      "milho-torrado": "Toasted corn",
+      amadeirado: "Woody",
+      especiarias: "Spices",
+      chocolate: "Chocolate",
+      /** Na roda de sabores da SCA a família é `nutty`, não `chestnut`. */
+      castanha: "Nutty",
+      /** Fruta brasileira sem nome em inglês — a roda de sabores usa o nosso. */
+      jabuticaba: "Jabuticaba",
+      caramelo: "Caramel",
+      melaco: "Molasses",
+      /** `Citrus`, a família da roda de sabores — não `Citric`, que é o ácido. */
+      citrico: "Citrus",
+      frutado: "Fruity",
+      floral: "Floral",
+      amendoa: "Almond",
+      pessego: "Peach",
+      baunilha: "Vanilla",
+      /** Não há rapadura em inglês; a ficha de prova escreve o produto. */
+      rapadura: "Raw cane sugar",
+      /** `Cocoa` é o grão e a nota; `cacao` em inglês é a árvore. */
+      cacau: "Cocoa",
+      canela: "Cinnamon",
+      cravo: "Clove",
+      doce: "Sweetness",
+      cana: "Sugarcane",
+      mel: "Honey",
+    },
+    /** `Whole bean` e `Ground` são como uma torrefação escreve no rótulo. */
+    moagem: {
+      grao: "Whole bean",
+      moido: "Ground",
+    },
+    /** A escala de espessura da receita — `coarse` é o termo da indústria. */
+    moagemDaReceita: {
+      fina: "Fine",
+      "media-fina": "Medium-fine",
+      media: "Medium",
+      grossa: "Coarse",
+    },
+    metodo: {
+      espresso: "Espresso",
+      /** `Pour over` é o método; `paper` distingue do coador de pano. */
+      "coado-papel": "Pour over (paper)",
+      "coador-pano": "Cloth filter",
+      "prensa-francesa": "French press",
+      /** `Moka pot` é o nome do objeto em inglês — "Italian" sozinho não diz. */
+      "italiana-moka": "Moka pot",
+      aeropress: "Aeropress",
+    },
+    formato: {
+      graos: "Whole bean",
+      moido: "Ground",
+      /** Nome do produto na caixa, nos três idiomas. */
+      drip: "Drip Coffee",
+      capsula: "Capsules",
+    },
+    ordenacao: {
+      relevancia: "Relevance",
+      "preco-asc": "Lowest price",
+      "preco-desc": "Highest price",
+      "torra-asc": "Lightest roast",
+      "torra-desc": "Darkest roast",
+    },
+    ficha: {
+      titulo: "Coffee spec sheet",
+      rotulo: {
+        origem: "Origin",
+        torra: "Roast",
+        corpo: "Body",
+        pontuacao: "Score",
+        preparo: "Brewing",
+      },
+      definicao: {
+        origem: "The region where the coffee was grown, picked and processed.",
+        torra:
+          "How long and how hot the bean was roasted. Darker roasts bring more body and bitterness; lighter ones keep acidity and fruit.",
+        corpo:
+          "The weight of the coffee in the mouth — from thin and light to dense and full.",
+        pontuacao:
+          "A 0-to-100 score given in blind cupping under the SCA protocol. From 80 up the coffee is graded as specialty; below that it is gourmet. Where the site shows 80+, the number is the floor the packaging declares for the whole collection, not the score of that coffee; where it shows a number without the +, it is the score the roaster publishes for that line.",
+        preparo: "The methods this line tends to shine in.",
+      },
+    },
+  },
+  pdp: {
+    naoEncontrado: {
+      metaTitulo: "Coffee not found",
+      titulo: "That coffee is not in the catalogue.",
+      texto:
+        "It may be a lot that ran out — we roast in small batches and some are discontinued. These are available now.",
+    },
+    notasDe: "Tasting notes:",
+    trilha: "Breadcrumb",
+    inicio: "Home",
+    tambemNestaLinha: "Also in this line",
+    sobreEstaLinha: "About this line",
+    /**
+     * `from the`, com artigo: a região chega como `Serra da Canastra` e é nome
+     * próprio de lugar — "Single origin from Serra da Canastra" soa a
+     * telegrama, e traduzir a serra está proibido.
+     */
+    origemUnicaDa: "Single origin from the",
+    /** `Brews best as` é como uma torrefação escreve a recomendação. */
+    rendeMelhorEm: "Brews best as",
+    /** `Brew`, não `prepare`: é o verbo do café em inglês. */
+    comoPreparar: "How to brew",
+    receita: {
+      /** `Ratio` é o termo da receita; `proportion` é aula de matemática. */
+      proporcao: "Ratio",
+      temperatura: "Temperature",
+      tempo: "Time",
+      /** `Grind size` diz espessura; `grind` sozinho já é o seletor de cima. */
+      moagem: "Grind size",
+    },
+    daMesmaSerra: "From the same serra",
+    modoDeCompra: "Purchase mode",
+    /** `One-time` é como uma loja de assinatura chama a compra avulsa. */
+    compraUnica: "One-time purchase",
+    clubeExplicacao:
+      "Every 15, 30 or 45 days, delivery included. You choose the frequency in the Clube and cancel whenever you like, with no penalty.",
+    montarAssinatura: "Build my subscription",
+    assinar: "Subscribe",
+    moidoNoDia:
+      "Ground on the day of your order. The grind for each method is in",
+    rotulo: {
+      moagem: "Grind",
+      peso: "Weight",
+      embalagem: "Packaging",
+    },
+    semEstaMoagem: "Not available for this lot",
+    semEstePeso: "Not available in this grind",
+    umPacote: "1 pack",
+    caixaCom: "Box of",
+    diminuirQuantidade: "Decrease quantity",
+    aumentarQuantidade: "Increase quantity",
+    maximoEmEstoque: "That is all we have in stock right now.",
+    combinacaoEsgotada:
+      "This combination is sold out. Try another weight or grind.",
+    torramosNaTerca: "We roast on Tuesday and ship on Wednesday.",
+  },
+  venda: {
+    adicionarASacola: "Add to bag",
+    adicionar: "Add",
+    naSacola: "In the bag",
+    itemAdicionado: "Item added to the bag.",
+    semLoja: "We could not reach the shop right now. Try again in a moment.",
+    naoDeuParaAdicionar: "We could not add this to the bag.",
+    kit: {
+      adicionado: "Kit added to the bag.",
+      noTeto: "Your bag already has all we have of this kit.",
+      esgotado: "This kit is sold out. Come back soon — we roast every week.",
+      unidades: "units",
+    },
+  },
+  avaliacoes: {
+    deClientes: "Customer reviews",
+    titulo: "Reviews",
+    uma: "review",
+    muitas: "reviews",
+    vazio: "Be the first to review — buy it and tell us what you thought.",
+    nota: "Rating",
+    deCinco: "out of 5",
+    buscando: "Loading…",
+    verMais: "See more reviews",
   },
   compra: {
     avisoTitulo: "Checkout is in Portuguese.",
@@ -302,6 +872,13 @@ const en: Dicionario = {
       "Type the email you signed up with and it leaves the news list. Notices about your orders keep coming.",
     sairBotao: "Leave the list",
     sairPronto: "Done. That email is no longer on the news list.",
+  },
+  erro: {
+    titulo: "We could not load this page.",
+    texto:
+      "The connection may have dropped along the way. Trying again usually sorts it out.",
+    tentarDeNovo: "Try again",
+    codigo: "Error code",
   },
 };
 
@@ -358,6 +935,186 @@ const es: Dicionario = {
     lotes: "lotes",
     item: "artículo",
     itens: "artículos",
+    logoAlt: "Logotipo de Café Canastra, desde 1985",
+    falarNoWhatsApp: "Hablar con nosotros por WhatsApp",
+  },
+  catalogo: {
+    /** Nombre propio del producto: idéntico en los tres idiomas, por decisión. */
+    linha: {
+      classico: "Clássico",
+      suave: "Suave",
+      canela: "Canela",
+      microlote: "Microlote",
+      "nectar-de-minas": "Néctar de Minas",
+    },
+    /** `tueste` é a palavra da indústria em espanhol; `torrado` é o grão pronto. */
+    pontoTorra: {
+      1: "Tueste claro",
+      2: "Tueste claro-medio",
+      3: "Tueste medio",
+      4: "Tueste medio-oscuro",
+      5: "Tueste oscuro",
+    },
+    nota: {
+      "castanha-do-para": "Nuez de Brasil",
+      "doce-de-leite": "Dulce de leche",
+      /** `Maní` e não `cacahuete`: a exportação é Chile e Argentina. */
+      "amendoim-torrado": "Maní tostado",
+      "chocolate-meio-amargo": "Chocolate semiamargo",
+      "laranja-da-terra": "Naranja amarga",
+      "milho-torrado": "Maíz tostado",
+      amadeirado: "Amaderado",
+      especiarias: "Especias",
+      chocolate: "Chocolate",
+      castanha: "Nuez",
+      /** Fruta brasileira sem nome em espanhol — fica a nossa. */
+      jabuticaba: "Jabuticaba",
+      caramelo: "Caramelo",
+      melaco: "Melaza",
+      citrico: "Cítrico",
+      frutado: "Afrutado",
+      floral: "Floral",
+      amendoa: "Almendra",
+      /** `Durazno`, o termo do Cone Sul, e não `melocotón`, que é da Espanha. */
+      pessego: "Durazno",
+      baunilha: "Vainilla",
+      /** `Panela` é o mesmo açúcar de cana não refinado, com o nome de lá. */
+      rapadura: "Panela",
+      cacau: "Cacao",
+      canela: "Canela",
+      cravo: "Clavo",
+      doce: "Dulzor",
+      cana: "Caña",
+      mel: "Miel",
+    },
+    /** `En grano` e `molido` são o que está escrito no pacote em espanhol. */
+    moagem: {
+      grao: "En grano",
+      moido: "Molido",
+    },
+    /** `Gruesa` é a espessura; `grosera` seria falta de educação. */
+    moagemDaReceita: {
+      fina: "Fina",
+      "media-fina": "Media-fina",
+      media: "Media",
+      grossa: "Gruesa",
+    },
+    metodo: {
+      espresso: "Espresso",
+      "coado-papel": "Filtrado (papel)",
+      "coador-pano": "Colador de tela",
+      "prensa-francesa": "Prensa francesa",
+      "italiana-moka": "Cafetera italiana / Moka",
+      aeropress: "Aeropress",
+    },
+    formato: {
+      graos: "En grano",
+      moido: "Molido",
+      /** Nombre del producto en la caja, en los tres idiomas. */
+      drip: "Drip Coffee",
+      capsula: "Cápsulas",
+    },
+    ordenacao: {
+      relevancia: "Relevancia",
+      "preco-asc": "Menor precio",
+      "preco-desc": "Mayor precio",
+      "torra-asc": "Tueste más claro",
+      "torra-desc": "Tueste más oscuro",
+    },
+    ficha: {
+      titulo: "Ficha del café",
+      rotulo: {
+        origem: "Origen",
+        torra: "Tueste",
+        corpo: "Cuerpo",
+        pontuacao: "Puntuación",
+        preparo: "Preparación",
+      },
+      definicao: {
+        origem: "La región donde el café fue cultivado, cosechado y beneficiado.",
+        torra:
+          "Cuánto tiempo y a qué temperatura se tostó el grano. Los tuestes más oscuros dan más cuerpo y amargor; los más claros conservan acidez y fruta.",
+        corpo:
+          "El peso del café en la boca — de aguado y ligero a denso y con cuerpo.",
+        pontuacao:
+          "Puntuación de 0 a 100 dada en cata a ciegas según el protocolo de la SCA. De 80 en adelante el café se clasifica como especial; por debajo es gourmet. Donde el sitio muestra 80+, el número es el piso que el empaque declara para toda la colección, no la nota de ese café; donde muestra un número sin el +, es la nota que la marca publica para esa línea.",
+        preparo: "Los métodos en los que esta línea suele rendir mejor.",
+      },
+    },
+  },
+  pdp: {
+    naoEncontrado: {
+      metaTitulo: "Café no encontrado",
+      titulo: "Ese café no está en el catálogo.",
+      texto:
+        "Puede ser un lote que se acabó — tostamos en cantidad pequeña y algunos salen de línea. Estos están disponibles ahora.",
+    },
+    notasDe: "Notas de",
+    trilha: "Ruta de navegación",
+    inicio: "Inicio",
+    tambemNestaLinha: "También en esta línea",
+    sobreEstaLinha: "Sobre esta línea",
+    origemUnicaDa: "Origen único de la",
+    rendeMelhorEm: "Rinde mejor en",
+    comoPreparar: "Cómo preparar",
+    receita: {
+      proporcao: "Proporción",
+      temperatura: "Temperatura",
+      tempo: "Tiempo",
+      moagem: "Molienda",
+    },
+    daMesmaSerra: "De la misma serra",
+    modoDeCompra: "Modo de compra",
+    compraUnica: "Compra única",
+    clubeExplicacao:
+      "Cada 15, 30 o 45 días, con la entrega incluida. Usted elige la frecuencia en el Clube y cancela cuando quiera, sin multa.",
+    montarAssinatura: "Armar mi suscripción",
+    assinar: "Suscribirse",
+    moidoNoDia:
+      "Molido el día del pedido. La molienda de cada método está en",
+    rotulo: {
+      moagem: "Molienda",
+      peso: "Peso",
+      embalagem: "Empaque",
+    },
+    semEstaMoagem: "No disponible para este lote",
+    semEstePeso: "No disponible en esta molienda",
+    umPacote: "1 paquete",
+    caixaCom: "Caja de",
+    diminuirQuantidade: "Disminuir cantidad",
+    aumentarQuantidade: "Aumentar cantidad",
+    maximoEmEstoque: "Es el máximo disponible en stock ahora.",
+    combinacaoEsgotada:
+      "Esta combinación está agotada. Pruebe otro peso u otra molienda.",
+    torramosNaTerca: "Tostamos el martes y enviamos el miércoles.",
+  },
+  venda: {
+    adicionarASacola: "Añadir a la bolsa",
+    adicionar: "Añadir",
+    naSacola: "En la bolsa",
+    itemAdicionado: "Artículo añadido a la bolsa.",
+    semLoja:
+      "No pudimos conectar con la tienda ahora. Inténtelo de nuevo en un momento.",
+    naoDeuParaAdicionar: "No se pudo añadir a la bolsa.",
+    kit: {
+      adicionado: "Kit añadido a la bolsa.",
+      noTeto: "Su bolsa ya tiene el máximo disponible de este kit.",
+      esgotado:
+        "Este kit está agotado en la tienda. Vuelva pronto — el tueste es semanal.",
+      unidades: "unidades",
+    },
+  },
+  avaliacoes: {
+    /** `Opinión` é o que uma loja hispanohablante chama a avaliação. */
+    deClientes: "Opiniones de clientes",
+    titulo: "Opiniones",
+    uma: "opinión",
+    muitas: "opiniones",
+    vazio: "Sea el primero en opinar — compre y cuéntenos qué le pareció.",
+    nota: "Calificación",
+    deCinco: "de 5",
+    buscando: "Cargando…",
+    verMais: "Ver más opiniones",
   },
   compra: {
     avisoTitulo: "La compra sigue en portugués.",
@@ -387,6 +1144,13 @@ const es: Dicionario = {
       "Escriba el correo con el que se registró y sale de la lista de novedades. Los avisos sobre sus pedidos siguen llegando.",
     sairBotao: "Salir de la lista",
     sairPronto: "Listo. Ese correo ya no está en la lista de novedades.",
+  },
+  erro: {
+    titulo: "No fue posible cargar esta página.",
+    texto:
+      "La conexión puede haberse caído a mitad de camino. Intentarlo de nuevo suele resolverlo.",
+    tentarDeNovo: "Intentar de nuevo",
+    codigo: "Código del error",
   },
 };
 

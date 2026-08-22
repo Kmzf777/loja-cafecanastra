@@ -4,7 +4,7 @@ import { listarKits, listarLotes } from "@/lib/catalogo/repositorio";
 import { traduzirLote } from "@/lib/catalogo/produtos";
 import { filtrarPorTexto } from "@/lib/busca";
 import { CardKit } from "@/components/catalogo/CardKit";
-import { FORMATOS, ORDENACOES } from "@/lib/catalogo/tipos";
+import { FORMATOS, LINHAS, ORDENACOES } from "@/lib/catalogo/tipos";
 import type {
   Filtros,
   Formato,
@@ -12,12 +12,18 @@ import type {
   Ordenacao,
   PesoGramas,
 } from "@/lib/catalogo/tipos";
-import { LINHAS, PONTO_TORRA } from "@/lib/catalogo/rotulos";
+import { rotuloPontoTorra } from "@/lib/catalogo/rotulos";
 import { CardCafe } from "@/components/catalogo/CardCafe";
 import { BotaoLink } from "@/components/ui/Botao";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
+import {
+  faixaDeTorraDoCatalogo,
+  linhasDoCatalogo,
+  notasDoCatalogo,
+  textosDaPlp,
+} from "./conteudo";
 
 /**
  * PLP — estetica.md §7.2.
@@ -27,22 +33,62 @@ import { dicionario } from "@/lib/i18n/dicionario";
  * compartilhavel, o botao voltar funciona, e a pagina continua operavel com JS
  * desabilitado (§12) — por isso o formulario e um <form method="get"> com
  * submit nativo, e nao um punhado de onChange.
+ *
+ * O TEXTO DA PAGINA VEM TODO DE FORA, e ate a Onda 2 quase nada vinha: tres
+ * rotulos liam o dicionario e o resto — titulo, filtros, botao, chips e a tela
+ * vazia inteira — estava cravado em portugues no meio do JSX, e aparecia em
+ * portugues em /en/cafes. O vocabulario de catalogo (linha, torra, formato,
+ * ordenacao) sai de `lib/i18n/dicionario.ts`, que e onde ele se repete com a
+ * PDP e os cards; os rotulos que so existem aqui saem de `./conteudo.ts`, pelo
+ * mesmo corte que as paginas institucionais ja seguem.
  */
+
+/**
+ * OS TRES IDIOMAS DESTA ROTA — e o que esta declaracao consegue e o que nao.
+ *
+ * A PLP perdeu a geracao estatica ao entrar no `[locale]`: sem
+ * `generateStaticParams`, o build nao sabia que `/cafes`, `/en/cafes` e
+ * `/es/cafes` existem, e so as 15 PDPs sobraram no prerender-manifest.
+ *
+ * O QUE ELA NAO RESOLVE SOZINHA, e nao adianta fingir: esta pagina LE
+ * `searchParams` — os filtros vivem na URL, e e essa decisao que faz o botao
+ * voltar funcionar e o filtro ser compartilhavel. Ler `searchParams` derruba a
+ * renderizacao estatica no Next 15 sem PPR: no build, o `await` interrompe o
+ * prerender e a rota passa a renderizar sob demanda. O caminho para
+ * prerenderizar a versao sem filtro seria uma fronteira <Suspense> com PPR
+ * ligado, e ligar PPR e decisao de projeto, nao de pagina.
+ *
+ * Fica declarada mesmo assim porque ela e a lista de enderecos que esta rota
+ * serve — o mesmo papel que ela cumpre na PDP ao lado — e porque no dia em que
+ * o PPR entrar, a casca dos tres idiomas ja sai do build sem mais nada a
+ * mudar. `dynamicParams` NAO e desligado aqui: quem valida o segmento e o
+ * `notFound()` do layout da vitrine, e desligar aqui mudaria o 404 de lugar.
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 /**
  * `generateMetadata` e não um `metadata` constante porque o canônico precisa
  * ser a PRÓPRIA página, no próprio idioma — ver a nota em lib/i18n/rotas.ts.
+ *
+ * E porque `title` e `description` também se traduzem: os três idiomas
+ * anunciavam ao buscador o mesmo texto em português, ou seja, a página inteira
+ * traduzida e o cartão de resultado em outra língua — o mesmo defeito que a
+ * PDP ao lado já tinha corrigido.
  */
 export async function generateMetadata({
   params,
 }: {
   params: Promise<{ locale: string }>;
 }): Promise<Metadata> {
+  const locale = comoLocale((await params).locale);
+  const t = textosDaPlp(locale);
+
   return {
-    title: "Cafés — Café Canastra",
-    description:
-      "As linhas do Café Canastra: Clássico, Suave, Canela e Microlote. Origem única da Serra da Canastra, em grãos ou moído na hora do pedido.",
-    alternates: alternativasDeIdioma("/cafes", comoLocale((await params).locale)),
+    title: t.metaTitulo,
+    description: t.metaDescricao,
+    alternates: alternativasDeIdioma("/cafes", locale),
   };
 }
 
@@ -67,42 +113,46 @@ function lerFiltros(sp: Busca): { filtros: Filtros; ordenacao: Ordenacao } {
 
   return {
     filtros: {
-      linha: linha && linha in LINHAS ? linha : undefined,
-      formato: formato && FORMATOS.some((f) => f.valor === formato) ? formato : undefined,
+      linha: linha && LINHAS.includes(linha) ? linha : undefined,
+      formato: formato && FORMATOS.includes(formato) ? formato : undefined,
       pesoGramas: peso === 250 || peso === 500 || peso === 1000 ? peso : undefined,
       pontoTorraMin: numero(sp.torraMin),
       pontoTorraMax: numero(sp.torraMax),
       soDisponiveis: texto(sp.disponivel) === "1",
     },
-    ordenacao: ORDENACOES.some((o) => o.valor === ordem)
-      ? (ordem as Ordenacao)
-      : "relevancia",
+    ordenacao: ordem && ORDENACOES.includes(ordem) ? ordem : "relevancia",
   };
 }
 
-/** Chips do que esta ativo — o §7.2 pede "Ativos: (Torra média ×) Limpar tudo". */
-function ativos(f: Filtros, ordenacao: Ordenacao, q?: string) {
+/**
+ * Chips do que esta ativo — o §7.2 pede "Ativos: (Torra média ×) Limpar tudo".
+ *
+ * Recebe `locale` porque cada chip e um ROTULO DE CATALOGO, e eles saiam todos
+ * em portugues: quem filtrava por "Suave" em /en/cafes via "Menor preço" e
+ * "Torra escura" no chip da propria escolha.
+ */
+function ativos(f: Filtros, ordenacao: Ordenacao, locale: Locale, q?: string) {
+  const d = dicionario(locale);
+  const t = textosDaPlp(locale);
   const out: { chave: string; rotulo: string }[] = [];
-  if (q) out.push({ chave: "q", rotulo: `Busca: “${q}”` });
-  if (f.linha) out.push({ chave: "linha", rotulo: LINHAS[f.linha].rotulo });
+  if (q) out.push({ chave: "q", rotulo: `${t.buscaChip} “${q}”` });
+  if (f.linha) out.push({ chave: "linha", rotulo: d.catalogo.linha[f.linha] });
   if (f.pesoGramas)
     out.push({
       chave: "peso",
       rotulo: f.pesoGramas === 1000 ? "1 kg" : `${f.pesoGramas} g`,
     });
   if (f.formato)
-    out.push({
-      chave: "formato",
-      rotulo: FORMATOS.find((x) => x.valor === f.formato)!.rotulo,
-    });
+    out.push({ chave: "formato", rotulo: d.catalogo.formato[f.formato] });
   if (f.pontoTorraMin)
-    out.push({ chave: "torraMin", rotulo: PONTO_TORRA[f.pontoTorraMin] ?? "Torra" });
-  if (f.soDisponiveis) out.push({ chave: "disponivel", rotulo: "Só disponíveis" });
-  if (ordenacao !== "relevancia")
     out.push({
-      chave: "ordem",
-      rotulo: ORDENACOES.find((o) => o.valor === ordenacao)!.rotulo,
+      chave: "torraMin",
+      rotulo: rotuloPontoTorra(f.pontoTorraMin, locale),
     });
+  if (f.soDisponiveis)
+    out.push({ chave: "disponivel", rotulo: t.soDisponiveisChip });
+  if (ordenacao !== "relevancia")
+    out.push({ chave: "ordem", rotulo: d.catalogo.ordenacao[ordenacao] });
   return out;
 }
 
@@ -110,6 +160,18 @@ const CAMPO =
   "h-11 w-full border border-fuligem-20 bg-cal-puro px-3 text-[14px] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho";
 const ROTULO =
   "block text-[11px] font-semibold uppercase tracking-[0.14em] text-fuligem-55";
+
+/**
+ * O chip clicável do resgate da tela vazia.
+ *
+ * Altura mínima de 44 px (`min-h-11`) porque no telefone ele é o único alvo de
+ * toque da tela — §12 fixa 44×44 como piso. O deslocamento de 2 px com sombra
+ * dura é o mesmo gesto do card e do link externo da /rastreabilidade; `active:`
+ * repete o `hover:` porque telefone não tem hover, e sem ele tocar num chip
+ * não dá retorno nenhum.
+ */
+const CHIP =
+  "inline-flex min-h-11 items-center gap-2 border border-fuligem-20 bg-cal-puro px-3.5 text-[14px] transition-[border-color,box-shadow,transform] duration-[200ms] ease-canastra hover:-translate-x-0.5 hover:-translate-y-0.5 hover:border-vermelho hover:shadow-[3px_3px_0_var(--color-fuligem)] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho active:-translate-x-0.5 active:-translate-y-0.5 active:shadow-[3px_3px_0_var(--color-fuligem)]";
 
 export default async function PaginaCafes({
   params,
@@ -120,6 +182,7 @@ export default async function PaginaCafes({
 }) {
   const locale = comoLocale((await params).locale);
   const d = dicionario(locale);
+  const t = textosDaPlp(locale);
   const sp = await searchParams;
   const { filtros, ordenacao } = lerFiltros(sp);
   const q = texto(sp.q)?.trim() || undefined;
@@ -137,15 +200,21 @@ export default async function PaginaCafes({
   const lotes = filtrarPorTexto(
     (await listarLotes(filtros, ordenacao)).map((l) => traduzirLote(l, locale)),
     q,
+    locale,
   );
   const kits = await listarKits();
-  const chips = ativos(filtros, ordenacao, q);
+  const chips = ativos(filtros, ordenacao, locale, q);
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-10 md:px-10 md:py-16">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
+        {/* O TÍTULO É O MESMO RÓTULO DA NAVEGAÇÃO, de propósito: um item de
+            menu que discorda do título da página de destino faz a pessoa achar
+            que clicou errado (é a nota de `nav.aSerra` no dicionário). Uma
+            chave só para as duas telas também impede que uma seja traduzida e
+            a outra não. */}
         <h1 className="font-titulo text-[clamp(2.5rem,5vw,3.75rem)] leading-none">
-          Cafés
+          {d.nav.cafes}
         </h1>
         <span className="font-dado text-[13px] tracking-[0.06em] text-fuligem-55">
           {lotes.length} {lotes.length === 1 ? d.comum.lote : d.comum.lotes}
@@ -162,7 +231,7 @@ export default async function PaginaCafes({
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <label htmlFor="f-linha" className={ROTULO}>
-              Linha
+              {t.filtroLinha}
             </label>
             <select
               id="f-linha"
@@ -170,10 +239,10 @@ export default async function PaginaCafes({
               defaultValue={filtros.linha ?? ""}
               className={`${CAMPO} mt-1.5`}
             >
-              <option value="">Todas</option>
-              {(Object.keys(LINHAS) as Linha[]).map((l) => (
+              <option value="">{t.opcaoTodas}</option>
+              {LINHAS.map((l) => (
                 <option key={l} value={l}>
-                  {LINHAS[l].rotulo}
+                  {d.catalogo.linha[l]}
                 </option>
               ))}
             </select>
@@ -181,7 +250,7 @@ export default async function PaginaCafes({
 
           <div>
             <label htmlFor="f-torra" className={ROTULO}>
-              Torra mínima
+              {t.filtroTorraMinima}
             </label>
             <select
               id="f-torra"
@@ -189,10 +258,10 @@ export default async function PaginaCafes({
               defaultValue={filtros.pontoTorraMin ?? ""}
               className={`${CAMPO} mt-1.5`}
             >
-              <option value="">Qualquer</option>
+              <option value="">{t.opcaoQualquer}</option>
               {[1, 2, 3, 4, 5].map((n) => (
                 <option key={n} value={n}>
-                  {PONTO_TORRA[n]}
+                  {rotuloPontoTorra(n, locale)}
                 </option>
               ))}
             </select>
@@ -207,7 +276,7 @@ export default async function PaginaCafes({
               num catálogo que vende dois. Dois filtros para um eixo é ruído. */}
           <div>
             <label htmlFor="f-formato" className={ROTULO}>
-              Formato
+              {t.filtroFormato}
             </label>
             <select
               id="f-formato"
@@ -215,10 +284,10 @@ export default async function PaginaCafes({
               defaultValue={filtros.formato ?? ""}
               className={`${CAMPO} mt-1.5`}
             >
-              <option value="">Qualquer</option>
+              <option value="">{t.opcaoQualquer}</option>
               {FORMATOS.map((f) => (
-                <option key={f.valor} value={f.valor}>
-                  {f.rotulo}
+                <option key={f} value={f}>
+                  {d.catalogo.formato[f]}
                 </option>
               ))}
             </select>
@@ -226,7 +295,7 @@ export default async function PaginaCafes({
 
           <div>
             <label htmlFor="f-ordem" className={ROTULO}>
-              Ordenar por
+              {t.filtroOrdem}
             </label>
             <select
               id="f-ordem"
@@ -235,8 +304,8 @@ export default async function PaginaCafes({
               className={`${CAMPO} mt-1.5`}
             >
               {ORDENACOES.map((o) => (
-                <option key={o.valor} value={o.valor}>
-                  {o.rotulo}
+                <option key={o} value={o}>
+                  {d.catalogo.ordenacao[o]}
                 </option>
               ))}
             </select>
@@ -252,20 +321,20 @@ export default async function PaginaCafes({
               defaultChecked={filtros.soDisponiveis}
               className="size-4 accent-[var(--color-vermelho)]"
             />
-            Só o que está disponível
+            {t.soDisponiveisCampo}
           </label>
 
           <button
             type="submit"
             className="h-11 rounded-bt bg-fuligem px-6 text-[12px] font-semibold uppercase tracking-[0.1em] text-cal transition-colors hover:bg-fuligem-80 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
           >
-            Filtrar
+            {t.botaoFiltrar}
           </button>
 
           {chips.length ? (
             <>
               <span className="text-[12px] uppercase tracking-[0.14em] text-fuligem-55">
-                Ativos:
+                {t.ativosRotulo}
               </span>
               {chips.map((c) => (
                 <span
@@ -293,33 +362,7 @@ export default async function PaginaCafes({
           ))}
         </div>
       ) : (
-        // §11: tela vazia e convite, e o erro explica e resolve. Nunca "0 resultados".
-        <div className="mt-16 max-w-[52ch]">
-          <p className="titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
-            {q ? `Nenhum café para “${q}”.` : "Nenhum café com esses filtros."}
-          </p>
-          <p className="mt-4 text-[17px] text-fuligem-80">
-            {q ? (
-              <>
-                Tente pelo nome da linha — Clássico, Suave, Canela — ou por uma
-                nota, como <span className="font-dado">chocolate</span> ou{" "}
-                <span className="font-dado">frutado</span>.
-              </>
-            ) : (
-              <>
-                Tente afrouxar a torra ou o formato — a casa vai da{" "}
-                <span className="font-dado">torra média</span> do Suave à{" "}
-                <span className="font-dado">média-escura</span> do Clássico, em
-                grãos ou moído.
-              </>
-            )}
-          </p>
-          <div className="mt-8">
-            <BotaoLink href={href(locale, "/cafes")} variante="secundario">
-              {d.comum.limparFiltros}
-            </BotaoLink>
-          </div>
-        </div>
+        <TelaVazia locale={locale} q={q} />
       )}
 
       {/* ── Kits e caixas ────────────────────────────────────────────────────
@@ -333,19 +376,129 @@ export default async function PaginaCafes({
             id="titulo-kits"
             className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight"
           >
-            Kits e caixas
+            {t.kitsTitulo}
           </h2>
           <p className="mt-3 max-w-[52ch] text-[15px] text-fuligem-80">
-            Mais de uma linha na mesma caixa — para conhecer a casa inteira ou
-            não escolher entre os favoritos.
+            {t.kitsTexto}
           </p>
           <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
+            {/* O `locale` vai para os DOIS cards da página: sem ele aqui, a
+                seção de kits vendia em português no meio de /en/cafes. */}
             {kits.map((kit) => (
-              <CardKit key={kit.sku} kit={kit} />
+              <CardKit key={kit.sku} kit={kit} locale={locale} />
             ))}
           </div>
         </section>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A tela vazia — §11: "tela vazia é convite", nunca "0 resultados".
+ *
+ * ELA ERA UM BECO SEM SAÍDA, e de duas maneiras ao mesmo tempo. Mandava
+ * procurar por "frutado", nota que nenhuma linha tem desde que o catálogo
+ * passou a usar as notas publicadas pela marca, e dizia que a casa ia "da
+ * torra média do Suave à média-escura do Clássico", quando o Clássico virou
+ * torra escura no mesmo diff. O único lugar da PLP que existe para resgatar
+ * uma busca vazia devolvia a pessoa a outra busca vazia.
+ *
+ * ENTÃO NADA AQUI É CITADO À MÃO. As linhas, as notas e os dois extremos da
+ * torra saem do catálogo por `./conteudo.ts`, e o teste ao lado prova que toda
+ * sugestão desta tela encontra pelo menos um café. Cada chip aponta para o
+ * catálogo INTEIRO com um filtro só — nunca para o filtro atual mais um —
+ * porque de uma tela vazia o resgate é alargar, jamais estreitar.
+ *
+ * MOBILE PRIMEIRO: uma coluna, chips que quebram linha, 44 px de altura
+ * mínima. É a tela em que o dedo é o único ponteiro disponível.
+ */
+function TelaVazia({ locale, q }: { locale: Locale; q?: string }) {
+  const d = dicionario(locale);
+  const t = textosDaPlp(locale);
+  const linhas = linhasDoCatalogo(locale);
+  const notas = notasDoCatalogo(locale);
+  const torra = faixaDeTorraDoCatalogo();
+
+  return (
+    <section aria-labelledby="titulo-vazio" className="mt-12 md:mt-16">
+      <h2
+        id="titulo-vazio"
+        className="titulo-secao max-w-[24ch] text-[clamp(1.5rem,3vw,2.25rem)] leading-tight"
+      >
+        {q ? `${t.vazioBuscaTitulo} “${q}”.` : t.vazioFiltroTitulo}
+      </h2>
+      <p className="mt-4 max-w-[52ch] text-[17px] text-fuligem-80">
+        {t.vazioLead}
+      </p>
+
+      <div className="mt-10 max-w-[64ch] border-t border-fuligem-20 pt-5">
+        <p className={ROTULO}>{t.vazioLinhasRotulo}</p>
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {linhas.map((linha) => (
+            <li key={linha.slug}>
+              {/* O `caminho` já saiu do `href()` do idioma dentro do
+                  conteudo.ts — é lá que o teste consegue abri-lo e provar que
+                  o chip encontra café. */}
+              <Link href={linha.caminho} className={CHIP}>
+                {/* A cor vem da embalagem da própria linha (§4.1) — é o mesmo
+                    código de cor da fita do card, e nunca uma cor inventada.
+                    Decorativa: quem não a vê lê o nome ao lado. */}
+                <span
+                  aria-hidden
+                  className="size-2 shrink-0"
+                  style={{ backgroundColor: linha.cor }}
+                />
+                {linha.rotulo}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="mt-8 max-w-[64ch] border-t border-fuligem-20 pt-5">
+        <p className={ROTULO}>{t.vazioNotasRotulo}</p>
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {notas.map((nota) => (
+            <li key={nota.rotulo}>
+              <Link href={nota.caminho} className={CHIP}>
+                {nota.rotulo}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* A faixa de torra é INFORMAÇÃO, não um chip: filtrar por torra a partir
+          daqui estreitaria de novo. Ela responde a outra pergunta — "então o
+          que existe?" — e responde com o número que os cards mostram. A escala
+          nunca aparece só como número (§5.3): vem sempre com o texto. */}
+      <div className="mt-8 max-w-[64ch] border-t border-fuligem-20 pt-5">
+        <p className={ROTULO}>{t.vazioTorraRotulo}</p>
+        <p className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[15px]">
+          <span>
+            <span className="font-dado text-[13px] tracking-[0.04em] text-fuligem-55">
+              {torra.min}/5
+            </span>{" "}
+            {rotuloPontoTorra(torra.min, locale)}
+          </span>
+          <span aria-hidden className="text-fuligem-20">
+            ———
+          </span>
+          <span>
+            <span className="font-dado text-[13px] tracking-[0.04em] text-fuligem-55">
+              {torra.max}/5
+            </span>{" "}
+            {rotuloPontoTorra(torra.max, locale)}
+          </span>
+        </p>
+      </div>
+
+      <div className="mt-10">
+        <BotaoLink href={href(locale, "/cafes")} variante="secundario">
+          {d.comum.limparFiltros}
+        </BotaoLink>
+      </div>
+    </section>
   );
 }

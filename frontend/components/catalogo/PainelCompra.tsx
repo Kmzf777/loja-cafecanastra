@@ -37,6 +37,17 @@ import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 
 const PESOS: PesoGramas[] = [250, 500, 1000];
 
+/**
+ * O rótulo da moagem COMO ELE É GRAVADO NA SACOLA — em português, nos três
+ * idiomas da vitrine.
+ *
+ * A sacola, o checkout e a conta são pt-BR por decisão (spec §1), e este texto
+ * não é rótulo de tela: ele viaja com o item para o `localStorage`, para a RPC
+ * e para o funil do GA4. O botão logo abaixo mostra `d.catalogo.moagem[m]`, no
+ * idioma de quem está lendo; o que fica guardado é este.
+ */
+const MOAGEM_NA_SACOLA = dicionario(LOCALE_PADRAO).catalogo.moagem;
+
 function rotuloPeso(g: PesoGramas) {
   return g === 1000 ? "1 kg" : `${g} g`;
 }
@@ -47,13 +58,14 @@ export function PainelCompra({
 }: {
   lote: Lote;
   /**
-   * O idioma da PDP. Os dois links para o Clube precisam dele: crus, eles
-   * atravessavam a fronteira do idioma no meio do funil de assinatura.
+   * O idioma da PDP. Ele decide DUAS coisas aqui: para onde vão os dois links
+   * do Clube — crus, eles atravessavam a fronteira do idioma no meio do funil
+   * de assinatura — e todo o texto do painel, que sai de `d.pdp` e `d.venda`.
    *
-   * O RESTO DO TEXTO DESTE PAINEL AINDA ESTA EM PORTUGUES nos tres idiomas, e
-   * isso e pendencia declarada, nao descuido — sao ~15 frases sem chave no
-   * dicionario (a Onda 3A cobriu a moldura e o editorial dos cafes, nao a
-   * interface de compra). O que ja tinha chave, "Esgotado", passou a le-la.
+   * O QUE NÃO SEGUE O IDIOMA É O QUE FICA GRAVADO: a moagem que viaja com o
+   * item para o localStorage, para a RPC e para o funil do GA4 é sempre o
+   * português (ver `MOAGEM_NA_SACOLA` acima). Rótulo de tela e dado gravado
+   * são coisas diferentes, e esta é a linha entre os dois.
    */
   locale?: Locale;
 }) {
@@ -151,9 +163,7 @@ export function PainelCompra({
     setErroDaSacola(null);
 
     if (!variante.produtoId) {
-      setErroDaSacola(
-        "Não conseguimos falar com a loja agora. Tente de novo em instantes.",
-      );
+      setErroDaSacola(d.venda.semLoja);
       return;
     }
 
@@ -165,7 +175,11 @@ export function PainelCompra({
         quantity: quantidade,
         image: lote.fotos.pacote.src,
         size: variante.rotuloEmbalagem,
-        moagem: MOAGENS.find((m) => m.valor === variante.moagem)?.rotulo,
+        // EM PORTUGUÊS, SEMPRE, e não no idioma da página: a sacola é pt-BR
+        // por decisão (spec §1) e este rótulo é dado GRAVADO — ele entra na
+        // chave do item e volta na próxima sessão. Ver `normalizarMoagem`
+        // em lib/sacola/fusao.ts, que é o outro lado desta regra.
+        moagem: MOAGEM_NA_SACOLA[variante.moagem],
         // Identidade estável do funil GA4 — o begin_checkout da sacola reporta
         // este mesmo id. Ver o comentário de `sku` em lib/sacola/sacola.tsx.
         sku: variante.skuLoja,
@@ -178,12 +192,14 @@ export function PainelCompra({
         nome: `${lote.nome} — ${variante.rotuloEmbalagem}`,
         precoCentavos: variante.preco,
         quantidade,
-        variante: MOAGENS.find((m) => m.valor === variante.moagem)?.rotulo,
+        // Também em português: é dimensão de funil do GA4, e um relatório que
+        // recebesse "Ground" e "Moído" contaria o mesmo produto duas vezes.
+        variante: MOAGEM_NA_SACOLA[variante.moagem],
       });
       setAdicionado(true);
       window.setTimeout(() => setAdicionado(false), 2500);
     } catch {
-      setErroDaSacola("Não foi possível adicionar à sacola.");
+      setErroDaSacola(d.venda.naoDeuParaAdicionar);
     }
   }
 
@@ -211,14 +227,17 @@ export function PainelCompra({
       {lote.assinatura ? (
         <div
           role="tablist"
-          aria-label="Modo de compra"
+          aria-label={d.pdp.modoDeCompra}
           className="grid grid-cols-2 border border-fuligem"
         >
           {[
-            { id: false, rotulo: "Compra única", valor: precoBase },
+            { id: false, rotulo: d.pdp.compraUnica, valor: precoBase },
             {
+              // O desconto vem colado ao rótulo da navegação — "Assinatura",
+              // "Subscription", "Suscripción" — em vez de ter chave própria:
+              // é a mesma palavra que o cabeçalho usa para a mesma porta.
               id: true,
-              rotulo: `Assinatura −${Math.round(desconto * 100)}%`,
+              rotulo: `${d.nav.assinatura} −${Math.round(desconto * 100)}%`,
               valor: Math.round(precoBase * (1 - desconto)),
             },
           ].map((aba) => (
@@ -257,36 +276,35 @@ export function PainelCompra({
           Pago acontecem. */}
       {assinando && lote.assinatura ? (
         <p className="mt-4 border border-fuligem-20 p-4 text-[14px] leading-relaxed text-fuligem-80">
-          A cada 15, 30 ou 45 dias, com a entrega incluída. Você escolhe a
-          frequência no Clube e cancela quando quiser, sem multa.
+          {d.pdp.clubeExplicacao}
         </p>
       ) : null}
 
       {/* ── §5.5 Moagem ────────────────────────────────────────────────────── */}
       <fieldset className="mt-8">
         <legend className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
-          Moagem
+          {d.pdp.rotulo.moagem}
         </legend>
         {/* Duas colunas em qualquer largura: com dois botões, `grid-cols-2`
             já cabe folgado em 360 px e evita que um deles fique órfão numa
             segunda linha quando a grade cresce. */}
         <div className="mt-3 grid grid-cols-2 gap-2">
           {MOAGENS.map((m) => {
-            const existe = moagensValidas.has(m.valor);
+            const existe = moagensValidas.has(m);
             return (
               <button
-                key={m.valor}
-                onClick={() => setMoagem(m.valor)}
+                key={m}
+                onClick={() => setMoagem(m)}
                 disabled={!existe}
-                aria-pressed={moagem === m.valor}
-                title={existe ? undefined : "Não disponível para este lote"}
+                aria-pressed={moagem === m}
+                title={existe ? undefined : d.pdp.semEstaMoagem}
                 className={`min-h-12 border px-4 py-3 text-left text-[14px] transition-colors ${
-                  moagem === m.valor
+                  moagem === m
                     ? "border-fuligem bg-fuligem text-cal"
                     : "border-fuligem-20 hover:border-fuligem"
                 } disabled:cursor-not-allowed disabled:border-fuligem-20 disabled:bg-transparent disabled:text-fuligem-20 disabled:line-through`}
               >
-                {m.rotulo}
+                {d.catalogo.moagem[m]}
               </button>
             );
           })}
@@ -295,13 +313,16 @@ export function PainelCompra({
             "Aeropress" precisa saber para onde o método foi. Aponta para a
             seção que existe nesta mesma página, e não promete escolha de
             método no pedido — não há campo para isso no checkout. */}
+        {/* O nome da seção fecha a frase nos três idiomas — em inglês e em
+            espanhol o complemento também vem no fim, então a costura
+            "…está em <link>." não precisa de posição variável. */}
         <p className="mt-2.5 text-[13px] text-fuligem-55">
-          Moído no dia do pedido. A moagem de cada método está em{" "}
+          {d.pdp.moidoNoDia}{" "}
           <a
             href="#como-preparar"
             className="underline decoration-fuligem-20 underline-offset-4 hover:text-vermelho"
           >
-            Como preparar
+            {d.pdp.comoPreparar}
           </a>
           .
         </p>
@@ -310,7 +331,7 @@ export function PainelCompra({
       {/* ── Peso ───────────────────────────────────────────────────────────── */}
       <fieldset className="mt-6">
         <legend className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
-          Peso
+          {d.pdp.rotulo.peso}
         </legend>
         <div className="mt-3 flex flex-wrap gap-2">
           {PESOS.map((g) => {
@@ -321,7 +342,7 @@ export function PainelCompra({
                 onClick={() => setPeso(g)}
                 disabled={!existe}
                 aria-pressed={peso === g}
-                title={existe ? undefined : "Não disponível nesta moagem"}
+                title={existe ? undefined : d.pdp.semEstePeso}
                 className={`border px-4 py-2.5 font-dado text-[13px] transition-colors ${
                   peso === g
                     ? "border-fuligem bg-fuligem text-cal"
@@ -342,7 +363,7 @@ export function PainelCompra({
       {embalagens.length > 1 ? (
         <fieldset className="mt-6">
           <legend className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
-            Embalagem
+            {d.pdp.rotulo.embalagem}
           </legend>
           <div className="mt-3 flex flex-wrap gap-2">
             {embalagens.map((n) => (
@@ -356,7 +377,7 @@ export function PainelCompra({
                     : "border-fuligem-20 hover:border-fuligem"
                 }`}
               >
-                {n === 1 ? "1 pacote" : `Caixa com ${n}`}
+                {n === 1 ? d.pdp.umPacote : `${d.pdp.caixaCom} ${n}`}
               </button>
             ))}
           </div>
@@ -373,7 +394,7 @@ export function PainelCompra({
             variante="primario"
             className="w-full"
           >
-            Montar minha assinatura
+            {d.pdp.montarAssinatura}
           </BotaoLink>
         </div>
       ) : (
@@ -381,7 +402,7 @@ export function PainelCompra({
         <div className="flex items-center border border-fuligem-20">
           <button
             onClick={() => setQuantidade((q) => Math.max(1, q - 1))}
-            aria-label="Diminuir quantidade"
+            aria-label={d.pdp.diminuirQuantidade}
             className="h-12 w-12 text-[18px] leading-none hover:bg-fuligem-20/40"
           >
             −
@@ -395,7 +416,7 @@ export function PainelCompra({
           <button
             onClick={() => setQuantidade((q) => Math.min(teto, q + 1))}
             disabled={quantidade >= teto}
-            aria-label="Aumentar quantidade"
+            aria-label={d.pdp.aumentarQuantidade}
             className="h-12 w-12 text-[18px] leading-none hover:bg-fuligem-20/40 disabled:cursor-not-allowed disabled:text-fuligem-20 disabled:hover:bg-transparent"
           >
             +
@@ -411,8 +432,8 @@ export function PainelCompra({
           {indisponivel
             ? d.comum.esgotado
             : adicionado
-              ? "Na sacola ✓"
-              : "Adicionar à sacola"}
+              ? `${d.venda.naSacola} ✓`
+              : d.venda.adicionarASacola}
         </Botao>
       </div>
       )}
@@ -420,7 +441,7 @@ export function PainelCompra({
       {/* aria-live: quem usa leitor de tela precisa ouvir que o item entrou —
           a mudança do rótulo do botão sozinha não é anunciada. */}
       <p role="status" aria-live="polite" className="sr-only">
-        {adicionado ? "Item adicionado à sacola." : ""}
+        {adicionado ? d.venda.itemAdicionado : ""}
       </p>
 
       {erroDaSacola ? (
@@ -433,17 +454,17 @@ export function PainelCompra({
           Só aparece quando o teto veio do estoque (não dos 20 arbitrários). */}
       {!indisponivel && estoqueConhecido && teto < 20 && quantidade >= teto ? (
         <p role="status" className="mt-3 text-[13px] text-fuligem-55">
-          Este é o máximo disponível em estoque agora.
+          {d.pdp.maximoEmEstoque}
         </p>
       ) : null}
 
       {indisponivel ? (
         <p role="status" className="mt-3 text-[14px] text-fuligem-55">
-          Esta combinação está esgotada. Tente outro peso ou outra moagem.
+          {d.pdp.combinacaoEsgotada}
         </p>
       ) : (
         <p className="mt-3 text-[14px] text-fuligem-55">
-          Torramos na terça, enviamos na quarta.
+          {d.pdp.torramosNaTerca}
         </p>
       )}
 
@@ -471,7 +492,7 @@ export function PainelCompra({
               tabIndex={ctaVisivel ? -1 : undefined}
               className="shrink-0"
             >
-              Assinar
+              {d.pdp.assinar}
             </BotaoLink>
           ) : (
             <Botao
@@ -481,7 +502,11 @@ export function PainelCompra({
               tabIndex={ctaVisivel ? -1 : undefined}
               className="shrink-0 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
             >
-              {indisponivel ? d.comum.esgotado : adicionado ? "✓" : "Adicionar"}
+              {indisponivel
+                ? d.comum.esgotado
+                : adicionado
+                  ? "✓"
+                  : d.venda.adicionar}
             </Botao>
           )}
         </div>

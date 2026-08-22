@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 import bruto from "../../../data/catalogo-canastra.json";
 import traduzido from "../../../data/catalogo-canastra.i18n.json";
 import { LOTES, MARCA, lotesDoLocale, traduzirLote } from "./produtos";
-import { PONTO_TORRA, rotuloNota } from "./rotulos";
+import { rotuloNota } from "./rotulos";
 import { MOAGENS } from "./tipos";
+import { dicionario } from "../i18n/dicionario";
 import { LOCALES } from "../i18n/tipos";
 import type { Locale } from "../i18n/tipos";
 
@@ -131,7 +132,9 @@ describe("catalogo montado", () => {
     // ("Torra escura") e o 1-5 que desenha a barra do <PontoTorra>. Divergir
     // significa a barra contradizer a legenda ao lado dela, no mesmo card.
     for (const lote of LOTES) {
-      expect(lote.torra, lote.slug).toBe(PONTO_TORRA[lote.pontoTorra]);
+      expect(lote.torra, lote.slug).toBe(
+        dicionario("pt").catalogo.pontoTorra[lote.pontoTorra],
+      );
     }
   });
 
@@ -148,7 +151,7 @@ describe("catalogo montado", () => {
   });
 
   it("so usa moagens do contrato", () => {
-    const validas = new Set(MOAGENS.map((m) => m.valor));
+    const validas = new Set<string>(MOAGENS);
     for (const lote of LOTES) {
       for (const v of lote.variantes) expect(validas.has(v.moagem)).toBe(true);
     }
@@ -242,8 +245,29 @@ describe("catalogo montado", () => {
     for (const lote of LOTES) {
       expect(lote).not.toHaveProperty("lavoura");
       expect(lote.origem.regiao).toContain("Canastra");
-      expect(lote.origem.variedades.length).toBeGreaterThan(0);
     }
+  });
+
+  it("variedade e dado da MARCA, e nao de cada lote", () => {
+    /**
+     * O DEFEITO, E ELE ESTAVA NA TELA. `monta()` copiava
+     * `bruto.marca.variedades` para `origem.variedades` de CADA lote, e a PDP
+     * escrevia "Blend 100% arabica das variedades Araras, Caturra 2SL e
+     * Paraiso" nas cinco linhas. Araras, Caturra 2SL e Paraiso sao o que a
+     * CASA planta — dado da marca, declarado uma vez e explicado em
+     * `marca.variedades_observacao`. Duas linhas nao alcancam essa fonte: o
+     * Microlote e um lote separado por definicao, e o Nectar de Minas e marca
+     * irma, com 75 pontos e pacote proprio. Nenhuma das duas tem composicao
+     * publicada, e afirmar por heranca e inventar.
+     *
+     * A afirmacao continua viva onde e verdadeira: /a-serra le
+     * `MARCA.variedades` e a apresenta como "As variedades da Canastra".
+     */
+    for (const lote of LOTES) {
+      expect(lote.origem, lote.slug).not.toHaveProperty("variedades");
+    }
+    expect(MARCA.variedades.length).toBeGreaterThan(0);
+    expect(MARCA.variedades).toContain("Araras");
   });
 
   it("tem alt text descritivo em toda foto", () => {
@@ -420,20 +444,30 @@ describe("editorial traduzido (data/catalogo-canastra.i18n.json)", () => {
         for (const nota of notas) {
           const rotulo = esperado[idioma]?.[nota];
           expect(rotulo, `${slug}.${idioma}: nota "${nota}" sem rotulo conferido`).toBeDefined();
-          expect(rotuloNota(nota), `${slug}.${idioma}.${nota}`).toBe(rotulo);
+          expect(rotuloNota(nota, idioma as Locale), `${slug}.${idioma}.${nota}`).toBe(
+            rotulo,
+          );
         }
       }
     }
   });
 
   it("a torra traduzida descreve o MESMO ponto da escala 1-5", () => {
-    // O irmao em portugues deste teste ("o texto da torra e o ponto da escala
-    // nunca divergem") compara com PONTO_TORRA, que e um mapa em portugues e
-    // mora em rotulos.ts. A escala nao muda de idioma: uma torra 5 e escura em
+    // A ESCALA ESTA ESCRITA A MAO AQUI DE PROPOSITO, e nao lida do dicionario:
+    // um teste que le a mesma tabela que verifica nao prova nada. Este e o
+    // oraculo independente, e ele cobra DOIS lados — o editorial traduzido
+    // (data/catalogo-canastra.i18n.json) e, no caso abaixo, o proprio
+    // dicionario. A escala nao muda de idioma: uma torra 5 e escura em
     // qualquer lingua, e uma traducao distraida que escrevesse "Medium roast"
     // no Classico faria a barra contradizer a legenda ao lado dela.
     const escala: Record<Locale, Record<number, string>> = {
-      pt: PONTO_TORRA,
+      pt: {
+        1: "Torra clara",
+        2: "Torra clara-média",
+        3: "Torra média",
+        4: "Torra média-escura",
+        5: "Torra escura",
+      },
       en: {
         1: "Light roast",
         2: "Light-medium roast",
@@ -453,6 +487,18 @@ describe("editorial traduzido (data/catalogo-canastra.i18n.json)", () => {
     for (const idioma of IDIOMAS_TRADUZIDOS) {
       for (const lote of lotesDoLocale(idioma)) {
         expect(lote.torra, `${lote.slug}.${idioma}`).toBe(escala[idioma][lote.pontoTorra]);
+      }
+    }
+
+    // E o dicionario, que e de onde a PLP e o <PontoTorra> tiram a legenda,
+    // diz a MESMA coisa que o editorial. Se as duas se separarem, a barra
+    // passa a contradizer o texto da torra no mesmo card.
+    for (const idioma of LOCALES) {
+      for (const ponto of [1, 2, 3, 4, 5] as const) {
+        expect(
+          dicionario(idioma).catalogo.pontoTorra[ponto],
+          `${idioma}.${ponto}`,
+        ).toBe(escala[idioma][ponto]);
       }
     }
   });

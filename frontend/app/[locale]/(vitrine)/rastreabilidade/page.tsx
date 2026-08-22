@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Serra } from "@/components/marca/Serra";
 import { BotaoLink } from "@/components/ui/Botao";
 import { alternativasDeIdioma, href } from "@/lib/i18n/rotas";
-import { comoLocale } from "@/lib/i18n/tipos";
+import { LOCALES, comoLocale } from "@/lib/i18n/tipos";
 import {
   HOSPEDEIRO_DA_BASE,
   REGISTRO_DO_PRODUTOR,
@@ -26,6 +26,18 @@ import {
  * hover — sem ele, tocar no único elemento clicável da página não dá retorno
  * nenhum.
  */
+
+/**
+ * As três versões saem prontas do build. A página é constante — o destino, o
+ * registro e os textos vêm de `conteudo.ts`, e não há leitura de rede nenhuma
+ * —, então sem esta função o `[locale]` a fazia renderizar de novo a cada
+ * visita para devolver sempre o mesmo HTML. Sem dado que envelhece, também não
+ * precisa de `revalidate`. A explicação longa está na home
+ * ((vitrine)/page.tsx).
+ */
+export function generateStaticParams() {
+  return LOCALES.map((locale) => ({ locale }));
+}
 
 export async function generateMetadata({
   params,
@@ -64,7 +76,16 @@ export default async function PaginaRastreabilidade({
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
             {t.rotulo}
           </p>
-          <h1 className="mt-5 font-titulo text-[clamp(2.25rem,5vw,3.75rem)] leading-none tracking-[-0.015em]">
+          {/* O PISO É 2,5rem, E ISSO NÃO É AJUSTE DE GOSTO. A Redaction 35
+              (`font-titulo`) só pode aparecer a partir de 40px — o §4.2 é
+              categórico, e a razão é que a degradação de impressão simulada
+              dela vira sujeira em corpo pequeno. O piso anterior era 2,25rem =
+              36px, e como o termo do meio (5vw) só passa de 40px a partir de
+              800px de viewport, TODO telefone via a serifada quebrada. 2,5rem
+              é o mesmo piso do herói de /a-serra e da /historia, e o título
+              mais longo dos três idiomas — "Rastreabilidade", 15 caracteres —
+              ainda cabe na linha em 360px. */}
+          <h1 className="mt-5 font-titulo text-[clamp(2.5rem,5vw,3.75rem)] leading-none tracking-[-0.015em]">
             {t.titulo}
           </h1>
           <p className="mt-6 max-w-[58ch] text-[17px] leading-relaxed text-cal/80">
@@ -128,8 +149,18 @@ export default async function PaginaRastreabilidade({
               </span>
             </a>
 
+            {/* `min-h-[44px]`: a variante `texto` é a única do <BotaoLink> sem
+                a altura `h-12`, e com o `leading-none` do BASE o alvo de toque
+                fecharia em ~13px — o §10 pede 44. Numa página cujo corpo é um
+                link e mais nada, errar o segundo alvo é errar a página. O
+                conserto definitivo é em components/ui/Botao.tsx, que não é
+                desta tarefa. */}
             <p className="mt-10">
-              <BotaoLink href={href(locale, "/a-serra")} variante="texto">
+              <BotaoLink
+                href={href(locale, "/a-serra")}
+                variante="texto"
+                className="min-h-[44px]"
+              >
                 {t.voltarLink}
               </BotaoLink>
             </p>
