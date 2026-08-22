@@ -406,7 +406,7 @@ const CONFIRMA_OPTOUT =
  */
 const CONFIRMA_OPTOUT_COMPARTILHADO =
   "Pronto: não mando mais avisos de pedido para este número — e isso vale para " +
-  "todos os cadastros que usam ele. Se mudar de ideia, é só escrever que a " +
+  "todos os cadastros ligados a ele. Se mudar de ideia, é só escrever que a " +
   "gente religa.";
 
 /**
