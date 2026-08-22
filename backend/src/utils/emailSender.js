@@ -279,4 +279,9 @@ module.exports = {
   sendAdminClubeSemEstoqueEmail,
   sendCartReminderEmail,
   conteudoDoLembreteDeCarrinho,
+  // EXPORTADO PARA O SEGUNDO CANAL, e nao por conveniencia: o `default: null`
+  // desta funcao e o que mantem `em_processamento` e `autorizado` silenciosos
+  // (ver o docblock em :6-12). O WhatsApp deriva o recorte DESTA fonte, ou o
+  // cliente recebe no zap o que a loja decidiu nao mandar por e-mail.
+  conteudoDoStatus,
 };
