@@ -44,9 +44,8 @@
 
 set -euo pipefail
 
-# O dump cobre catálogo, pedidos, clientes e o auth do GoTrue — PII completa
-# mais hash de senha e refresh token. Com o umask padrão do operador (022) ele
-# nasceria 0644 numa pasta 0755, legível por qualquer usuário da VPS.
+# Com o umask padrão do operador (022) o dump nasceria 0644 numa pasta 0755 —
+# legível por qualquer usuário da VPS, com tudo que o cabeçalho lista.
 umask 077
 
 # As duas funções que mantêm a senha fora do argv do pg_dump. Ver o cabeçalho
@@ -105,6 +104,26 @@ echo "[backup] pg_dump -> $ARQUIVO"
 # já aplicava ao manter a URL fora da linha do cron.
 PGPASSWORD="$(senha_da_uri "$DATABASE_URL")"
 export PGPASSWORD
+# A URI que o parser não entende passa direto — e a senha voltaria ao argv em
+# silêncio, que é exatamente o bug corrigido aqui. Melhor abortar.
+#
+# O teste é DE PROPÓSITO mais grosseiro que o parser: ele olha a URI CRUA, sem
+# cortar em / ? #. É essa diferença que pega o caso perigoso — senha com / crua
+# faz o parser cortar cedo, achar autoridade sem @ e devolver senha vazia,
+# enquanto o glob ainda enxerga o :...@ e reprova. Olhar a autoridade já
+# analisada repetiria o mesmo engano e não pegaria nada; por isso NÃO troque
+# este glob por algo que corte nos mesmos delimitadores.
+#
+# O preço é um falso positivo conhecido: URI SEM senha cuja query traga um @
+# cru depois do : da porta (…host:5432/db?opt=a@b) também aborta. Aborta com
+# mensagem, e não vazando — e o @ ali deveria ser %40 de qualquer forma.
+case "$DATABASE_URL" in
+  *://*:*@*)
+    [ -n "$PGPASSWORD" ] || {
+      echo "ERRO: a DATABASE_URL tem senha mas não consegui extraí-la." >&2
+      echo "Percent-encode / ? # na senha (%2F %3F %23) — ver lib/conexao-pg.sh." >&2
+      exit 1; } ;;
+esac
 pg_dump --format=custom --compress=6 --no-owner --file "$PARCIAL" \
   "$(uri_sem_senha "$DATABASE_URL")"
 

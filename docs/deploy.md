@@ -387,6 +387,8 @@ sudo mkdir -p /etc/canastra
 sudo install -m 600 -o "$USER" /dev/null /etc/canastra/backup.env
 echo 'export DATABASE_URL="postgres://postgres:SENHA@localhost:5432/postgres"' \
   | sudo tee /etc/canastra/backup.env > /dev/null
+# `/`, `?` e `#` na SENHA precisam vir percent-encoded (%2F, %3F, %23) — é o
+# que a URI exige, e o backup aborta com mensagem clara se não vierem.
 
 # Destino dos dumps e log do cron, com o SEU usuário como dono — senão a
 # primeira execução agendada morre num "Permission denied" que ninguém vê:

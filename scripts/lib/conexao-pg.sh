@@ -57,6 +57,15 @@ uri_sem_senha() {
 
   local esquema="${uri%%://*}"
   local resto="${uri#*://}"
+  # Cortar a autoridade como PREFIXO LITERAL de $resto só é correto porque
+  # _autoridade_da_uri a produziu tirando sufixos DESTE mesmo $resto — logo ela
+  # é, byte a byte, o começo dele. O que parece equivalente, `/${resto#*/}`,
+  # DEVOLVE A SENHA quando a URI não tem caminho: sem barra nenhuma para cortar,
+  # `${resto#*/}` não corta nada e o userinfo inteiro reaparece na saída
+  # (postgres://u:p@host:5432 -> postgres://u@host:5432/u:p@host:5432). É o
+  # caso do teste "uri_sem_senha em URI sem caminho".
+  # As aspas internas em "$autoridade" impedem que ela seja lida como glob: sem
+  # elas, um ? ou * na autoridade casaria outra coisa.
   local sufixo="${resto#"$autoridade"}"
   local userinfo="${autoridade%@*}"
   local hostporta="${autoridade##*@}"
