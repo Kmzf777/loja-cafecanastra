@@ -172,6 +172,16 @@ exit 0
       PATH: bin + path.delimiter + process.env.PATH,
       DATABASE_URL: databaseUrl,
       BACKUP_DIR: destino,
+      // O TESTE NUNCA PODE LER CONFIGURAÇÃO DA VPS. O script carrega
+      // /etc/canastra/backup.env com `set -a`, que EXPORTA por cima do que
+      // está aqui — e este repositório fica clonado na VPS: um `npm test` lá
+      // dentro dumparia o banco de produção e, se o arquivo definir BACKUP_DIR
+      // — o backup-banco.cron.exemplo oferece exatamente isso, "(Opcional, no
+      // mesmo arquivo: BACKUP_DIR=...)" —, a retenção do script apagaria dumps
+      // reais. BACKUP_ENV aponta para um arquivo dentro do diretório
+      // temporário que ninguém cria, então o `[ -f ]` do script é sempre falso.
+      // A variável existe SÓ para isto; em produção não se define.
+      BACKUP_ENV: path.join(base, "ambiente-que-nao-existe.env"),
       CANASTRA_TESTE_ARGV: argvLog,
       CANASTRA_TESTE_PGPASSWORD: senhaLog,
     },

@@ -57,7 +57,16 @@ umask 077
 # O cron chama este script pelado; quem carrega a DATABASE_URL é este source.
 # `set -a` exporta tudo que o arquivo definir mesmo sem `export` na linha —
 # assim um backup.env escrito à mão sem export continua funcionando.
-AMBIENTE="/etc/canastra/backup.env"
+#
+# BACKUP_ENV EXISTE PARA O TESTE, NÃO PARA PRODUÇÃO. O teste ponta a ponta
+# (backend/test/backup_conexao.test.js) roda ESTE script de verdade, e este
+# repositório fica clonado na VPS — sem o override, um `npm test` lá dentro
+# carregaria o backup.env real com `set -a` e ele atropelaria o ambiente que o
+# teste montou: o dump sairia contra o banco de PRODUÇÃO e, se o arquivo também
+# define BACKUP_DIR, a retenção (`find … -mtime +14 -delete`) rodaria contra a
+# pasta de dumps de verdade. O teste aponta a variável para um arquivo que não
+# existe. No cron não se define nada: sem BACKUP_ENV o caminho é o de sempre.
+AMBIENTE="${BACKUP_ENV:-/etc/canastra/backup.env}"
 if [ -f "$AMBIENTE" ]; then
   set -a
   # shellcheck disable=SC1090

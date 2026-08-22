@@ -128,6 +128,25 @@ async function sendStatusEmail(order, newStatus, trackingCode) {
   }
 }
 
+/**
+ * Avisa o admin que entrou pedido.
+ *
+ * PASSA PELA MESMA DISCIPLINA de `corpoDoEmailDeStatus`: `order_id` e
+ * `payment_method` iam crus no HTML enquanto o comentário daquela função, duas
+ * acima, dizia que quem lê o template não deveria ter de provar, campo por
+ * campo, qual interpolação é segura. `payment_method` é o `finalPaymentMethodId` do
+ * PaymentController, resolvido de `formData.paymentMethodId ||
+ * formData.payment_method_id || paymentMethodType` — corpo da requisição, e o
+ * `payment.create` roda ANTES do `createOrder`: o valor que chega aqui passou
+ * pela validação do Mercado Pago, nunca pela nossa.
+ *
+ * O destinatário é sempre o admin, então não é caminho entre usuários — é
+ * consistência com a convenção do próprio arquivo.
+ *
+ * `Number(...).toLocaleString(...)` não precisa de escape (é número), e o
+ * toUpperCase vem ANTES do escape de propósito: depois, o `&lt;` viraria
+ * `&LT;` e a entidade sairia deformada.
+ */
 async function sendAdminNewOrderEmail(order) {
   try {
     const adminEmail = EMAIL_ADMIN;
@@ -144,9 +163,9 @@ async function sendAdminNewOrderEmail(order) {
           <h2 style="color: #2e7d32;">Venda Realizada! 🎉</h2>
           <p>Você tem um novo pedido aguardando processamento no ${NOME_LOJA}.</p>
           <hr/>
-          <p><strong>ID do Pedido:</strong> ${order.order_id}</p>
+          <p><strong>ID do Pedido:</strong> ${escaparHtml(order.order_id)}</p>
           <p><strong>Valor Total:</strong> ${Number(order.total_amount).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</p>
-          <p><strong>Método de Pagamento:</strong> ${String(order.payment_method || "").toUpperCase()}</p>
+          <p><strong>Método de Pagamento:</strong> ${escaparHtml(String(order.payment_method || "").toUpperCase())}</p>
           <br/>
           <a href="${dashboardUrl}" style="background-color: #000; color: #fff; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
             Acessar Painel de Pedidos
