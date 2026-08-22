@@ -699,6 +699,13 @@ async function rotearMensagem(msg, valor) {
     // Só os códigos. `erro.message` do `pg` pode ecoar valor de coluna, e o da
     // Meta ecoa o telefone ("Recipient phone number not in allowed list: ...").
     // Nada de wamid e nada do corpo: o miolo do wamid em base64 É o telefone.
+    //
+    // E AQUI NÃO SE DESLIGA A INTEGRAÇÃO, ao contrário de
+    // `notificacoes.js:ERROS_QUE_DESLIGAM`: este caminho é disparado por quem
+    // manda mensagem DE FORA, e um desligamento acionável por webhook daria a
+    // um remetente qualquer influência sobre a linha de configuração da loja.
+    // O aviso de pedido detecta a credencial morta com um pedido só, e a partir
+    // dele `configurado(cfg)` já emudece este roteador junto.
     console.error(
       "WhatsApp: falha ao responder a mensagem do cliente " +
         `(código ${erro?.codigo ?? erro?.code ?? "?"}).`,

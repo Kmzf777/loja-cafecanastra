@@ -143,6 +143,15 @@ function semDadoPessoal(texto) {
  * A LISTA É FECHADA de propósito, e não "qualquer erro 4xx": erro novo da Meta
  * que ninguém mapeou tem de manter a loja funcionando, porque o custo de errar
  * para o lado de desligar é maior que o de tentar uma vez a mais.
+ *
+ * O LIMITE CONHECIDO, dito porque é onde a próxima pessoa vai procurar: SÓ O
+ * AVISO DE PEDIDO desliga. A resposta ao cliente (`WhatsappController`:
+ * `rotearMensagem`) pega o mesmo 190 e só o loga — um segundo caminho de
+ * escrita na configuração, disparado por webhook, daria a quem manda mensagem
+ * de fora influência sobre quantas vezes a loja escreve naquela linha. Na
+ * prática o buraco é estreito: basta UM pedido para o desligamento disparar, e
+ * a partir dele `configurado(cfg)` fica falso e o roteador também emudece. A
+ * loja que ficaria sem detectar é a que recebe mensagem e não vende nada.
  */
 const ERROS_QUE_DESLIGAM = Object.freeze([190, 200, 10, 131031]);
 
