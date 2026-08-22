@@ -40,8 +40,9 @@ const ENDERECO = { zip_code: "35059620" };
 const ITENS = [{ product_id: "p1", quantity: 1, price: 39.7, weight: 0.25 }];
 
 // As opcoes falsas carregam NOME desde que `conferirFrete` passou a casar nome
-// e preco: sem nome, todo teste daqui viraria 409 por nome divergente e os que
-// checam PRECO passariam pelo motivo errado.
+// e preco: sem nome, todo teste que CHEGA ao casamento viraria 409 por nome
+// divergente, e os que checam PRECO passariam pelo motivo errado. (Os de 400 e
+// o de 503 param antes do casamento e sao indiferentes aos nomes dos dubles.)
 test("frete: aceita valor que corresponde a uma opção cotada", async () => {
   opcoesFalsas = [
     { name: "Correios PAC", price: 24.9 },
@@ -57,9 +58,11 @@ test("frete: aceita valor que corresponde a uma opção cotada", async () => {
 });
 
 test("frete: o preço de uma opção com o nome de outra é recusado", async () => {
-  // O pedido gravava `metodo_envio` cru do corpo da requisicao: dava para
-  // cobrar PAC e nascer com "Correios SEDEX" escrito, que e o que a operacao
-  // le na hora de comprar a etiqueta.
+  // O CASO DO DINHEIRO, e este arquivo e o unico lugar onde ele cabe: duas
+  // opcoes REAIS na mesma cotacao, o preco da barata carregando o nome da cara.
+  // f4_status_e_frete.test.js cota contra uma porta fechada e so alcanca uma
+  // opcao, entao la o teste irmao cobre nome AUSENTE, nao par cruzado.
+  // O porque da regra esta em `conferirFrete` (PaymentController).
   opcoesFalsas = [
     { name: "Correios PAC", price: 24.9 },
     { name: "Correios SEDEX", price: 38.5 },
