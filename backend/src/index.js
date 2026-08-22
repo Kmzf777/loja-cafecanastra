@@ -264,21 +264,38 @@ if (process.env.BLING_ATIVO === "true" && process.env.BLING_RASTREIO_CRON === "t
 }
 
 /**
- * WhatsApp: faxina diaria de `whatsapp_eventos`, DESLIGADA por padrao.
+ * WhatsApp: faxina diaria de `whatsapp_eventos`. SEM GATE, DE PROPOSITO — e o
+ * unico cron desta casa que nao tem um, e a excecao e o conserto.
  *
  * O QUE ELA APAGA E POR QUE ELA PRECISA EXISTIR: aquela tabela so existe para
  * responder "ja processei este evento?". A Meta reentrega por ate SETE DIAS;
  * depois disso a pergunta nao pode mais ser feita, e cada linha guardada e so
  * custo de disco numa tabela que cresce com o movimento da loja e nunca
- * encolhe sozinha.
+ * encolhe sozinha. Sao ~3 linhas por mensagem enviada: a Meta manda `sent`,
+ * `delivered` e `read` para cada uma.
  *
- * O GATE E `META_ATIVO`, a mesma env booleana LITERAL de ABANDONO_ATIVO e
- * BLING_ATIVO (o "true" escrito, nunca "1" nem "sim"). Numa instalacao que
- * nunca ligou o WhatsApp a tabela e permanentemente vazia: agendar ali seria
- * carregar o node-cron e rodar um DELETE por dia para apagar nada. E o gate e a
- * ENV, e nao a coluna `ativo` do banco, de proposito — `ativo` oscila (o bot se
- * desliga sozinho quando a credencial morre) e a faxina nao pode parar junto:
- * os eventos ja recebidos continuam vencendo enquanto ninguem religa.
+ * POR QUE O GATE `META_ATIVO` SAIU, QUE E O DEFEITO QUE ISTO CONSERTA: no
+ * desenho deste bot O PAINEL E A FONTE e a env e so semente (whatsappConfig.js
+ * `comSemente`: com a linha gravada, quem manda e a coluna `ativo`). Quem liga
+ * a integracao pela tela grava no banco e NUNCA TOCA NO .env — e esse e o
+ * caminho principal, nao a excecao. Para essa pessoa o cron nunca era
+ * agendado, e a tabela crescia para sempre sem nada que a apagasse. O `.env`
+ * ainda com `META_ATIVO=false` descrevia o mundo de antes do primeiro
+ * salvamento no painel, e a faxina obedecia a ele para sempre.
+ *
+ * TROCAR O GATE PELA COLUNA `ativo` NAO RESOLVERIA, por dois motivos
+ * independentes. Primeiro, ele envelhece: a configuracao muda EM TEMPO DE
+ * EXECUCAO (o gestor liga pelo painel com o processo ja no ar) e uma decisao
+ * tomada uma vez no boot ficaria errada ate o proximo restart. Segundo, `ativo`
+ * OSCILA — o bot se desliga sozinho quando a credencial morre (erro 190) — e a
+ * faxina nao pode parar junto: os eventos ja recebidos continuam vencendo
+ * enquanto ninguem religa, e e exatamente ai que a tabela mais precisa dela.
+ *
+ * E O CUSTO DE NAO TER GATE E PROXIMO DE ZERO: `canastra.whatsapp_eventos`
+ * existe em toda instalacao desde a migracao 0017, e um DELETE por dia numa
+ * tabela vazia e um index scan que nao acha nada. Numa loja que nunca ligou o
+ * WhatsApp isso paga uma vez por dia para nunca mais depender de ninguem
+ * lembrar de ligar coisa nenhuma.
  *
  * `node-cron` E NAO `setInterval`, e a diferenca e um modo de falha real: um
  * `setInterval` de 24h so dispara 24h DEPOIS DA SUBIDA, entao um processo que
@@ -291,21 +308,18 @@ if (process.env.BLING_ATIVO === "true" && process.env.BLING_RASTREIO_CRON === "t
  * sairam, nunca quais: `dedupe_key` e o wamid, e o miolo dele em base64 e o
  * telefone do cliente.
  */
-if (process.env.META_ATIVO === "true") {
-  require("node-cron").schedule("17 4 * * *", () => {
-    require("./controllers/WhatsappController")
-      .limparEventosVelhos()
-      .then((apagados) => {
-        if (apagados > 0) {
-          console.log(`WhatsApp: ${apagados} evento(s) fora da janela de 7 dias apagados.`);
-        }
-      })
-      .catch((erro) => {
-        console.error("Faxina de eventos do WhatsApp falhou:", erro.message);
-      });
-  });
-  console.log("WhatsApp: faxina de eventos LIGADA (diaria, 04:17, retencao de 7 dias).");
-}
+require("node-cron").schedule("17 4 * * *", () => {
+  require("./controllers/WhatsappController")
+    .limparEventosVelhos()
+    .then((apagados) => {
+      if (apagados > 0) {
+        console.log(`WhatsApp: ${apagados} evento(s) fora da janela de 7 dias apagados.`);
+      }
+    })
+    .catch((erro) => {
+      console.error("Faxina de eventos do WhatsApp falhou:", erro.message);
+    });
+});
 
 // Tratamento de erros gerais
 app.use((err, req, res, next) => {
