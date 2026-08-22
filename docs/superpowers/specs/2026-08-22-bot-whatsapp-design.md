@@ -38,8 +38,9 @@ Pesquisados em 22/08/2026 na documentação oficial. Cada um muda uma decisão.
 
 **Fora da janela de 24h só sai template aprovado.** O cliente que não escreveu
 para a loja nas últimas 24 horas só pode receber um `message_template` que a
-Meta já revisou e marcou `APPROVED`. Isso significa que os seis avisos de pedido
-são, obrigatoriamente, seis templates aprovados — não texto montado na hora.
+Meta já revisou e marcou `APPROVED`. Isso significa que os avisos de pedido são,
+obrigatoriamente, templates aprovados — não texto montado na hora. São **sete**,
+e a §6 explica por que o "pedido enviado" precisa de dois.
 ([Service messages](https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/send-messages))
 
 **Categoria erra e custa.** Só existem três categorias de template: `MARKETING`,
@@ -396,7 +397,10 @@ de 24h e dá entrada no menu de suporte (§7).
 | `pedido_reembolsado` | status `reembolsado` | "Olá, {{nome}}. O valor do pedido {{numero}} foi devolvido. O prazo para aparecer na fatura depende do seu banco." | quick-reply `Preciso de ajuda` |
 
 **O botão de rastreio** é URL com sufixo variável, a única forma que a Meta
-aceita: `https://cafecanastra.com/rastreio?codigo={{1}}`, e o envio passa só
+aceita: `https://loja.cafecanastra.com/rastreio?codigo={{1}}` — o domínio vem de
+`URL_LOJA`, e **este parágrafo dizia `cafecanastra.com` sem o `loja.`, que é
+outro site**. Como a URL congela na aprovação do template, o engano teria virado
+um botão 404 na mão de todo cliente. O envio passa só
 `AA123456789BR`. A página `/rastreio` da vitrine redireciona para a
 transportadora — assim um template serve todas elas, e trocar de transportadora
 não exige reaprovar template.
@@ -629,7 +633,7 @@ Fora do que o código resolve. Está aqui para não virar arqueologia depois.
 5. **Webhook**: Callback URL `https://<api-da-loja>/whatsapp/webhook`, o Verify
    Token que você escolher, e assinar o campo `messages` (ele cobre entrada
    **e** status) e `message_template_status_update`.
-6. Colar tudo no painel, criar os seis templates pelo botão, esperar a aprovação
+6. Colar tudo no painel, criar os sete templates pelo botão, esperar a aprovação
    (até 24h, na prática minutos) e ligar.
 
 Graph API fixada em **`v26.0`**, numa constante única.
