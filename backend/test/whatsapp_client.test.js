@@ -211,3 +211,96 @@ test("listarTemplates pede os campos que o painel mostra", async () => {
   assert.match(g.chamadas[0].url, /correct_category/);
   assert.equal(g.chamadas[0].opts.method ?? "GET", "GET");
 });
+
+test("a redacao tira o token e o telefone que a Meta ECOA, e preserva o codigo", async () => {
+  // Este teste existe porque os dois de vazamento acima sao fracos exatamente
+  // onde precisavam ser fortes: os corpos falsos deles nao contem o segredo,
+  // entao uma implementacao que colasse `error.message` cru na frase PASSA nos
+  // dois e vaza em producao. Aqui os corpos sao os de verdade — o erro 190 da
+  // Meta ecoa o token recebido, e o 131030 e literalmente o telefone.
+  //
+  // As duas ultimas assercoes impedem a cura de virar doenca, e cada uma
+  // segura uma ponta diferente:
+  //
+  //   `codigoLegivel` — o codigo tem de estar na frase, porque e a unica coisa
+  //   que distingue "o cliente bloqueou" de "o token venceu" para quem le o
+  //   log. Ele sai da NOSSA etiqueta, e nao do texto da Meta: e por isso que
+  //   nenhum corte de digitos sozinho o alcanca. Este ramo morde quando a
+  //   etiqueta perde o codigo, e morde de novo no dia em que alguem
+  //   "simplificar" passando a frase INTEIRA pelo redator com um corte mais
+  //   estreito — as duas coisas foram sabotadas para conferir.
+  //
+  //   `subcodigoLegivel` — este sim segura o CORTE no lugar. O corte e em oito
+  //   digitos porque abaixo disso nao existe telefone (o mais curto em E.164
+  //   tem dez, e o do Brasil, treze), e acima disso mora o que precisa
+  //   sobreviver: o `error_subcode` de sete digitos, que e o que o suporte da
+  //   Meta pede quando se abre um chamado. Um corte que descesse para cinco ou
+  //   seis digitos comeria o subcodigo junto — e este teste morde.
+  //
+  // Juntas com `telefoneNaFrase`, as tres fixam a fronteira pelos DOIS lados:
+  // treze digitos tem de sumir, sete tem de ficar.
+  const g = graphFalsa([
+    {
+      status: 401,
+      corpo: {
+        error: {
+          code: 190,
+          message: `Invalid OAuth access token ${CFG.access_token} for app`,
+        },
+      },
+    },
+    {
+      status: 400,
+      corpo: {
+        error: {
+          code: 131030,
+          message:
+            "Recipient phone number not in allowed list: Add +5531999990000 (error_subcode 2494055)",
+        },
+      },
+    },
+  ]);
+
+  const enviar = () =>
+    cliente
+      .enviarTemplate(CFG, { para: "5531999990000", template: "t", idioma: "pt_BR", parametros: {} }, { fetchImpl: g.fetchImpl })
+      .then(() => null, (e) => e);
+
+  const comToken = await enviar();
+  const comTelefone = await enviar();
+
+  // Os veredictos de uma vez, e nao asserts em sequencia: `assert` aborta no
+  // primeiro que falha, e ai uma quebra esconderia os outros ramos. O diff do
+  // deepEqual mostra todos.
+  assert.deepEqual(
+    {
+      tokenNaFrase: (String(comToken.message) + String(comToken.stack)).includes(CFG.access_token),
+      telefoneNaFrase: (String(comTelefone.message) + String(comTelefone.stack)).includes("5531999990000"),
+      codigoLegivel: /131030/.test(comTelefone.message),
+      subcodigoLegivel: /2494055/.test(comTelefone.message),
+    },
+    { tokenNaFrase: false, telefoneNaFrase: false, codigoLegivel: true, subcodigoLegivel: true },
+  );
+});
+
+test("enviarTexto posta a mensagem avulsa no numero da loja", async () => {
+  const g = graphFalsa([{ corpo: { messages: [{ id: "wamid.TXT" }] } }]);
+  await cliente.enviarTexto(CFG, { para: "5531999990000", texto: "Bom dia!" }, { fetchImpl: g.fetchImpl });
+
+  assert.equal(g.chamadas[0].url, "https://graph.facebook.com/v26.0/1234567890/messages");
+  assert.equal(g.chamadas[0].opts.method, "POST");
+  const corpo = JSON.parse(g.chamadas[0].opts.body);
+  assert.equal(corpo.type, "text");
+  assert.equal(corpo.text.body, "Bom dia!");
+});
+
+test("perfilDoNumero le a saude do numero, e nao a lista de templates", async () => {
+  const g = graphFalsa([{ corpo: { quality_rating: "GREEN", verified_name: "Café Canastra" } }]);
+  await cliente.perfilDoNumero(CFG, { fetchImpl: g.fetchImpl });
+
+  assert.match(g.chamadas[0].url, /^https:\/\/graph\.facebook\.com\/v26\.0\/1234567890\?/);
+  // `quality_rating` e o aviso antecipado do bloqueio: o numero perde limite
+  // de envio antes de perder a permissao.
+  assert.match(g.chamadas[0].url, /quality_rating/);
+  assert.equal(g.chamadas[0].opts.method ?? "GET", "GET");
+});
