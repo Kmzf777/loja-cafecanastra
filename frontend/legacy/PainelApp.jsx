@@ -58,6 +58,9 @@ const AssinaturasManager = lazy(
 const BlingManager = lazy(
   () => import("./components/DashboardSection/Bling/BlingManager.jsx"),
 );
+const WhatsAppManager = lazy(
+  () => import("./components/DashboardSection/WhatsApp/WhatsAppManager.jsx"),
+);
 
 // NAO usar `basename: "/dashboard"`. O painel legado navega por links
 // ABSOLUTOS ("/dashboard/orders" em MenuAside.jsx, navigate("/dashboard") em
@@ -112,6 +115,13 @@ const router = createBrowserRouter([
           {
             path: "/dashboard/bling",
             element: Load(BlingManager),
+          },
+          // Path ABSOLUTO e identico ao `to` do link em MenuAside.jsx: nenhum
+          // teste faz essa paridade, e um relativo aqui viraria
+          // "/dashboard/dashboard/whatsapp" (ver o comentario acima).
+          {
+            path: "/dashboard/whatsapp",
+            element: Load(WhatsAppManager),
           },
         ],
       },

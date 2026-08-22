@@ -13,6 +13,7 @@ import {
   Star,
   Repeat,
   FileText,
+  MessageCircle,
 } from "lucide-react";
 import PropTypes from "prop-types";
 import { useEffect } from "react";
@@ -122,6 +123,16 @@ function MenuAside({ isOpen }) {
           <Link className="link" to={"/dashboard/settings/cupons"}>
             <TicketPercent size={18} />
             <li>Cupons de desconto</li>
+          </Link>
+
+          {/* WhatsApp fica em "Configurações gerais" porque é onde se INSTALA
+              a integração (credencial da Meta, interruptores, templates) — o
+              gestor vem aqui uma vez para configurar, não todo dia. O `to` é
+              identico ao `path` de PainelApp.jsx: sem esse link a tela existe
+              e some da navegação, e nenhum teste percebe. */}
+          <Link className="link" to={"/dashboard/whatsapp"}>
+            <MessageCircle size={18} />
+            <li>WhatsApp</li>
           </Link>
         </DivMenu>
       </ContainerSection>
