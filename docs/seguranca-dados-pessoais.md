@@ -364,3 +364,41 @@ cancelamento. Uma varredura periódica seria a solução definitiva; não foi
 escrita porque o volume de assinaturas ainda não a justifica — quando
 justificar, ela é um `SELECT` por `status = 'cancelada' AND redigido_em IS
 NULL` chamando a mesma função.
+
+# Atualização 2026-08-22 — o rastro de WhatsApp entrou na redação (0021)
+
+`canastra.whatsapp_mensagens` (0017) **não** era alcançada por
+`redigir_dados_do_titular`, e a tabela guarda mais dado pessoal do que o nome
+das colunas sugere: **o miolo do `wamid` em base64 é o telefone do cliente em
+texto claro**. Depois de uma exclusão de conta, aquela linha ficava com o
+`user_id` da pessoa, o `telefone_final`, um `pedido_id` válido e o telefone
+inteiro dentro do `wamid` — ou seja, o elo pessoa↔pedido que o `ON DELETE SET
+NULL` de 0005 existe para cortar voltava a ser reconstruível com um `SELECT`.
+
+Não era vulnerabilidade — a tabela tem RLS ligada sem política e `REVOKE ALL
+FROM authenticated` (0017), e nenhum handler lê `wamid` —, era **retenção
+indevida depois de um pedido de eliminação** (art. 18, VI).
+
+`0021_redacao_whatsapp.sql` estende a mesma função: `wamid`, `telefone_final` e
+`user_id` viram NULL na primeira redação do titular. **Idempotência pelo próprio
+predicado**, sem coluna de carimbo nova — a redação apaga a coluna pela qual se
+procura, então a segunda passagem não acha linha (a mesma decisão que a 0016
+tomou para `avaliacoes.nome_exibicao`).
+
+**O que fica**: `pedido_id`, `template`, `status`, os carimbos e o `erro_texto`.
+Sem `user_id` e sem `wamid` a linha não aponta para pessoa nenhuma — é o
+registro de que a loja avisou aquele pedido, do mesmo naipe do total e do status
+que a 0013 preserva em `pedidos`.
+
+**O troco**: depois da redação aquele rastro some da exportação de titular
+(`lgpd.routes.js` filtra por `user_id`). Na exclusão total é indiferente — a
+conta some no mesmo gesto. Na eliminação **parcial** é uma perda real: a pessoa
+deixa de conseguir listar as mensagens que já recebeu. É o que "eliminar"
+significa, e está escrito no cabeçalho da 0021 e no comentário daquela rota.
+
+A migração leva junto um índice barato —
+`whatsapp_mensagens_pedido_template_idx`, `UNIQUE (pedido_id, template) WHERE
+status <> 'falhou'` — que põe no banco a guarda de aviso duplicado que só
+existia em `notificacoes.js:jaAvisado()`. Não corrige defeito nenhum de hoje (os
+cenários concretos de corrida foram refutados); transforma "por convenção" em
+"pelo banco". O `23505` dele é tratado como "já avisado", nunca como erro.

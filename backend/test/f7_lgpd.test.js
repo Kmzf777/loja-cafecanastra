@@ -192,6 +192,47 @@ async function lerAvaliacao(id) {
   return rows[0];
 }
 
+/**
+ * O WAMID DE VERDADE, montado como a Meta o monta: `wamid.` + base64 cujo miolo
+ * é o TELEFONE DO CLIENTE em texto claro. Não é curiosidade — é a razão de a
+ * 0021 existir, e é o que faz a asserção deste arquivo ser sobre dado pessoal e
+ * não sobre um identificador opaco qualquer.
+ *
+ * O SUFIXO NÃO É ENFEITE: `whatsapp_mensagens_wamid_idx` (0017) é UNIQUE, então
+ * dois envios precisam de wamids diferentes — como na Meta.
+ */
+let wamidsGerados = 0;
+function wamidDe(telefone) {
+  wamidsGerados += 1;
+  const miolo = `HBgN${telefone}FQIAERgS${wamidsGerados}`;
+  return `wamid.${Buffer.from(miolo, "utf8").toString("base64")}`;
+}
+
+/** Uma linha de `whatsapp_mensagens` como `notificacoes.js` a escreve. */
+async function criarMensagemDeWhatsapp(
+  userId,
+  { pedidoId = null, template = "pedido_aprovado", wamid = null } = {},
+) {
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.whatsapp_mensagens
+       (pedido_id, user_id, telefone_final, template, status, wamid, enviado_em)
+     VALUES ($1::uuid, $2::uuid, '0000', $3, 'enviada', $4, now())
+     RETURNING id`,
+    [pedidoId, userId, template, wamid ?? wamidDe("5531999990000")],
+  );
+  return rows[0].id;
+}
+
+async function lerMensagemDeWhatsapp(id) {
+  const { rows } = await bd.pool.query(
+    `SELECT user_id, pedido_id, telefone_final, template, status, wamid,
+            enviado_em, atualizado_em
+       FROM canastra.whatsapp_mensagens WHERE id = $1`,
+    [id],
+  );
+  return rows[0];
+}
+
 async function redigir(userId) {
   const { rows } = await bd.pool.query(
     "SELECT canastra.redigir_dados_do_titular($1::uuid) AS n",
@@ -431,6 +472,83 @@ test("redação é idempotente: a segunda chamada devolve 0 e não toca nada", a
   // `redigido_em` audita a PRIMEIRA redação — repetir a chamada não o move.
   assert.deepEqual(segunda.redigido_em, primeira.redigido_em);
   assert.deepEqual(segunda.endereco_json, primeira.endereco_json);
+});
+
+/* --------------------------------------------------------------------------
+ * O rastro de WhatsApp (migração 0021)
+ * -------------------------------------------------------------------------- */
+
+test("redação alcança o rastro de WhatsApp: wamid, telefone_final e user_id somem", async () => {
+  const titular = await novoTitular("Ana Souza");
+  const vizinho = await novoTitular("Beto Lima");
+  const pedidoId = await criarPedido(titular.id);
+  const pedidoDoVizinho = await criarPedido(vizinho.id);
+
+  // O TELEFONE DA TITULAR, DENTRO DO WAMID. `whatsapp_mensagens` guarda só os
+  // quatro últimos dígitos em `telefone_final` (0017 recusa telefone completo
+  // em tabela nova de propósito) — e depois grava o número INTEIRO em `wamid`
+  // sem ninguém ter percebido.
+  const telefone = "5531999990000";
+  const meuWamid = wamidDe(telefone);
+  assert.ok(
+    Buffer.from(meuWamid.slice("wamid.".length), "base64").toString("utf8").includes(telefone),
+    "este teste não vale nada se o wamid de mentira não carregar o telefone",
+  );
+
+  const minha = await criarMensagemDeWhatsapp(titular.id, { pedidoId, wamid: meuWamid });
+  const alheia = await criarMensagemDeWhatsapp(vizinho.id, {
+    pedidoId: pedidoDoVizinho,
+    wamid: wamidDe("5531988887777"),
+  });
+
+  await redigir(titular.id);
+
+  const linha = await lerMensagemDeWhatsapp(minha);
+  assert.equal(linha.wamid, null, "o miolo do wamid é o telefone da titular, em texto claro");
+  assert.equal(linha.telefone_final, null);
+  assert.equal(
+    linha.user_id,
+    null,
+    "com o user_id de pé, o elo pessoa↔pedido que o ON DELETE SET NULL corta volta com um SELECT",
+  );
+
+  // O QUE FICA, e fica de propósito: a linha é o registro de que a loja avisou
+  // aquele pedido — quantas mensagens saíram, de que template, e se chegaram.
+  // Sem `user_id` e sem `wamid` ela não aponta mais para pessoa nenhuma.
+  assert.equal(linha.pedido_id, pedidoId);
+  assert.equal(linha.template, "pedido_aprovado");
+  assert.equal(linha.status, "enviada");
+  assert.ok(linha.enviado_em instanceof Date);
+
+  // A redação é DO TITULAR, e não da tabela: a linha do vizinho não é tocada.
+  const doVizinho = await lerMensagemDeWhatsapp(alheia);
+  assert.equal(doVizinho.user_id, vizinho.id);
+  assert.equal(doVizinho.telefone_final, "0000");
+  assert.ok(doVizinho.wamid);
+});
+
+test("o rastro de WhatsApp sem pedido também é redigido, e o retorno continua contando PEDIDOS", async () => {
+  // DUAS COISAS NUM TESTE SÓ porque são a mesma decisão: a redação de
+  // `whatsapp_mensagens` não entra na conta de retorno (o contrato de 0013 é o
+  // número de PEDIDOS redigidos, e `pedidosRedigidos` é o que o endpoint de
+  // titular responde), e ela alcança a linha ÓRFÃ DE PEDIDO — que é o caso de
+  // quem já teve o pedido apagado, ou de um envio que nunca teve pedido.
+  const titular = await novoTitular("Ciro Alves");
+  const semPedido = await criarMensagemDeWhatsapp(titular.id, { template: "pedido_enviado" });
+
+  assert.equal(await redigir(titular.id), 0, "nenhum pedido: o retorno é 0, não 1");
+
+  const primeira = await lerMensagemDeWhatsapp(semPedido);
+  assert.equal(primeira.wamid, null);
+  assert.equal(primeira.telefone_final, null);
+  assert.equal(primeira.user_id, null);
+
+  // IDEMPOTENTE PELO PRÓPRIO PREDICADO, sem coluna de carimbo nova: com
+  // `user_id` já nulo, a segunda passagem não acha linha — e por isso não move
+  // `atualizado_em`, que é o que provaria um UPDATE a mais.
+  assert.equal(await redigir(titular.id), 0);
+  const segunda = await lerMensagemDeWhatsapp(semPedido);
+  assert.deepEqual(segunda.atualizado_em, primeira.atualizado_em);
 });
 
 test("titular NULL é recusado: órfão não tem redação por titular", async () => {

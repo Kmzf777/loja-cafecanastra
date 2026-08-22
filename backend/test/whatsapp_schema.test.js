@@ -158,6 +158,71 @@ test("o mesmo wamid nao vira duas linhas, mas varios NULL cabem", async () => {
   );
 });
 
+test("o mesmo pedido nao recebe o mesmo template duas vezes — e a falha continua retentavel", async () => {
+  // A guarda de aviso repetido morava so em `notificacoes.js:jaAvisado()`, que
+  // LE e depois ESCREVE. 0021 poe a mesma regra no banco: um processo a mais
+  // amanha (fila, segundo worker, retry automatico) nao precisa reaprende-la.
+  // Pedido sem dono: `whatsapp_mensagens.pedido_id` REFERENCIA `pedidos`, e o
+  // que este teste mede e a chave do indice — nao o vinculo com a pessoa.
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.pedidos (total, status)
+     VALUES (89.90, 'aprovado') RETURNING pedido_id`,
+  );
+  const pedido = rows[0].pedido_id;
+
+  await bd.pool.query(
+    `INSERT INTO canastra.whatsapp_mensagens (pedido_id, template, status)
+     VALUES ($1::uuid, 'pedido_aprovado', 'pendente')`,
+    [pedido],
+  );
+
+  // SQLSTATE, nunca o texto: 23505 e violacao de unicidade — e e por ele que
+  // `notificacoes.js` reconhece "outro ja avisou" em vez de erro.
+  const erro = await bd.pool
+    .query(
+      `INSERT INTO canastra.whatsapp_mensagens (pedido_id, template, status)
+       VALUES ($1::uuid, 'pedido_aprovado', 'pendente')`,
+      [pedido],
+    )
+    .then(() => null, (e) => e);
+  assert.equal(erro?.code, "23505");
+
+  // TEMPLATE DIFERENTE, MESMO PEDIDO, PASSA: 'enviado' tem dois templates
+  // (`pedido_enviado` e `pedido_enviado_sem_rastreio`), e o pedido que sai sem
+  // codigo e ganha o rastreio depois PRECISA do segundo aviso.
+  await bd.pool.query(
+    `INSERT INTO canastra.whatsapp_mensagens (pedido_id, template, status)
+     VALUES ($1::uuid, 'pedido_enviado', 'pendente')`,
+    [pedido],
+  );
+
+  // 'falhou' FICA DE FORA DO INDICE, pela mesma razao de `jaAvisado()`: uma
+  // queda da Meta nao pode trancar o aviso daquele pedido para sempre.
+  await bd.pool.query(
+    `UPDATE canastra.whatsapp_mensagens SET status = 'falhou'
+      WHERE pedido_id = $1::uuid AND template = 'pedido_aprovado'`,
+    [pedido],
+  );
+  await bd.pool.query(
+    `INSERT INTO canastra.whatsapp_mensagens (pedido_id, template, status)
+     VALUES ($1::uuid, 'pedido_aprovado', 'pendente')`,
+    [pedido],
+  );
+
+  // PEDIDO NULO NAO COLIDE COM PEDIDO NULO (o `NULLS DISTINCT` padrao do
+  // Postgres). Linha sem pedido e o que sobra do `ON DELETE SET NULL` e da
+  // redacao da LGPD; empilha-las numa chave `(NULL, template)` faria a redacao
+  // de uma pessoa impedir o rastro de outra.
+  await bd.pool.query(
+    `INSERT INTO canastra.whatsapp_mensagens (template, status)
+     VALUES ('pedido_aprovado', 'enviada')`,
+  );
+  await bd.pool.query(
+    `INSERT INTO canastra.whatsapp_mensagens (template, status)
+     VALUES ('pedido_aprovado', 'enviada')`,
+  );
+});
+
 test("clientes ganhou as cinco colunas de WhatsApp", async () => {
   const { rows } = await bd.pool.query(
     `SELECT column_name FROM information_schema.columns

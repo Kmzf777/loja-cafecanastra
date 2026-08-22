@@ -377,12 +377,14 @@ envio fora do ar nesse meio-tempo. Sem a env vale `https://loja.cafecanastra.com
   Em paralelo, o Postgres embarcado entra em contenção e caem de 70 a 114 testes
   **sem determinismo** — testes diferentes a cada rodada. Foi medido, não
   suposto. Hoje são 595 testes, todos verdes em série.
-- **As migrações do bot são quatro**: `0017` (as três tabelas novas e as cinco
+- **As migrações do bot são cinco**: `0017` (as três tabelas novas e as cinco
   colunas em `clientes`), `0018` (privilégios de coluna em `clientes`, fechando
   o que a 0017 deixou escrevível pelo navegador), `0019` (a RPC de opt-in, que é
-  como o titular registra o próprio número) e `0020` (o diagnóstico do
+  como o titular registra o próprio número), `0020` (o diagnóstico do
   desligamento automático, e a correção de uma promessa que a 0017 fez e não
-  cumpria: o envio agora confere o carimbo de consentimento).
+  cumpria: o envio agora confere o carimbo de consentimento) e `0021` (o rastro
+  de `whatsapp_mensagens` entra na redação da LGPD, e a guarda de aviso
+  duplicado ganha índice único).
 - **A versão da Graph API está fixada em `v26.0`**, numa constante única
   (`backend/src/services/whatsappClient.js`). A Meta mantém cada versão por pelo
   menos dois anos e, quando ela vence, **não quebra a chamada** — roteia em
@@ -391,10 +393,15 @@ envio fora do ar nesse meio-tempo. Sem a env vale `https://loja.cafecanastra.com
 - **Nenhum token, nenhum telefone completo e nenhum `wamid` vai para log** — o
   miolo de um `wamid` em base64 *é* o telefone do cliente. O rótulo de erro é
   método + caminho, nunca a URL com querystring.
-- **`whatsapp_mensagens` guarda só os quatro últimos dígitos.** O telefone
-  completo mora num lugar só, `clientes.telefone`, que a redação da LGPD já
-  cobre (`docs/seguranca-dados-pessoais.md`). Guardá-lo numa tabela nova abriria
-  um segundo elo a manter para sempre.
+- **`whatsapp_mensagens` guarda só os quatro últimos dígitos em
+  `telefone_final` — mas o `wamid` carregava o número inteiro.** A intenção da
+  0017 era o telefone completo morar num lugar só, `clientes.telefone`; o miolo
+  do `wamid` em base64 furava isso sem ninguém perceber, e a linha sobrevivia à
+  exclusão da conta. A **0021** fecha: a redação por titular
+  (`canastra.redigir_dados_do_titular`) apaga `wamid`, `telefone_final` e
+  `user_id` daquela linha. O que fica — pedido, template, status e carimbos — é
+  registro do que a loja fez, e não aponta para pessoa nenhuma. Ver
+  `docs/seguranca-dados-pessoais.md`.
 - **A chave canônica do destinatário é o `wa_id` que a Meta devolve**, não o
   telefone do cadastro: a documentação da Meta avisa que, no Brasil e no México,
   a Cloud API pode mexer no nono dígito. O telefone digitado serve para o

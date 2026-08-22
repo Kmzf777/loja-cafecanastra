@@ -86,11 +86,16 @@ async function recusarForaDaLoja(req, res, conexao) {
  *                          consentimento (opt-in de pedido, opt-in de promoção,
  *                          opt-out) mais o relógio da janela de 24h;
  *   `whatsapp_mensagens`   com quem a loja falou, quando, o que mandou e se
- *                          chegou (0017). A ELIMINAÇÃO não a alcança de
- *                          propósito — o `user_id` fica órfão, sem FK —, e é
- *                          exatamente por isso que o ACESSO tem de alcançar:
- *                          enquanto a conta existe, a pessoa tem direito de
- *                          saber que a loja guarda esse rastro;
+ *                          chegou (0017). Enquanto a conta existe, a pessoa tem
+ *                          direito de saber que a loja guarda esse rastro. E
+ *                          DEPOIS DA REDAÇÃO ELE SOME DAQUI, porque a 0021
+ *                          apaga `user_id` (além de `wamid` e `telefone_final`)
+ *                          e esta consulta filtra por ele — a linha continua
+ *                          existindo como registro do que a loja fez, sem
+ *                          apontar para pessoa nenhuma. Na exclusão total isso
+ *                          é indiferente (a conta some no mesmo gesto); na
+ *                          eliminação PARCIAL é o efeito pretendido, e o preço
+ *                          é a pessoa deixar de listar o que já recebeu;
  *   `enderecos` .......... os endereços salvos;
  *   `pedidos` ............ a venda com a fotografia de entrega;
  *   `assinaturas` ........ o Clube (0015): endereço congelado na adesão, preço,

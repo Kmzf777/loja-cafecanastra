@@ -17,6 +17,7 @@ const { aplicarMigracoes } = require("../db/migrar.js");
 let bd;
 let notificacoes;
 let config;
+let pgPool;
 const emails = [];
 const zaps = [];
 
@@ -108,6 +109,7 @@ before(async () => {
   }
 
   config = require("../src/services/whatsappConfig.js");
+  pgPool = require("../src/pgPool.js");
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -318,6 +320,63 @@ test("o mesmo status duas vezes so avisa uma vez no WhatsApp", async () => {
     "SELECT count(*)::int AS n FROM canastra.whatsapp_mensagens",
   );
   assert.equal(rows[0].n, 1, "a segunda passagem nao deixa nem linha de rastro");
+});
+
+test("perder a corrida da guarda de repetido nao vira erro: 23505 e 'ja avisado'", async () => {
+  // A GUARDA DE `jaAvisado()` LE E DEPOIS ESCREVE, e entre as duas coisas ha
+  // uma janela. 0021 poe a mesma regra no banco (indice unico parcial em
+  // pedido+template); este teste RE-CRIA a corrida, gravando a linha
+  // concorrente depois do SELECT e antes do INSERT — que e o unico jeito de
+  // exercitar o ramo de verdade num teste de um processo so.
+  //
+  // O DESFECHO CERTO E SILENCIO, e nao erro: perder a corrida significa que a
+  // outra ponta ja gravou o rastro, que e exatamente o que a guarda queria. Uma
+  // linha de "Erro ao avisar o cliente por WhatsApp" aqui mandaria alguem
+  // procurar defeito num sistema que se comportou como projetado.
+  const queryOriginal = pgPool.query.bind(pgPool);
+  let jaCorreu = false;
+  pgPool.query = async function (texto, params) {
+    if (
+      !jaCorreu &&
+      typeof texto === "string" &&
+      texto.includes("INSERT INTO canastra.whatsapp_mensagens")
+    ) {
+      jaCorreu = true;
+      await queryOriginal(
+        `INSERT INTO canastra.whatsapp_mensagens (pedido_id, template, status)
+         VALUES ($1::uuid, 'pedido_enviado', 'pendente')`,
+        [PEDIDO],
+      );
+    }
+    return queryOriginal(texto, params);
+  };
+
+  const linhas = [];
+  const originais = { error: console.error, warn: console.warn, log: console.log };
+  for (const nivel of Object.keys(originais)) {
+    console[nivel] = (...args) => linhas.push(args.map(String).join(" "));
+  }
+
+  try {
+    await notificacoes.avisarCliente(pedidoDe(ANA, { status: "enviado" }), "enviado", "AA123BR");
+  } finally {
+    delete pgPool.query;
+    Object.assign(console, originais);
+  }
+
+  assert.equal(zaps.length, 0, "quem perdeu a corrida nao manda a segunda mensagem");
+
+  const { rows } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.whatsapp_mensagens",
+  );
+  assert.equal(rows[0].n, 1, "a linha do concorrente, e nada mais");
+
+  const log = linhas.join("\n");
+  assert.equal(
+    /Erro ao avisar o cliente por WhatsApp/.test(log),
+    false,
+    `a corrida perdida virou erro no log: ${log}`,
+  );
 });
 
 test("o envio que falhou pode ser tentado de novo", async () => {

@@ -91,6 +91,13 @@ async function destinatario(userId) {
  * A chave é PEDIDO + TEMPLATE, e não pedido + status, porque 'enviado' tem dois
  * templates (`pedido_enviado` e `pedido_enviado_sem_rastreio`): o pedido que sai
  * sem código e ganha o rastreio depois PRECISA do segundo aviso.
+ *
+ * ESTA LEITURA NÃO É A ÚNICA TRANCA DESDE A 0021. `whatsapp_mensagens_pedido_
+ * template_idx` é a MESMA regra (mesma chave, mesmo `status <> 'falhou'`) do
+ * lado do banco, e é ela que cobre a janela entre este SELECT e o INSERT lá
+ * embaixo. As duas se justificam: esta responde sem levantar exceção no caso
+ * comum; o índice é quem garante, e quem um processo novo não precisa
+ * reaprender. O INSERT trata o 23505 dela como "já avisei".
  */
 async function jaAvisado(pedidoId, template) {
   const { rows } = await pool.query(
@@ -281,14 +288,34 @@ async function enviarWhatsappDeStatus(order, novoStatus, rastreio) {
   //
   // SÓ OS QUATRO ÚLTIMOS DÍGITOS, nunca o número: 0017 recusa telefone completo
   // em tabela nova de propósito.
-  const { rows } = await pool.query(
-    `INSERT INTO canastra.whatsapp_mensagens
-       (pedido_id, user_id, telefone_final, template, status)
-     VALUES ($1::uuid, $2::uuid, $3, $4, 'pendente')
-     RETURNING id`,
-    [order.order_id, order.user_id, ultimosQuatro(destino), conteudo.template],
-  );
-  const id = rows[0].id;
+  //
+  // 23505 É "JÁ AVISADO", E NÃO FALHA. `whatsapp_mensagens_pedido_template_idx`
+  // (0021) põe no banco a mesma regra que `jaAvisado()` acabou de conferir —
+  // e o índice cobre a janela entre a pergunta e esta escrita, que `jaAvisado()`
+  // sozinho não cobre. Quem perde essa corrida perde para OUTRO caminho que
+  // acabou de gravar o rastro daquele pedido+template: o desfecho é exatamente
+  // o que a guarda queria, então o certo é sair calado. Logar aqui mandaria
+  // alguém procurar defeito num sistema que se comportou como projetado.
+  //
+  // SÓ O 23505 É ENGOLIDO, e a distinção importa: qualquer outro erro do INSERT
+  // (banco fora, 23503 de um `pedido_id` que não existe) continua subindo para
+  // o `catch` de `avisarCliente`, que loga. O índice de `wamid` não entra nessa
+  // conta porque esta linha nasce SEM wamid — ele só é escrito no UPDATE
+  // abaixo, depois de a Meta responder.
+  let id;
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO canastra.whatsapp_mensagens
+         (pedido_id, user_id, telefone_final, template, status)
+       VALUES ($1::uuid, $2::uuid, $3, $4, 'pendente')
+       RETURNING id`,
+      [order.order_id, order.user_id, ultimosQuatro(destino), conteudo.template],
+    );
+    id = rows[0].id;
+  } catch (erro) {
+    if (erro?.code === "23505") return;
+    throw erro;
+  }
 
   try {
     const { wamid } = await enviarTemplate(cfg, { para: destino, ...conteudo });
