@@ -21,3 +21,8 @@ estrutura.sql
 
 # Logs do PM2 na VPS (deploy/ecosystem.config.cjs escreve aqui).
 deploy/logs/
+
+# Worktrees de sessoes paralelas (superpowers:using-git-worktrees).
+# O conteudo e um checkout inteiro do proprio repositorio: versionar isso
+# duplicaria a arvore dentro dela mesma.
+.worktrees/
