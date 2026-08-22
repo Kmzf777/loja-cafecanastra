@@ -1,6 +1,6 @@
 const OrderRepository = require("../repositories/ordersRepository");
 const pool = require("../pgPool");
-const { sendStatusEmail } = require("../utils/emailSender");
+const { avisarCliente } = require("../services/notificacoes");
 const { STATUS_VALIDOS } = require("../utils/statusDePedido");
 const {
   lerItensDoPedido,
@@ -249,11 +249,14 @@ class OrderController {
 
       await client.query("COMMIT");
 
-      // E-mail depois do COMMIT e sem travar a resposta: avisar o cliente e
+      // O AVISO VAI COM `updated`, e nao com `order`: `order` (:171) e a linha
+      // LIDA ANTES do UPDATE — status velho e sem `tracking_code`. `updated`
+      // (:243) e a projecao completa, ja com o status novo e o rastreio.
+      // Depois do COMMIT e sem travar a resposta: avisar o cliente e
       // importante, mas o provedor estar fora nao pode fazer o admin achar que
       // a mudanca de status falhou — ela ja esta gravada.
-      sendStatusEmail(order, newStatus, trackingCode).catch((e) =>
-        console.error("Falha ao enviar e-mail de status:", e.message),
+      avisarCliente(updated, newStatus, trackingCode).catch((e) =>
+        console.error("Falha ao avisar o cliente:", e.message),
       );
 
       return res.json(updated);

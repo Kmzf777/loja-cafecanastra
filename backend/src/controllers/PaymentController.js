@@ -28,10 +28,10 @@ const { garantirCpf } = require("../utils/cpf");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const cuponsRepository = require("../repositories/cuponsRepository");
 const promotionsRepo = new PromotionsRepository();
-const {
-  sendStatusEmail,
-  sendAdminNewOrderEmail,
-} = require("../utils/emailSender");
+const { sendAdminNewOrderEmail } = require("../utils/emailSender");
+// O aviso ao CLIENTE sai por `avisarCliente` (e-mail + WhatsApp no mesmo
+// gesto); o e-mail do ADMIN continua vindo direto do emailSender.
+const { avisarCliente } = require("../services/notificacoes");
 // Bling (onda 3G): o gatilho `aoAprovarPedido` é quem decide se age — ele
 // mesmo confere BLING_ATIVO e roda fora da resposta, com catch (o padrão dos
 // e-mails). Daqui só sai a CHAMADA, sempre depois do commit.
@@ -984,7 +984,7 @@ class PaymentController {
       // pago e gravado do mesmo jeito e a resposta nao pode virar erro.
       Promise.allSettled([
         sendAdminNewOrderEmail(newOrder),
-        statusAplicado ? sendStatusEmail(newOrder, statusAplicado) : null,
+        statusAplicado ? avisarCliente(newOrder, statusAplicado) : null,
       ]).then((r) => {
         r.filter((x) => x.status === "rejected").forEach((x) =>
           console.error("Falha ao enviar e-mail do pedido:", x.reason?.message),
@@ -1224,8 +1224,8 @@ class PaymentController {
     if (mudou) {
       // E-mail DEPOIS do commit e sem prender a resposta: o provedor fora do
       // ar nao pode fazer o MP reenviar uma transicao ja aplicada.
-      sendStatusEmail(pedido, statusPt).catch((e) =>
-        console.error("Falha ao enviar e-mail de status:", e.message),
+      avisarCliente(pedido, statusPt).catch((e) =>
+        console.error("Falha ao avisar o cliente:", e.message),
       );
       /**
        * BLING (3G): pedido que ENTROU em 'aprovado' pelo webhook vai ao ERP.

@@ -47,7 +47,7 @@
 const pool = require("../pgPool");
 const blingClient = require("./blingClient");
 const { GRUPO_CANCELADO } = require("../utils/statusDePedido");
-const { sendStatusEmail } = require("../utils/emailSender");
+const { avisarCliente } = require("./notificacoes");
 
 /**
  * A projeção do pedido para as respostas das rotas /bling: o contrato HTTP de
@@ -700,10 +700,10 @@ async function gravarDadosDaNota(pedidoId, notaId, { comChave = true } = {}) {
  * Lê o pedido no Bling e, se a expedição já preencheu o rastreio lá, traz o
  * código para a loja: grava `codigo_rastreio`, avança o pedido para
  * 'enviado' (quando ele ainda estava num status pré-envio) e dispara o
- * e-mail de enviado de sempre (sendStatusEmail, que já inclui o código).
+ * aviso de enviado de sempre (`avisarCliente`, que já inclui o código).
  *
  * Idempotente: mesmo código já gravado → no-op; pedido já 'enviado' ou
- * 'entregue' só atualiza o código, sem e-mail repetido.
+ * 'entregue' só atualiza o código, sem aviso repetido.
  */
 async function consultarRastreio(pedidoId) {
   const pedido = await carregarPedido(pedidoId);
@@ -799,9 +799,14 @@ async function consultarRastreio(pedidoId) {
     );
 
     if (avanco.rowCount === 1) {
-      // O e-mail é o de sempre, com o código dentro; falha dele nunca desfaz a
-      // transição (sendStatusEmail já engole e loga por contrato próprio).
-      await sendStatusEmail(avanco.rows[0], "enviado", rastreio);
+      // O aviso é o de sempre, com o código dentro; falha dele nunca desfaz a
+      // transição (`avisarCliente` já engole e loga por contrato próprio).
+      //
+      // O `await` FICA. Sem ele, a rota POST /bling/pedidos/:id/rastreio
+      // responderia antes de o aviso sair, e o cron perderia a ordem. E
+      // `avisarCliente` engole erro por contrato, entao esperar aqui nao
+      // torna a rota capaz de falhar por causa do WhatsApp.
+      await avisarCliente(avanco.rows[0], "enviado", rastreio);
       console.log(
         `Bling: rastreio ${rastreio} trazido para o pedido ${pedidoId} (agora 'enviado').`,
       );

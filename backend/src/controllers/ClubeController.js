@@ -54,10 +54,12 @@ const { garantirCpf } = require("../utils/cpf");
 // `bling_id IS NOT NULL`).
 const blingPedidos = require("../services/blingPedidos");
 const {
-  sendStatusEmail,
   sendAdminNewOrderEmail,
   sendAdminClubeSemEstoqueEmail,
 } = require("../utils/emailSender");
+// O aviso ao CLIENTE sai por `avisarCliente` (e-mail + WhatsApp no mesmo
+// gesto); os e-mails do ADMIN continuam vindo direto do emailSender.
+const { avisarCliente } = require("../services/notificacoes");
 
 const clienteMp = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
@@ -617,8 +619,8 @@ async function aplicarCobranca(paymentId, res) {
 
   if (pedidoExistente) {
     if (mudou) {
-      sendStatusEmail(pedidoExistente, statusPt).catch((e) =>
-        console.error("Falha ao enviar e-mail de status do Clube:", e.message),
+      avisarCliente(pedidoExistente, statusPt).catch((e) =>
+        console.error("Falha ao avisar o cliente do Clube:", e.message),
       );
       /**
        * BLING (3G) NO CAMINHO DA TRANSIÇÃO: uma cobrança que chegou pendente
@@ -847,7 +849,7 @@ async function aplicarCobranca(paymentId, res) {
           motivo: motivoSemCafe,
         })
       : sendAdminNewOrderEmail(pedido),
-    sendStatusEmail(pedido, statusPt),
+    avisarCliente(pedido, statusPt),
   ]).then((r) => {
     r.filter((x) => x.status === "rejected").forEach((x) =>
       console.error("Falha ao enviar e-mail do pedido do Clube:", x.reason?.message),
