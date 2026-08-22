@@ -50,6 +50,34 @@ function conteudoDoStatus(status, order, name, trackingCode) {
 }
 
 /**
+ * O corpo do e-mail de status, PURO — separado do envio para o teste afirmar
+ * sobre o HTML sem tocar o banco nem o Resend. Mesmo recorte que
+ * `conteudoDoLembreteDeCarrinho` faz mais abaixo, pelo mesmo motivo.
+ *
+ * TUDO que vem de `conteudo` passa por escaparHtml: `text` carrega o nome do
+ * cliente (cadastro) e o código de rastreio (digitado no painel), e o assunto
+ * entra pela mesma disciplina — quem lê o template não deveria ter de provar,
+ * campo por campo, qual interpolação é segura.
+ *
+ * A ORDEM IMPORTA: escapa primeiro, troca \n por <br/> depois. escaparHtml não
+ * toca quebra de linha, então o <br/> nasce como marcação de verdade; inverter
+ * os dois passos produziria &lt;br/&gt; no e-mail.
+ */
+function corpoDoEmailDeStatus(conteudo, order) {
+  return `
+        <div>
+           <h2>${escaparHtml(conteudo.subject)}</h2>
+           <p>${escaparHtml(conteudo.text).replace(/\n/g, "<br/>")}</p>
+           <hr/>
+           <p><strong>Resumo do Pedido:</strong></p>
+           <p>Total: R$ ${Number(order.total_amount).toFixed(2)}</p>
+           <br/>
+           <a href="${URL_LOJA}/account">Ver Meus Pedidos</a>
+        </div>
+      `;
+}
+
+/**
  * Avisa o cliente que o pedido mudou de status.
  *
  * O DESTINATÁRIO MORA EM DOIS LUGARES desde a F2: o e-mail é do GoTrue
@@ -84,17 +112,7 @@ async function sendStatusEmail(order, newStatus, trackingCode) {
         from: REMETENTE.pedidos,
         to: [email],
         subject: conteudo.subject,
-        html: `
-        <div>
-           <h2>${conteudo.subject}</h2>
-           <p>${conteudo.text.replace(/\n/g, "<br/>")}</p>
-           <hr/>
-           <p><strong>Resumo do Pedido:</strong></p>
-           <p>Total: R$ ${Number(order.total_amount).toFixed(2)}</p>
-           <br/>
-           <a href="${URL_LOJA}/account">Ver Meus Pedidos</a>
-        </div>
-      `,
+        html: corpoDoEmailDeStatus(conteudo, order),
       });
     } catch (err) {
       console.error("Erro na API Resend:", err);
@@ -279,4 +297,6 @@ module.exports = {
   sendAdminClubeSemEstoqueEmail,
   sendCartReminderEmail,
   conteudoDoLembreteDeCarrinho,
+  conteudoDoStatus,
+  corpoDoEmailDeStatus,
 };
