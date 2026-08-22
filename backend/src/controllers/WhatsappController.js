@@ -395,6 +395,21 @@ const CONFIRMA_OPTOUT =
   "escrever que a gente religa.";
 
 /**
+ * A MESMA confirmação quando o número está em MAIS DE UM cadastro.
+ *
+ * Ela existe porque o opt-out é sobre o APARELHO (ver `pararParaOAparelho`), e
+ * uma confirmação que dissesse "por aqui" descreveria um gesto menor do que o
+ * que de fato aconteceu — num assunto que tem peso legal e numa mensagem que a
+ * pessoa vai reler. A frase fala do NÚMERO e nunca de quem são os cadastros:
+ * dizer o escopo é honestidade, dizer os nomes seria o vazamento que a guarda
+ * de ambiguidade existe para impedir.
+ */
+const CONFIRMA_OPTOUT_COMPARTILHADO =
+  "Pronto: não mando mais avisos de pedido para este número — e isso vale para " +
+  "todos os cadastros que usam ele. Se mudar de ideia, é só escrever que a " +
+  "gente religa.";
+
+/**
  * As duas colunas que o roteador precisa do cliente, escritas uma vez só para
  * os dois caminhos de busca não divergirem.
  *
@@ -464,6 +479,12 @@ function candidatosDeTelefone(waId) {
  * DELA para quem escreveu — vazamento, não inconveniência. Diante da
  * ambiguidade a resposta é silêncio: custa uma resposta, e a alternativa custa
  * o dado de outra pessoa.
+ *
+ * E O `LIMIT 2` BASTA PORQUE ESTA FUNÇÃO SÓ DECIDE IDENTIDADE: 0, 1 ou
+ * "mais de um" é tudo que ela precisa distinguir. O opt-out, que é a única
+ * coisa que atravessa a ambiguidade, NÃO se apoia nesta lista — ele escreve
+ * pelo mesmo predicado, direto no UPDATE (`pararParaOAparelho`), justamente
+ * para não parar só as duas primeiras contas de um número com três.
  */
 async function acharCliente(waId) {
   const porWaId = await pool.query(
@@ -497,7 +518,8 @@ async function acharCliente(waId) {
       // telefone completo mora em `clientes.telefone` e em lugar nenhum mais.
       console.warn(
         "WhatsApp: um número de entrada casa com mais de um cadastro; " +
-          "ninguém foi vinculado e a mensagem ficou sem resposta.",
+          "ninguém foi vinculado. Só um pedido de PARAR é respondido nesse " +
+          "estado — todo o resto fica sem resposta.",
       );
     }
     return null;
@@ -571,18 +593,90 @@ function responderHumano(cfg, waId) {
 /**
  * O opt-out, que é a única coisa que impede a loja de continuar mandando.
  *
+ * O OPT-OUT É SOBRE O APARELHO DE DESTINO, E NÃO SOBRE A IDENTIDADE — e é por
+ * isso que ele escreve pelo TELEFONE e não pelo `user_id` de alguém.
+ *
+ * O cenário que obriga isso: `canastra.clientes` tem UNIQUE só em `cpf` (0002),
+ * telefone é texto solto, e mãe e filha no mesmo celular são duas linhas com o
+ * mesmo número. O ENVIO nunca ligou para a ambiguidade (`notificacoes.js`
+ * resolve o destino por `user_id`), então aquele aparelho recebe os avisos das
+ * DUAS contas. Um opt-out preso a uma identidade pararia metade: o aparelho
+ * continuaria tocando, e a pessoa que pediu para parar não teria como saber por
+ * quê. Quem segura o telefone pediu para parar — então para para todas as
+ * contas que apontam para ele. Erra para o lado seguro (silêncio), e é o que a
+ * pessoa quis dizer.
+ *
+ * ISSO PODE PARAR QUEM NÃO PEDIU, e o troco está aceito de olhos abertos: a
+ * filha que não escreveu nada deixa de receber aviso de pedido. É recuperável
+ * num clique — `WhatsAppDaConta` tem "Voltar a receber", que é um UPDATE que a
+ * própria titular faz (0018 deixou `whatsapp_optout_em` aberta a ela) — e o
+ * erro inverso não é: continuar escrevendo para um aparelho cujo dono pediu
+ * silêncio é o que a Meta conta contra a nota de qualidade do número, e é o que
+ * três textos publicados ao cliente prometem que não acontece.
+ *
+ * O PREDICADO É O MESMO DE `acharCliente`, e a repetição é deliberada: aqui ele
+ * roda dentro do UPDATE, sem `LIMIT` nenhum, porque parar "as duas primeiras"
+ * de um número com três seria a mesma promessa quebrada com outra cara. O ramo
+ * do `whatsapp_wa_id` entra junto porque ele é o segundo caminho até o MESMO
+ * aparelho: sem ele, quem já respondeu ao bot uma vez pararia só a conta com
+ * wa_id gravado, e a conta irmã do mesmo celular continuaria escrevendo.
+ *
  * `COALESCE` PRESERVA O CARIMBO ORIGINAL: quem apertar duas vezes não reescreve
  * a data. O ônus de provar quando o consentimento mudou é do controlador (LGPD
  * Art. 8 §2), e um carimbo que se move a cada clique não prova nada.
+ *
+ * Devolve QUANTAS contas pararam — é isso, e não a identidade delas, que decide
+ * a frase da confirmação.
  */
-async function responderOptOut(cfg, waId, cliente) {
-  await pool.query(
+async function pararParaOAparelho(waId) {
+  const { rowCount } = await pool.query(
     `UPDATE canastra.clientes
         SET whatsapp_optout_em = COALESCE(whatsapp_optout_em, now())
-      WHERE user_id = $1::uuid`,
-    [cliente.user_id],
+      WHERE whatsapp_wa_id = $1
+         OR (telefone IS NOT NULL
+             AND regexp_replace(telefone, '\\D', '', 'g') = ANY($2::text[]))`,
+    [waId, candidatosDeTelefone(waId)],
   );
-  return whatsappCliente.enviarTexto(cfg, { para: waId, texto: CONFIRMA_OPTOUT });
+  return rowCount;
+}
+
+/**
+ * Para de mandar, e confirma o que de fato aconteceu.
+ *
+ * SEM CONTA NENHUMA, SILÊNCIO. Um "pronto, parei" para um número que nunca
+ * comprou é mensagem que a loja PAGA para mandar a quem não é cliente — o mesmo
+ * motivo pelo qual o menu não sai para desconhecido. E não há nada a confirmar:
+ * nada estava sendo enviado.
+ *
+ * NÃO RECEBE `cliente`, e a assinatura é o ponto: esta função é chamada também
+ * de onde NÃO HÁ cliente resolvido — o ramo de ambiguidade de `rotearMensagem`.
+ * Um parâmetro de identidade aqui teria de ser inventado lá, e inventar
+ * identidade é exatamente o que a guarda de ambiguidade proíbe.
+ */
+async function responderOptOut(cfg, waId) {
+  const contas = await pararParaOAparelho(waId);
+  if (contas === 0) return;
+
+  return whatsappCliente.enviarTexto(cfg, {
+    para: waId,
+    texto: contas > 1 ? CONFIRMA_OPTOUT_COMPARTILHADO : CONFIRMA_OPTOUT,
+  });
+}
+
+/**
+ * ISTO É UM PEDIDO DE PARAR? Pura, e separada de `responder` porque é a ÚNICA
+ * coisa que atravessa a guarda de ambiguidade — os dois chamadores precisam da
+ * mesma resposta, e duas cópias divergiriam na primeira palavra nova em
+ * `PARADAS`.
+ *
+ * Recebe a mensagem JÁ CLASSIFICADA para não classificar duas vezes o mesmo
+ * corpo, e para deixar claro que a decisão é sobre a entrada e não sobre quem
+ * mandou.
+ */
+function pediuParaParar(entrada) {
+  if (entrada.tipo === "botao") return entrada.id === "parar_avisos";
+  if (entrada.tipo === "texto") return PARADAS.has(normalizar(entrada.corpo));
+  return false;
 }
 
 /**
@@ -600,22 +694,22 @@ async function responder(cfg, waId, cliente, msg) {
   // pessoa sem resposta bem no botão que ela apertou de propósito.
   if (entrada.tipo === "botao_template") return enviarMenu(cfg, waId);
 
+  // O PEDIDO DE PARAR VEM PRIMEIRO, e num teste só para as duas formas (botão
+  // do menu e texto livre): não existe STOP nativo na Meta, então as duas
+  // precisam ter exatamente o mesmo efeito, e é a mesma decisão que o ramo de
+  // ambiguidade de `rotearMensagem` toma.
+  if (pediuParaParar(entrada)) return responderOptOut(cfg, waId);
+
   if (entrada.tipo === "botao") {
     switch (entrada.id) {
       case "meu_pedido":
         return responderPedido(cfg, waId, cliente);
       case "falar_humano":
         return responderHumano(cfg, waId);
-      case "parar_avisos":
-        return responderOptOut(cfg, waId, cliente);
       // `id` desconhecido (um menu de versão anterior, ainda na tela de alguém)
       // cai no menu lá embaixo, com o teto — não há ação a executar e insistir
       // seria pingue-pongue.
     }
-  }
-
-  if (entrada.tipo === "texto" && PARADAS.has(normalizar(entrada.corpo))) {
-    return responderOptOut(cfg, waId, cliente);
   }
 
   /**
@@ -660,10 +754,34 @@ async function rotearMensagem(msg, valor) {
     if (!waId) return;
 
     const cliente = await acharCliente(waId);
-    // Quem não é cliente não recebe resposta: não há pedido, não há opt-out, e
-    // um menu para um número desconhecido é mensagem que a loja paga para
-    // mandar a quem nunca comprou.
-    if (!cliente) return;
+    if (!cliente) {
+      /**
+       * SEM IDENTIDADE, UMA COISA SÓ AINDA ATRAVESSA: o pedido de parar.
+       *
+       * `acharCliente` devolve `null` em DOIS casos, e o tratamento é o mesmo
+       * porque o desfecho certo é o mesmo:
+       *
+       *   · NINGUÉM — quem escreveu não é cliente. Sem cadastro não há aviso a
+       *     desligar, e `responderOptOut` sai calado quando não parou conta
+       *     nenhuma: um menu (ou um "pronto, parei") para número desconhecido é
+       *     mensagem que a loja paga para mandar a quem nunca comprou.
+       *   · MAIS DE UM — o número está em dois cadastros (mãe e filha no mesmo
+       *     celular). Aqui havia uma promessa quebrada: os três textos
+       *     publicados ao cliente dizem "responda PARAR em qualquer mensagem",
+       *     e a guarda matava o roteamento ANTES do ramo de PARADAS. Como
+       *     `whatsapp_wa_id` fica NULL nas duas linhas e a área da conta só
+       *     APAGA o opt-out, aquela pessoa ficava sem saída para sempre.
+       *
+       * A GUARDA NÃO FOI AFROUXADA PARA O RESTO, e é isso que separa a correção
+       * do vazamento: o bot continua sem responder "seu pedido é o X" quando
+       * não sabe de quem ele é. Parar não precisa saber de quem é — precisa
+       * saber PARA ONDE não mandar mais, e isso o `from` do webhook já diz.
+       */
+      if (pediuParaParar(classificarMensagem(msg))) {
+        await responderOptOut(cfg, waId);
+      }
+      return;
+    }
 
     /**
      * O CARIMBO VEM DEPOIS DA LEITURA, E ANTES DA RESPOSTA.

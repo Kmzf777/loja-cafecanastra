@@ -462,6 +462,158 @@ test("PARAR, parar e sair em texto livre tem o MESMO efeito do botao", async () 
   }
 });
 
+/* ------------------------------------------------------------------------- *
+ * 8b. O opt-out de numero COMPARTILHADO — a unica coisa que atravessa a
+ *     guarda de ambiguidade
+ * ------------------------------------------------------------------------- */
+
+/**
+ * DUAS LINHAS DE `clientes` COM O MESMO TELEFONE, de verdade.
+ *
+ * `canastra.clientes` tem UNIQUE so em `cpf` (0002); telefone e texto solto. Mae
+ * e filha no mesmo celular e o cenario, e o ENVIO nunca ligou para a ambiguidade
+ * (`notificacoes.js` resolve o destino por `user_id`), entao o aparelho recebe os
+ * avisos das duas contas.
+ *
+ * Esta funcao existe para que os testes abaixo NAO PASSEM POR ACIDENTE: um teste
+ * que afirme "o opt-out aconteceu" fica verde de graca se a guarda de
+ * ambiguidade nunca for exercitada. Aqui ela e, e `conferirAmbiguidade` cobra
+ * isso na cara.
+ */
+async function compartilharTelefone(deQuem, comQuem) {
+  await bd.pool.query("UPDATE canastra.clientes SET telefone = $2 WHERE user_id = $1::uuid", [
+    comQuem,
+    TELEFONES[deQuem],
+  ]);
+}
+
+/** A guarda esta MESMO no caminho? Sem wa_id em ninguem, `acharCliente` devolveu null. */
+async function conferirAmbiguidade(...ids) {
+  for (const id of ids) {
+    assert.equal(
+      (await clienteDe(id)).whatsapp_wa_id,
+      null,
+      "alguem foi vinculado: a guarda de ambiguidade nao foi exercitada, e o teste " +
+        "abaixo passaria por acidente",
+    );
+  }
+}
+
+test("numero compartilhado: PARAR desliga os avisos das DUAS contas", async () => {
+  // O DIREITO ANUNCIADO EM TRES TEXTOS PUBLICADOS ("responda PARAR em qualquer
+  // mensagem"): politica de privacidade, tela de cadastro e area da conta. Com a
+  // guarda de ambiguidade matando o roteamento antes do ramo de PARADAS, quem
+  // divide o celular respondia PARAR e NADA acontecia — para sempre, porque o
+  // `whatsapp_wa_id` continua NULL nas duas linhas e nao existe tela que escreva
+  // `whatsapp_optout_em` (a da conta so o APAGA).
+  //
+  // O opt-out e sobre o APARELHO DE DESTINO, e nao sobre a identidade: quem
+  // segura aquele telefone pediu para parar.
+  await compartilharTelefone(ANA, DANI);
+
+  await rotear(msgTexto("PARAR", WA_ANA));
+
+  await conferirAmbiguidade(ANA, DANI);
+  assert.ok((await clienteDe(ANA)).whatsapp_optout_em instanceof Date, "a Ana continua recebendo");
+  assert.ok((await clienteDe(DANI)).whatsapp_optout_em instanceof Date, "a Dani continua recebendo");
+
+  // A CONFIRMACAO DIZ O QUE DE FATO ACONTECEU. Repetir a frase do caso de uma
+  // conta so seria descrever errado um gesto com peso legal — e o par desta
+  // asserção esta no ultimo teste da secao, que exige o contrario para o
+  // cadastro solitario. Sem os dois lados, uma frase unica passaria.
+  assert.equal(enviadas.length, 1);
+  assert.equal(enviadas[0].tipo, "texto");
+  assert.match(enviadas[0].texto, /cadastros/i, enviadas[0].texto);
+});
+
+test("numero compartilhado: o BOTAO do menu vale igual ao texto livre", async () => {
+  // O botao "Parar avisos" e o outro caminho ate a mesma coluna, e ele nem
+  // aparece para quem divide o numero (o menu nunca sai). Mas ele CHEGA: a
+  // mensagem interativa de uma janela anterior continua na tela da pessoa.
+  await compartilharTelefone(ANA, DANI);
+
+  await rotear(msgBotao("parar_avisos", "Parar avisos", WA_ANA));
+
+  await conferirAmbiguidade(ANA, DANI);
+  assert.ok((await clienteDe(ANA)).whatsapp_optout_em instanceof Date);
+  assert.ok((await clienteDe(DANI)).whatsapp_optout_em instanceof Date);
+  assert.equal(enviadas.length, 1);
+});
+
+test("numero compartilhado: SO o opt-out atravessa — o resto continua em silencio", async () => {
+  // A GUARDA DE AMBIGUIDADE NAO FOI AFROUXADA, e este teste e o que impede a
+  // correcao de virar o vazamento que ela existe para evitar: o bot nao pode
+  // responder "seu pedido e o X" quando nao sabe de quem ele e.
+  await compartilharTelefone(ANA, DANI);
+
+  const log = capturarLog();
+  try {
+    await rotear(msgBotao("meu_pedido", "Meu pedido", WA_ANA));
+    await rotear(msgBotao("falar_humano", "Falar com alguem", WA_ANA));
+    await rotear(msgTexto("oi, tudo bem?", WA_ANA));
+    await rotear(msgBotaoDeTemplate("Preciso de ajuda", WA_ANA));
+    await rotear(msgTexto("nao quero parar de receber", WA_ANA));
+  } finally {
+    log.restaurar();
+  }
+
+  assert.equal(enviadas.length, 0, "a ambiguidade deixou passar algo que nao era o opt-out");
+  await conferirAmbiguidade(ANA, DANI);
+  assert.equal((await clienteDe(ANA)).whatsapp_optout_em, null);
+  assert.equal((await clienteDe(DANI)).whatsapp_optout_em, null);
+  // E o numero de quem escreveu continua fora do log.
+  assert.ok(!log.linhas.join(" ").includes(WA_ANA), log.linhas.join(" | "));
+});
+
+test("numero compartilhado: depois do PARAR, avisarCliente nao manda para NENHUMA das duas", async () => {
+  // A prova PONTA A PONTA. O roteador e o wrapper de notificacao sao codigos
+  // diferentes; sem esta linha, "carimbou a coluna" poderia ser verdade sem o
+  // aparelho parar de tocar.
+  await compartilharTelefone(ANA, DANI);
+  await rotear(msgTexto("PARAR", WA_ANA));
+  enviadas.length = 0;
+
+  for (const dona of [ANA, DANI]) {
+    await notificacoes.avisarCliente(
+      { order_id: PEDIDO_NOVO, user_id: dona, total_amount: "120.00", status: "enviado" },
+      "enviado",
+      "AA123456789BR",
+    );
+  }
+
+  assert.equal(emails.length, 2, "o e-mail continua: o opt-out e do WhatsApp");
+  assert.equal(enviadas.length, 0, "o aparelho continuou recebendo aviso de alguma das contas");
+});
+
+test("PARAR de um numero que nao e de ninguem nao vira mensagem nenhuma", async () => {
+  // Sem conta para parar nao ha o que confirmar, e uma confirmacao seria
+  // mensagem que a loja PAGA para mandar a quem nunca comprou — o mesmo motivo
+  // pelo qual o menu nao sai para desconhecido.
+  const log = capturarLog();
+  try {
+    await rotear(msgTexto("PARAR", WA_ESTRANHO));
+  } finally {
+    log.restaurar();
+  }
+
+  assert.equal(enviadas.length, 0);
+  assert.ok(!log.linhas.join(" ").includes(WA_ESTRANHO), log.linhas.join(" | "));
+});
+
+test("o opt-out de UMA conta so nao promete escopo que nao tem", async () => {
+  // O espelho do primeiro teste desta secao: com um cadastro so, a frase e a de
+  // sempre. Sem esta ancora, trocar as duas confirmacoes pela mesma frase
+  // deixaria a suite verde.
+  await rotear(msgTexto("PARAR", WA_ANA));
+
+  assert.equal(enviadas.length, 1);
+  assert.equal(
+    /cadastros/i.test(enviadas[0].texto),
+    false,
+    `uma conta so nao pode anunciar varias: ${enviadas[0].texto}`,
+  );
+});
+
 test("texto que apenas CONTEM 'parar' nao desliga os avisos de ninguem", async () => {
   // O casamento e da frase inteira, e nao de substring: "nao quero parar de
   // receber" pedindo o contrario do que dispararia.

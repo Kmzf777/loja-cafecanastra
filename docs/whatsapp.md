@@ -201,6 +201,21 @@ ou `STOP`. Não existe opt-out nativo no WhatsApp: parar de mandar é
 inteiramente responsabilidade da loja, e é esta coluna
 (`clientes.whatsapp_optout_em`) que a cumpre.
 
+**O opt-out é sobre o APARELHO, e não sobre a identidade** — parar vale para
+*todas* as contas cujo telefone (ou `wa_id`) aponta para aquele número. O
+cenário que obriga isso é o celular compartilhado: `clientes` tem UNIQUE só em
+`cpf`, telefone é texto solto, e mãe e filha no mesmo aparelho são duas linhas
+com o mesmo número — o **envio** nunca ligou para a ambiguidade, então o
+aparelho recebe os avisos das duas contas. É também a **única** coisa que
+atravessa a guarda de ambiguidade do roteador: com o número casando com mais de
+um cadastro o bot continua sem responder "seu pedido é o X" (isso seria o
+vazamento que a guarda existe para impedir), mas *para* de mandar, e a
+confirmação diz o escopo real ("vale para todos os cadastros que usam este
+número") sem nomear ninguém. Quem foi parado sem ter pedido volta num clique —
+a área da conta tem **Voltar a receber**. A política de privacidade anuncia
+esse escopo com estas palavras: *"o PARAR vale para o número, e não para a
+conta"*.
+
 **O bot fica em silêncio, sem erro nenhum,** quando: a integração está
 desligada; o aviso daquele status está desligado no painel; o cliente não tem
 telefone nem `wa_id`; o consentimento não está carimbado; o cliente deu

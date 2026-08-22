@@ -74,7 +74,10 @@ export default function PoliticaDePrivacidade() {
       </p>
       <p>
         Para parar de receber tudo, responda PARAR em qualquer mensagem nossa no
-        WhatsApp. O status do pedido continua na sua conta e no e-mail.
+        WhatsApp. O status do pedido continua na sua conta e no e-mail. O PARAR
+        vale para o <strong>número</strong>, e não para a conta: se mais de um
+        cadastro usa aquele telefone, todos param — quem quiser voltar a receber
+        faz isso em <Link href="/account">sua conta</Link>.
       </p>
 
       <h2>Com quem compartilhamos</h2>
