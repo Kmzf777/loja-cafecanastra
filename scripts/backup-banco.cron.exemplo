@@ -13,6 +13,12 @@
 #   echo 'export DATABASE_URL="postgres://postgres:SENHA@localhost:5432/postgres"' \
 #     | sudo tee /etc/canastra/backup.env > /dev/null
 #
+# SENHA COM CARACTERE ESPECIAL PRECISA VIR PERCENT-ENCODED: `/` é %2F, `?` é
+# %3F, `#` é %23 (e `@` é %40). São os caracteres que delimitam uma URI — sem
+# codificar, a senha parte a URL no lugar errado. O script detecta e ABORTA com
+# a instrução na tela, em vez de deixar a credencial voltar para o argv; mas
+# quem monta este arquivo descobre antes lendo aqui.
+#
 # O script fecha o outro lado dessa mesma disciplina: a senha não vai no argv do
 # pg_dump (vai por PGPASSWORD), então `ps aux` durante o backup também não a mostra.
 #
