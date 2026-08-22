@@ -194,6 +194,13 @@ function conteudoDoStatusWhats(status, order, nome, rastreio) {
 
 module.exports = {
   TEMPLATES,
+  /**
+   * O idioma sai daqui em vez de a string ser repetida no painel: o envio de
+   * TESTE precisa mandar exatamente o mesmo `language.code` que o aviso de
+   * verdade manda, senão ele exercita um caminho que a loja não usa — e um
+   * teste que passa contra um template que não existe não prova nada.
+   */
+  IDIOMA,
   conteudoDoStatusWhats,
   corpoSemVariavelPendurada,
 };

@@ -70,7 +70,15 @@ const requireOriginal = Module.prototype.require;
 Module.prototype.require = function (caminho) {
   if (caminho === "../pgPool") return poolFalso;
   if (caminho === "../services/whatsappConfig") {
-    return { carregar: async () => cfgFalsa };
+    // O MODULO REAL POR BAIXO, e so `carregar` trocado. Um dublê que fosse SO
+    // `{ carregar }` mentiria sobre a forma do modulo: o controller também lê
+    // dele as listas de campos (`INTERRUPTORES` e companhia, que as rotas do
+    // painel usam para peneirar o PUT), e o `require` estoura no topo — uma
+    // falha que fala de iteração e não tem nada a ver com o webhook. Espalhar
+    // o real deixa o dublê acompanhar sozinho o que o módulo passar a exportar.
+    // (O `pgPool` de que ele depende já cai no dublê da linha acima, e
+    // `carregar` — o único caminho que tocaria o banco aqui — está trocado.)
+    return { ...requireOriginal.apply(this, arguments), carregar: async () => cfgFalsa };
   }
   return requireOriginal.apply(this, arguments);
 };

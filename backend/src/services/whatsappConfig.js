@@ -284,9 +284,17 @@ async function gravar(campos) {
   esquecer();
 }
 
+/**
+ * Os campos sem os quais NADA sai daqui para a Meta. Uma constante, e não a
+ * conjunção escrita à mão dentro de `configurado()`, porque o painel precisa
+ * dizer ao gestor QUAL deles falta — e as duas respostas ("está pronto?" e "o
+ * que falta?") não podem divergir uma da outra.
+ */
+const CAMPOS_MINIMOS = Object.freeze(["access_token", "phone_number_id"]);
+
 /** A integração tem o mínimo para falar com a Meta E está ligada? */
 function configurado(cfg) {
-  return Boolean(cfg?.ativo && cfg?.access_token && cfg?.phone_number_id);
+  return Boolean(cfg?.ativo) && CAMPOS_MINIMOS.every((campo) => Boolean(cfg?.[campo]));
 }
 
 /** Este status avisa o cliente? Status sem interruptor não avisa ninguém. */
@@ -339,4 +347,17 @@ module.exports = {
   configurado,
   avisoLigado,
   paraOPainel,
+  /**
+   * As listas saem daqui para o HANDLER DO PAINEL, e é de propósito que elas
+   * saiam em vez de serem reescritas lá: quem valida o corpo do PUT precisa
+   * saber quais campos são interruptor (booleano), quais são texto e quais são
+   * SEGREDO — e um segredo classificado como texto comum viraria "campo em
+   * branco apaga o token", que é o modo de falha que mata a integração com um
+   * clique. Duas listas separadas divergiriam no dia em que um campo novo
+   * entrasse em uma e não na outra.
+   */
+  CAMPOS_DE_TEXTO,
+  INTERRUPTORES,
+  SEGREDOS,
+  CAMPOS_MINIMOS,
 };

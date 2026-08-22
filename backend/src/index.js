@@ -21,6 +21,7 @@ const { newsletterRoutes } = require("./routes/newsletter.routes");
 const { lgpdRoutes } = require("./routes/lgpd.routes");
 const blingRoutes = require("./routes/bling.routes");
 const clubeRoutes = require("./routes/clube.routes");
+const whatsappRoutes = require("./routes/whatsapp.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 const WhatsappController = require("./controllers/WhatsappController");
@@ -230,6 +231,19 @@ app.use("/newsletter", newsletterRoutes);
 app.use("/lgpd", lgpdRoutes);
 // Bling: sincronizacao de pedido, NF-e e rastreio, so admin; ações exigem BLING_ATIVO.
 app.use("/bling", blingRoutes);
+/**
+ * WhatsApp, PAINEL: credencial, interruptores, templates, envio de teste e
+ * historico — todas so admin, e as acoes que precisam da Meta respondem 503
+ * (com codigo e frase) quando a integracao esta desligada.
+ *
+ * O WEBHOOK DA META NAO ENTRA AQUI: ele ja foi montado la em cima, ANTES do
+ * `express.json` global, porque depende do parser proprio que guarda o corpo
+ * cru (`req.rawBody`, sem o qual nao ha como recalcular o HMAC) e do
+ * `whatsappLimiter`. Este `app.use` vem DEPOIS daquelas duas linhas, entao
+ * mesmo que um dia o roteador passe a declarar `/webhook`, quem responde
+ * continua sendo a definicao de cima, com limite de taxa e corpo cru.
+ */
+app.use("/whatsapp", whatsappRoutes);
 // Clube: /clube/* (cliente), /admin/assinaturas (admin) e o webhook proprio de
 // assinaturas (/webhook/mercadopago/assinaturas, rate limit dentro do router).
 app.use(clubeRoutes);

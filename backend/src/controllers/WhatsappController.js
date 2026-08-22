@@ -41,7 +41,8 @@ const crypto = require("node:crypto");
 const pool = require("../pgPool");
 const whatsappConfig = require("../services/whatsappConfig");
 const whatsappCliente = require("../services/whatsappClient");
-const { paraE164, variantesBrasil } = require("../utils/telefone");
+const { paraE164, variantesBrasil, ultimosQuatro } = require("../utils/telefone");
+const { TEMPLATES, IDIOMA } = require("../utils/whatsappMensagens");
 
 /** O cabeçalho da assinatura. Node entrega nome de cabeçalho em minúsculas. */
 const CABECALHO_DA_ASSINATURA = "x-hub-signature-256";
@@ -782,10 +783,621 @@ async function receber(req, res) {
   }
 }
 
+/* ------------------------------------------------------------------------- *
+ * Os handlers do painel
+ *
+ * Daqui para baixo é a API que a TELA DO GESTOR consome: colar a credencial,
+ * ligar e desligar avisos, criar os templates na Meta, mandar um teste e ver o
+ * que saiu. Todas exigem `isAuthenticated` + `isAdmin`, nessa ordem, e quem as
+ * monta é `routes/whatsapp.routes.js`.
+ *
+ * TRÊS COISAS ESTRUTURAM ESTE BLOCO, e nenhuma é estilo:
+ *
+ *  1. O SEGREDO NÃO VOLTA. O que sai para a tela é `paraOPainel()`, que é
+ *     montado campo a campo e mascara os três segredos; `carregar()` (que
+ *     devolve o token CRU) só é usado para FALAR com a Meta, nunca para
+ *     responder. As frases de erro que chegam ao painel são as do
+ *     `whatsappClient`, que já vêm redigidas — sem token e sem telefone.
+ *
+ *  2. DESLIGADO É ESTADO CONHECIDO, NÃO ERRO. Ação que precisa da Meta com a
+ *     integração desligada responde 503 com código e frase (o molde é
+ *     `bling.routes.js:37-47`), nunca 404 nem 500 — a tela usa essa distinção
+ *     para desabilitar o botão em vez de deixar o erro acontecer. A guarda
+ *     mora no HANDLER e não no roteador porque a pergunta é sobre a
+ *     configuração no banco, não sobre uma variável de ambiente; e porque é no
+ *     handler que os testes a exercitam.
+ *
+ *  3. CAMPO EM BRANCO NÃO APAGA SEGREDO. O caso comum desta tela é o gestor
+ *     abrir, mexer num interruptor e salvar — com os campos de segredo vazios,
+ *     porque o GET nunca os devolve. Tratar isso como "apague o token" mataria
+ *     a integração com um clique. É o mesmo cuidado de
+ *     `ordersRepository.js:125-128` com `codigo_rastreio`.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O que o gestor precisa ter preenchido para o bot funcionar PONTA A PONTA, na
+ * ordem em que a tela mostra os campos.
+ *
+ * NÃO é `whatsappConfig.CAMPOS_MINIMOS`: aqueles dois bastam para MANDAR
+ * mensagem, e é por eles que `configurado()` decide. Estes cinco incluem
+ * também o que faz o WhatsApp funcionar de VOLTA (`app_secret`, que valida a
+ * assinatura do webhook; `verify_token`, do handshake) e o que cria template
+ * (`waba_id`). Uma instalação sem `app_secret` manda aviso e não recebe
+ * resposta nenhuma — e o sintoma, "o cliente respondeu e nada aconteceu", não
+ * aponta para lugar nenhum. Por isso os cinco aparecem em `faltando`.
+ */
+const CAMPOS_ESPERADOS = Object.freeze([
+  "access_token",
+  "app_secret",
+  "verify_token",
+  "phone_number_id",
+  "waba_id",
+]);
+
+/** Os campos booleanos do PUT: o interruptor geral e um por status. */
+const CAMPOS_BOOLEANOS = Object.freeze(["ativo", ...whatsappConfig.INTERRUPTORES]);
+
+/**
+ * `Template name already exists`. O segundo clique no botão "Criar na Meta" é
+ * o caso comum, e ele não é falha de integração — contá-lo como falha faria a
+ * tela gritar vermelho por uma ação que não tinha o que fazer.
+ */
+const TEMPLATE_JA_EXISTE = 2388023;
+
+/** O template do envio de teste, quando o corpo não pede outro. */
+const TEMPLATE_DE_TESTE = "pedido_recebido";
+
+/** Teto e padrão do histórico: sem teto, `?limite=99999999` vira varredura. */
+const HISTORICO_PADRAO = 50;
+const HISTORICO_MAXIMO = 200;
+
+/**
+ * As colunas do histórico, LITERAIS — nunca `SELECT *`, como
+ * `configRepository.js:12-21`.
+ *
+ * `wamid` NÃO ESTÁ AQUI, e a ausência é o ponto: o miolo dele em base64 é o
+ * telefone do cliente em texto claro (ver o cabeçalho deste arquivo).
+ * Devolvê-lo ao painel publicaria, no JSON de uma tela, o número que 0017
+ * tirou desta tabela de propósito. `user_id` fica fora pelo mesmo espírito: a
+ * tela mostra pedido e template, não pessoa.
+ */
+const COLUNAS_DO_HISTORICO = [
+  "id",
+  "pedido_id",
+  "template",
+  "status",
+  "telefone_final",
+  "erro_codigo",
+  "erro_texto",
+  "criado_em",
+  "enviado_em",
+  "entregue_em",
+].join(", ");
+
+/**
+ * Erro para resposta — e a FRASE é o produto, porque é ela que a tela mostra
+ * ao gestor (`corpo.message || corpo.error`, o padrão de `BlingManager.jsx`).
+ *
+ * `ErroDaMeta` vira 502: o problema é do lado de lá e a frase já vem redigida
+ * pelo `whatsappClient` (sem token, sem telefone), então pode ir para a tela e
+ * para o log inteira. Qualquer outra coisa é 500 com frase genérica e SÓ O
+ * CÓDIGO no log: um erro do `pg` traz `Failing row contains (...)` em
+ * `message`, que é a linha inteira, token incluído.
+ */
+function responderErro(res, erro, contexto) {
+  if (erro?.name === "ErroDaMeta") {
+    console.error(`WhatsApp (${contexto}): ${erro.message}`);
+    return res.status(502).json({
+      error: "META_FALHOU",
+      message: erro.message,
+      codigo: erro.codigo ?? null,
+    });
+  }
+  console.error(`WhatsApp (${contexto}): falha inesperada (código ${erro?.code || "?"}).`);
+  return res.status(500).json({
+    error: "WHATSAPP_FALHOU",
+    message:
+      "Falha inesperada na integração com o WhatsApp. Veja o log do servidor.",
+  });
+}
+
+/**
+ * A frase que pode ir para a TELA quando a falha não interrompe a resposta —
+ * a sonda do status e a linha de um template que não subiu.
+ *
+ * `ErroDaMeta` já vem redigida pelo `whatsappClient` (sem token, sem telefone)
+ * e é exatamente o que o gestor precisa ler. QUALQUER OUTRA COISA é erro de
+ * runtime ou do `pg`, e a `message` deles pode carregar valor: o `DETAIL` de
+ * uma violação no Postgres é `Failing row contains (1, f, EAAG..., ...)` — a
+ * linha inteira, token incluído. Nesses casos a tela recebe uma frase nossa e
+ * o detalhe fica no log, que é onde `responderErro` o coloca.
+ */
+function fraseDoErro(erro) {
+  return erro?.name === "ErroDaMeta"
+    ? erro.message
+    : "Falha inesperada ao falar com a Meta. Veja o log do servidor.";
+}
+
+/**
+ * A configuração vigente SE a integração puder ser usada agora; ou `null`, com
+ * o 503 já respondido — quem chama só precisa de `if (!cfg) return;`.
+ *
+ * `extras` são os campos que a AÇÃO exige além do mínimo: criar e listar
+ * template precisa de `waba_id`, e sem ele a chamada morreria dentro do
+ * cliente com "configuração incompleta" — um 502 que culpa a Meta por um campo
+ * em branco no nosso painel.
+ */
+async function integracaoUsavel(res, extras = []) {
+  const cfg = await whatsappConfig.carregar();
+  const faltando = [...whatsappConfig.CAMPOS_MINIMOS, ...extras].filter(
+    (campo) => !cfg[campo],
+  );
+
+  if (!whatsappConfig.configurado(cfg) || faltando.length > 0) {
+    const motivo = faltando.length
+      ? `falta preencher ${faltando.join(", ")}`
+      : "a integração está desligada no painel";
+    // 503 e não 404: a rota EXISTE, é a integração que não está pronta. E não
+    // 500: não houve falha nenhuma, este é um estado que o gestor escolheu (ou
+    // ainda não terminou de sair de). A tela desabilita o botão com isto.
+    res.status(503).json({
+      error: "WHATSAPP_DESLIGADO",
+      message:
+        `O WhatsApp não está pronto para esta ação: ${motivo}. ` +
+        "Abra o painel do WhatsApp, complete a configuração e ligue a integração.",
+      ligado: false,
+      faltando,
+    });
+    return null;
+  }
+  return cfg;
+}
+
+/**
+ * O corpo do PUT, peneirado. Devolve o que gravar, o que recusar e quantas
+ * chaves CONHECIDAS vieram.
+ *
+ * `Object.hasOwn` e não `corpo[campo] !== undefined`: um corpo JSON com
+ * `"__proto__"` (ou um `Object.prototype` poluído por outra dependência)
+ * entregaria valor de prototype como se o gestor o tivesse digitado — e
+ * `ativo: true` vindo daí LIGARIA a integração sem ninguém ter pedido.
+ *
+ * A iteração é pelas LISTAS DESTE PROCESSO, nunca pelas chaves do corpo: chave
+ * estranha não vira nada. (`whatsappConfig.gravar` faz a mesma peneira de novo,
+ * e a redundância é de propósito — esta camada existe para poder RECUSAR com
+ * uma frase, aquela para o nome de coluna no SQL ser sempre uma constante.)
+ */
+function peneirarConfig(corpo) {
+  const campos = {};
+  const recusados = [];
+  let conhecidos = 0;
+
+  for (const campo of CAMPOS_BOOLEANOS) {
+    if (!Object.hasOwn(corpo, campo)) continue;
+    conhecidos += 1;
+    // Só booleano de verdade. `"false"` é uma string TRUTHY: aceita por
+    // coerção, ela LIGARIA o aviso que o gestor acabou de desligar, e a tela
+    // ainda diria "salvo".
+    if (typeof corpo[campo] !== "boolean") {
+      recusados.push(campo);
+      continue;
+    }
+    campos[campo] = corpo[campo];
+  }
+
+  for (const campo of whatsappConfig.CAMPOS_DE_TEXTO) {
+    if (!Object.hasOwn(corpo, campo)) continue;
+    conhecidos += 1;
+    const valor = corpo[campo];
+
+    // `null` EXPLÍCITO apaga — é como o painel diz "quero limpar este campo".
+    if (valor === null) {
+      campos[campo] = null;
+      continue;
+    }
+    // Número entra (um `phone_number_id` mandado sem aspas é erro comum de
+    // cliente e não muda nada de semântica); objeto, array e booleano não.
+    if (typeof valor !== "string" && typeof valor !== "number") {
+      recusados.push(campo);
+      continue;
+    }
+
+    const texto = String(valor).trim();
+    if (texto === "") {
+      // O CAMPO EM BRANCO DE UM SEGREDO É "NÃO MEXI NELE", NÃO "APAGUE".
+      // O GET nunca devolve o valor (só máscara), então o formulário do painel
+      // abre com estes campos VAZIOS — todo salvamento que não os retoque
+      // chega aqui em branco. Tratar isso como apagar mataria a integração no
+      // primeiro clique em "Salvar". Quem quer mesmo limpar manda `null`.
+      if (whatsappConfig.SEGREDOS.includes(campo)) continue;
+      // Os demais são visíveis na tela e voltam preenchidos no GET: em branco
+      // ali é o gestor tendo apagado o conteúdo de propósito.
+      campos[campo] = null;
+      continue;
+    }
+    campos[campo] = texto;
+  }
+
+  return { campos, recusados, conhecidos };
+}
+
+/**
+ * GET /whatsapp/status — a sonda do painel.
+ *
+ * RESPONDE SEMPRE, ligada ou não, e é isso que a distingue das outras: é o
+ * endpoint que DIAGNOSTICA o desligado, então ele não pode ser uma das rotas
+ * que o 503 fecha. Pelo mesmo motivo a sonda que falha não derruba a resposta:
+ * é justamente quando o token vence que o gestor precisa desta tela, e um 500
+ * esconderia o único lugar que diz o porquê.
+ */
+async function status(req, res) {
+  try {
+    const cfg = await whatsappConfig.carregar();
+    const corpo = {
+      ligado: whatsappConfig.configurado(cfg),
+      ativo: Boolean(cfg.ativo),
+      faltando: CAMPOS_ESPERADOS.filter((campo) => !cfg[campo]),
+      atualizado_em: cfg.atualizado_em ?? null,
+      numero: null,
+      erro: null,
+      codigo: null,
+    };
+
+    // Só vai à rede quando há a quem perguntar — o mesmo critério de
+    // `blingClient.sondar()`. Sem credencial, perguntar só gastaria tempo para
+    // receber o erro que a lista `faltando` já explicou.
+    if (corpo.ligado) {
+      try {
+        const perfil = await whatsappCliente.perfilDoNumero(cfg);
+        // Campo a campo, nunca espalhando o que a Meta devolveu: um campo novo
+        // do lado dela entraria na resposta da loja por omissão.
+        corpo.numero = {
+          display_phone_number: perfil?.display_phone_number ?? null,
+          verified_name: perfil?.verified_name ?? null,
+          quality_rating: perfil?.quality_rating ?? null,
+          code_verification_status: perfil?.code_verification_status ?? null,
+        };
+      } catch (erro) {
+        // `console.error` com a message SÓ quando ela é da Meta (redigida);
+        // do contrário, só o código — o resto vai para a frase genérica.
+        console.error(
+          erro?.name === "ErroDaMeta"
+            ? `WhatsApp (status): ${erro.message}`
+            : `WhatsApp (status): falha inesperada na sonda (código ${erro?.code || "?"}).`,
+        );
+        corpo.erro = fraseDoErro(erro);
+        corpo.codigo = erro.codigo ?? null;
+      }
+    }
+
+    return res.json(corpo);
+  } catch (erro) {
+    return responderErro(res, erro, "status");
+  }
+}
+
+/** GET /whatsapp/config — máscara e mais nada. Ver `paraOPainel()`. */
+async function lerConfig(req, res) {
+  try {
+    return res.json(await whatsappConfig.paraOPainel());
+  } catch (erro) {
+    return responderErro(res, erro, "ler config");
+  }
+}
+
+/**
+ * PUT /whatsapp/config — o salvamento do painel.
+ *
+ * Responde com a configuração já relida (mascarada): a tela não precisa de uma
+ * segunda ida para mostrar o estado novo, e o que ela recebe passou pela mesma
+ * máscara do GET.
+ */
+async function gravarConfig(req, res) {
+  const corpo = req.body;
+  // `express.json()` deixa passar `[]`, `"texto"` e `42` — todos são JSON
+  // válido. Sem esta guarda, `Object.hasOwn(42, ...)` não estoura mas o resto
+  // do fluxo mentiria "nada para gravar" para um corpo malformado.
+  if (!corpo || typeof corpo !== "object" || Array.isArray(corpo)) {
+    return res.status(400).json({
+      error: "CORPO_INVALIDO",
+      message: "Envie um objeto JSON com os campos da configuração do WhatsApp.",
+    });
+  }
+
+  const { campos, recusados, conhecidos } = peneirarConfig(corpo);
+
+  if (recusados.length > 0) {
+    return res.status(400).json({
+      error: "CAMPO_INVALIDO",
+      message:
+        `Valor inválido em: ${recusados.join(", ")}. ` +
+        "Os interruptores são true ou false; os demais campos são texto (ou null para limpar).",
+    });
+  }
+
+  // "Salvou!" sem ter salvado nada é o pior desfecho desta tela — o gestor sai
+  // achando que configurou. Um corpo sem NENHUMA chave conhecida é isso.
+  if (conhecidos === 0) {
+    return res.status(400).json({
+      error: "NADA_A_GRAVAR",
+      message: "Nenhum campo conhecido da configuração do WhatsApp veio no corpo.",
+    });
+  }
+
+  try {
+    // `campos` pode estar vazio com `conhecidos > 0`: é o salvamento que só
+    // trazia segredos em branco. Nada a escrever, e nada de errado — a
+    // resposta devolve o estado atual, que é o que a tela vai mostrar.
+    if (Object.keys(campos).length > 0) await whatsappConfig.gravar(campos);
+    return res.json({
+      message: "Configuração do WhatsApp salva.",
+      config: await whatsappConfig.paraOPainel(),
+    });
+  } catch (erro) {
+    return responderErro(res, erro, "gravar config");
+  }
+}
+
+/**
+ * GET /whatsapp/mensagens — o histórico.
+ *
+ * Sem `wamid` e sem telefone completo (ver `COLUNAS_DO_HISTORICO`). O `limite`
+ * vem da querystring, então ele é peneirado: `NaN` viraria `LIMIT NaN` e um
+ * número enorme viraria varredura da tabela inteira.
+ */
+async function historico(req, res) {
+  const pedido = Number.parseInt(req.query?.limite, 10);
+  const limite = Number.isFinite(pedido)
+    ? Math.min(Math.max(pedido, 1), HISTORICO_MAXIMO)
+    : HISTORICO_PADRAO;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT ${COLUNAS_DO_HISTORICO}
+         FROM canastra.whatsapp_mensagens
+        ORDER BY criado_em DESC, id DESC
+        LIMIT $1`,
+      [limite],
+    );
+    return res.json({ mensagens: rows, limite });
+  } catch (erro) {
+    return responderErro(res, erro, "histórico");
+  }
+}
+
+/**
+ * GET /whatsapp/templates — o mapa da loja cruzado com o que a Meta tem.
+ *
+ * A LISTA É A DESTE CÓDIGO, e o estado é o de lá. Devolver só o que a Meta
+ * tem esconderia justamente o caso que a tela existe para mostrar: o template
+ * que a loja dispara e que ninguém criou (a Meta responde 132001 e o cliente
+ * fica sem aviso). Template que existe lá e não aqui não aparece — não é da
+ * loja, e listá-lo só daria trabalho a quem lê.
+ */
+async function lerTemplates(req, res) {
+  try {
+    const cfg = await integracaoUsavel(res, ["waba_id"]);
+    if (!cfg) return undefined;
+
+    const json = await whatsappCliente.listarTemplates(cfg);
+    const daMeta = new Map(
+      (Array.isArray(json?.data) ? json.data : []).map((t) => [t.name, t]),
+    );
+
+    const templates = Object.keys(TEMPLATES).map((nome) => {
+      const meta = daMeta.get(nome);
+      return {
+        nome,
+        // `null` e não "ausente": quem descreve para o gestor é a tela
+        // (`descreverTemplate`), e ela precisa distinguir sem parsear frase.
+        status: meta?.status ?? null,
+        category: meta?.category ?? null,
+        // A Meta anuncia RECLASSIFICAÇÃO por aqui, antes de passar a cobrar
+        // como marketing (cerca de nove vezes mais) e antes de "template
+        // misclassification" virar motivo de bloqueio.
+        correct_category: meta?.correct_category ?? null,
+        rejected_reason: meta?.rejected_reason ?? null,
+      };
+    });
+
+    return res.json({ templates });
+  } catch (erro) {
+    return responderErro(res, erro, "listar templates");
+  }
+}
+
+/**
+ * POST /whatsapp/templates — cria na Meta os templates deste código.
+ *
+ * UM DE CADA VEZ, e o `for` sequencial é deliberado: `Promise.all` cancelaria
+ * as criações restantes no primeiro erro e o gestor ficaria com metade dos
+ * templates sem saber quais — além de disparar sete requisições simultâneas
+ * contra um endpoint com limite de taxa por conta.
+ *
+ * CADA FALHA VIRA LINHA DO RESULTADO, não exceção: a resposta é uma lista, uma
+ * entrada por template, com a frase do erro quando houve. É o que a tela
+ * mostra ao lado de cada nome.
+ */
+async function criarTemplates(req, res) {
+  try {
+    const cfg = await integracaoUsavel(res, ["waba_id"]);
+    if (!cfg) return undefined;
+
+    const resultados = [];
+    for (const [nome, modelo] of Object.entries(TEMPLATES)) {
+      try {
+        const json = await whatsappCliente.criarTemplate(cfg, {
+          nome,
+          corpo: modelo.corpo,
+          rodape: modelo.rodape,
+          botoes: modelo.botoes,
+          // `parametros` é nome → valor de EXEMPLO, que é o formato que
+          // `criarTemplate` espera: a Meta recusa criar template cujo corpo
+          // tem variável sem exemplo, e a reprovação só aparece na revisão
+          // dela, até 24h depois.
+          exemplos: modelo.parametros,
+        });
+        resultados.push({
+          nome,
+          criado: true,
+          jaExistia: false,
+          id: json?.id ?? null,
+          status: json?.status ?? null,
+          erro: null,
+          codigo: null,
+        });
+      } catch (erro) {
+        const jaExistia = erro?.codigo === TEMPLATE_JA_EXISTE;
+        resultados.push({
+          nome,
+          criado: false,
+          jaExistia,
+          id: null,
+          status: null,
+          erro: jaExistia ? null : fraseDoErro(erro),
+          codigo: erro?.codigo ?? null,
+        });
+      }
+    }
+
+    const criados = resultados.filter((r) => r.criado).length;
+    const jaExistiam = resultados.filter((r) => r.jaExistia).length;
+    const falharam = resultados.length - criados - jaExistiam;
+
+    // NENHUM DEU CERTO É FALHA DA AÇÃO, e não uma lista de sete lamentos com
+    // cara de sucesso: o caso real é o token vencido, em que os sete falham
+    // pelo mesmo motivo. 502 leva a tela para o caminho de erro, e a frase é a
+    // do primeiro — que é a mesma dos outros seis.
+    if (criados === 0 && jaExistiam === 0) {
+      const primeiro = resultados.find((r) => r.erro);
+      return res.status(502).json({
+        error: "META_FALHOU",
+        message: `Nenhum template foi criado na Meta. ${primeiro?.erro || ""}`.trim(),
+        resultados,
+        criados,
+        jaExistiam,
+        falharam,
+      });
+    }
+
+    return res.json({
+      message:
+        `${criados} template(s) enviados para revisão da Meta` +
+        `${jaExistiam ? `, ${jaExistiam} já existiam` : ""}` +
+        `${falharam ? `, ${falharam} falharam` : ""}.`,
+      resultados,
+      criados,
+      jaExistiam,
+      falharam,
+    });
+  } catch (erro) {
+    return responderErro(res, erro, "criar templates");
+  }
+}
+
+/**
+ * O valor de exemplo do botão de URL, quando o template tem um.
+ *
+ * Sem isto, testar `pedido_enviado` (o que tem botão de rastreio) sairia sem o
+ * componente de botão e a Meta recusaria a mensagem inteira com 132000 — um
+ * erro que fala em "parâmetro" e manda procurar no corpo, não no botão.
+ * `encodeURIComponent` porque a Meta exige o valor da variável de URL
+ * percent-encoded, exatamente como `conteudoDoStatusWhats` faz.
+ */
+function exemploDoBotaoUrl(modelo) {
+  const botao = (modelo.botoes || []).find((b) => b.type === "URL");
+  const exemplo = botao?.example?.[0];
+  return exemplo ? encodeURIComponent(String(exemplo)) : null;
+}
+
+/**
+ * POST /whatsapp/teste — manda um template para um número escolhido.
+ *
+ * Existe para validar a instalação CONTRA O NÚMERO DE TESTE DA META, antes de
+ * o número real existir e antes de haver pedido nenhum. Por isso ele não exige
+ * cliente, opt-in nem pedido: nada disso está em jogo aqui, e exigi-los
+ * impediria justamente o uso para o qual o botão foi feito.
+ *
+ * A RESPOSTA NÃO CARREGA O NÚMERO NEM O WAMID — só os quatro últimos dígitos,
+ * o mesmo recorte que 0017 impõe à tabela. O wamid decodifica para o telefone;
+ * devolvê-lo ao navegador o colocaria no cache e no DevTools de quem abrir a
+ * tela, sem nenhum ganho (a tela já sabe para qual número mandou).
+ */
+async function enviarTeste(req, res) {
+  try {
+    const cfg = await integracaoUsavel(res);
+    if (!cfg) return undefined;
+
+    const corpo =
+      req.body && typeof req.body === "object" && !Array.isArray(req.body)
+        ? req.body
+        : {};
+
+    // `paraE164` e não o valor cru: "(31) 99999-0000" é o que o gestor digita,
+    // e mandar isso para a Meta gasta cota e derruba a nota do número.
+    const destino = paraE164(corpo.para);
+    if (!destino) {
+      return res.status(400).json({
+        error: "TELEFONE_INVALIDO",
+        message:
+          "Informe um número de WhatsApp brasileiro válido, com DDD (ex.: 31 99999-0000).",
+      });
+    }
+
+    const nome =
+      typeof corpo.template === "string" && corpo.template
+        ? corpo.template
+        : TEMPLATE_DE_TESTE;
+    // `hasOwn` porque `nome` vem de fora: sem ele, "constructor" acharia o
+    // protótipo do objeto e a Meta receberia um template chamado "constructor".
+    // A frase não ecoa o que veio no corpo — lista os nomes válidos, que é o
+    // que ajuda quem está do outro lado.
+    if (!Object.hasOwn(TEMPLATES, nome)) {
+      return res.status(400).json({
+        error: "TEMPLATE_DESCONHECIDO",
+        message: `Template desconhecido. Os desta loja são: ${Object.keys(TEMPLATES).join(", ")}.`,
+      });
+    }
+
+    const modelo = TEMPLATES[nome];
+    await whatsappCliente.enviarTemplate(cfg, {
+      para: destino,
+      template: nome,
+      // O MESMO idioma do aviso de verdade, importado de `whatsappMensagens`:
+      // um teste que passasse em outro código de idioma exercitaria um
+      // template que não existe.
+      idioma: IDIOMA,
+      // Os valores de EXEMPLO do próprio mapa: é o que faz a mensagem de teste
+      // ser idêntica em forma à de verdade, inclusive na contagem de
+      // parâmetros (divergir dela é 132000).
+      parametros: modelo.parametros,
+      botaoUrl: exemploDoBotaoUrl(modelo),
+    });
+
+    const final = ultimosQuatro(destino);
+    return res.json({
+      enviado: true,
+      template: nome,
+      telefone_final: final,
+      message: `Mensagem de teste (${nome}) enviada para o número terminado em ${final}.`,
+    });
+  } catch (erro) {
+    return responderErro(res, erro, "enviar teste");
+  }
+}
+
 module.exports = {
   // Os handlers, montados em `index.js`.
   verificar,
   receber,
+  // Os handlers do painel, montados por `routes/whatsapp.routes.js`.
+  status,
+  lerConfig,
+  gravarConfig,
+  historico,
+  lerTemplates,
+  criarTemplates,
+  enviarTeste,
   // A deduplicação, e o que `receber` faz com o que ela devolve.
   eventosNovos,
   rotearMensagem,
