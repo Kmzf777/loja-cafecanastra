@@ -23,6 +23,7 @@ const blingRoutes = require("./routes/bling.routes");
 const clubeRoutes = require("./routes/clube.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
+const WhatsappController = require("./controllers/WhatsappController");
 
 const app = express();
 const port = process.env.PORT || 3333;
@@ -91,12 +92,39 @@ app.use(
 
 app.options("*", (req, res) => res.sendStatus(200));
 
+/**
+ * O CORPO CRU DO WEBHOOK DA META, preservado so nesta rota.
+ *
+ * `express.json()` consome o stream; sem o hook `verify`, o corpo cru se perde
+ * e nao ha como recalcular o HMAC. Reserializar com JSON.stringify NAO serve:
+ * a Meta assina uma forma com unicode escapado, e o stringify do V8 emite os
+ * caracteres decodificados — assinatura diferente, 401 so com acento e emoji.
+ *
+ * Montado ANTES do express.json global logo abaixo, e so em /whatsapp/webhook,
+ * para nao pendurar um Buffer extra em toda requisicao da API. O global adiante
+ * nao reprocessa nada: o body-parser marca `req._body` e o segundo parser sai
+ * na hora.
+ *
+ * O LIMITE E MAIOR AQUI, E E O UNICO LUGAR DA API ONDE ISSO VALE: a Meta agrega
+ * ate 1000 updates num lote so, e um lote grande recusado por tamanho viraria
+ * reentrega do MESMO lote por sete dias. 3 MB e o teto documentado por ela.
+ */
+app.use(
+  "/whatsapp/webhook",
+  express.json({
+    limit: "3mb",
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
+
 // Middleware essenciais.
 //
 // O limite de corpo caiu de 10 MB para 256 KB no JSON: nenhuma rota desta API
 // recebe JSON grande — imagem sobe por multipart, tratada pelo multer, que tem
 // o proprio limite. 10 MB de JSON por requisicao e superficie de exaustao de
-// memoria de graca.
+// memoria de graca. (A excecao esta logo acima, e vale so no webhook da Meta.)
 app.use(express.json({ limit: "256kb" }));
 app.use(express.urlencoded({ limit: "256kb", extended: true }));
 
@@ -105,14 +133,17 @@ app.use(express.urlencoded({ limit: "256kb", extended: true }));
 // URL absoluta. O static que ficava aqui servia uma pasta que nao existe.
 
 /**
- * As duas rotas sem autenticacao alguma, por natureza:
+ * As rotas sem autenticacao alguma, por natureza:
  *  - o webhook e chamado pelo Mercado Pago, que nao carrega token da loja; ele
  *    se autentica por assinatura HMAC (ver PaymentController).
  *  - a cotacao de frete e consultada antes de haver sessao.
+ *  - o webhook da Meta e chamado pela Meta, e se autentica pela assinatura
+ *    HMAC em X-Hub-Signature-256 (ver WhatsappController).
  *
- * Ambas sao publicas e ambas custam dinheiro quando abusadas: o frete consome
- * cota do token da Melhor Envio, e o webhook dispara consulta a API do MP.
- * Por isso ganham limite de taxa proprio.
+ * Todas sao publicas e todas custam trabalho quando abusadas: o frete consome
+ * cota do token da Melhor Envio, o webhook do MP dispara consulta a API deles
+ * e o da Meta escreve no banco a cada entrega. Por isso ganham limite de taxa
+ * proprio.
  */
 const webhookLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -126,8 +157,29 @@ const freteLimiter = rateLimit({
   message: { error: "Muitas cotações de frete. Aguarde um instante." },
 });
 
+/**
+ * O teto do webhook da Meta e MAIS ALTO que o do Mercado Pago, e a conta e
+ * simples: cada mensagem enviada gera ate tres entregas de status (`sent`,
+ * `delivered`, `read`), e um disparo de aviso para varios pedidos de uma vez
+ * multiplica isso. Com 120/min, um dia de movimento normal ja bateria no teto.
+ *
+ * ESTRANGULAR AQUI NAO PERDE EVENTO: a Meta reentrega por ate sete dias diante
+ * de qualquer resposta diferente de 200, e o 429 e uma delas. O limite protege
+ * o banco de uma enxurrada sem custar o evento legitimo que ele barrar.
+ */
+const whatsappLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  message: { error: "Muitas notificações." },
+});
+
 app.post("/webhook/mercadopago", webhookLimiter, PaymentController.receiveWebhook);
 app.post("/shipping/calculate", freteLimiter, ShippingController.calculate);
+
+// O GET e o handshake que a Meta faz UMA vez, ao salvar a URL no painel dela;
+// o POST e a entrega de verdade. Os dois recusam quem nao provar quem e.
+app.get("/whatsapp/webhook", whatsappLimiter, WhatsappController.verificar);
+app.post("/whatsapp/webhook", whatsappLimiter, WhatsappController.receber);
 
 /** Healthcheck para o orquestrador saber se o processo esta de pe. */
 app.get("/health", async (req, res) => {
