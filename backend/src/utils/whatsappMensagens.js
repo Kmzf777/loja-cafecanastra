@@ -30,6 +30,16 @@
  * até 24 horas depois de submetido, e o motivo só aparece lá.
  */
 
+/**
+ * A origem pública da loja — a MESMA que os links dos e-mails usam
+ * (`emailSender.js` aponta `${URL_LOJA}/account` com o valor que sai daqui).
+ *
+ * Uma fonte só, e não uma segunda env: dois valores que precisam concordar e
+ * que ninguém confere divergem no dia em que o domínio mudar, e a divergência
+ * aqui é a mais cara de todas (ver `BOTAO_RASTREIO`).
+ */
+const { URL_LOJA } = require("../config/remetente");
+
 /** O único idioma cadastrado na Meta para esta loja. */
 const IDIOMA = "pt_BR";
 
@@ -47,11 +57,22 @@ const BOTAO_AJUDA = Object.freeze({ type: "QUICK_REPLY", text: "Preciso de ajuda
  * O botão de rastreio. A Meta aceita UMA variável no botão de URL e só no
  * FIM da URL — daí o código entrar como sufixo de `?codigo=`, e não no meio
  * do caminho. O `example` é exigido na criação do template.
+ *
+ * ESTA URL É CONGELADA NA APROVAÇÃO DO TEMPLATE, e é o que a torna diferente
+ * de qualquer outro link do projeto: depois que a Meta aprova, o botão aponta
+ * para onde apontava — mudar exige APAGAR o template, recriar e esperar nova
+ * revisão (até 24h), com o aviso de envio fora do ar nesse meio-tempo. Errar
+ * aqui não dá erro em lugar nenhum; aparece como 404 no telefone do cliente.
+ *
+ * Por isso ela sai de `URL_LOJA` e NÃO de uma string escrita à mão. O destino
+ * é `/rastreio` da vitrine (`frontend/app/(vitrine)/rastreio/`), uma página
+ * pública: exigir login para saber onde está o café seria fricção no exato
+ * ponto em que a pessoa só quer uma informação.
  */
 const BOTAO_RASTREIO = Object.freeze({
   type: "URL",
   text: "Rastrear pedido",
-  url: "https://cafecanastra.com/rastreio?codigo={{1}}",
+  url: `${URL_LOJA}/rastreio?codigo={{1}}`,
   example: Object.freeze(["AA123456789BR"]),
 });
 

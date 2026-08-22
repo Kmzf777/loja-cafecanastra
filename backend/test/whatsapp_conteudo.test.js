@@ -80,6 +80,30 @@ test("pedido enviado sem rastreio ainda avisa, sem prometer codigo", () => {
   assert.equal(c.botaoUrl, null);
 });
 
+test("o botao de rastreio aponta para a pagina de rastreio DA LOJA", () => {
+  // O MODO DE FALHA QUE ISTO IMPEDE, E POR QUE ELE E CARO: a URL do botao e
+  // CONGELADA quando a Meta APROVA o template. Um dominio errado nao da erro
+  // em lugar nenhum — ele so aparece quando o cliente aperta "Rastrear pedido"
+  // e cai num 404, e consertar exige APAGAR o template, recriar e esperar nova
+  // aprovacao (ate 24h), com o aviso de envio fora do ar nesse meio-tempo.
+  //
+  // O `loja.` NAO E DETALHE: `cafecanastra.com` sem ele e outro site, que nao
+  // e este repositorio e nao tem /rastreio.
+  const { URL_LOJA } = require("../src/config/remetente.js");
+  const botao = TEMPLATES.pedido_enviado.botoes.find((b) => b.type === "URL");
+
+  // Derivada da MESMA env que os links dos e-mails usam (`emailSender.js`
+  // aponta `${URL_LOJA}/account`), e nao escrita a mao: um dominio literal
+  // aqui e o que estava errado.
+  assert.equal(botao.url, `${URL_LOJA}/rastreio?codigo={{1}}`);
+
+  // E o padrao, sem env nenhuma, e o dominio certo. Os testes NAO carregam
+  // `.env` (so `src/index.js` chama o dotenv), entao isto mede o default de
+  // verdade — que e o valor que vale na criacao do template em producao se
+  // ninguem definir LOJA_URL.
+  assert.equal(botao.url, "https://loja.cafecanastra.com/rastreio?codigo={{1}}");
+});
+
 test("o botao de rastreio leva o codigo como sufixo, percent-encoded", () => {
   // A Meta aceita UMA variavel no botao URL, e so no fim. E exige
   // percent-encoding de caractere especial.

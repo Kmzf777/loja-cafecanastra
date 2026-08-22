@@ -347,18 +347,24 @@ loja. A brecha é estreita, porque **um** pedido basta para o desligamento
 disparar, e a partir dele o roteador também emudece. A loja que ficaria sem
 detectar é a que recebe mensagem e não vende nada.
 
-### E uma pendência a conferir antes de criar os templates
+### O botão "Rastrear pedido", e o que conferir antes de criar os templates
 
-O botão **Rastrear pedido** do template `pedido_enviado` aponta para
-`https://cafecanastra.com/rastreio?codigo=<código>`. **Essa página não existe
-neste repositório** — a vitrine (`frontend/app`) não tem rota `/rastreio`, e
-`cafecanastra.com` é outro site. Ou ela existe lá e está tudo certo, ou o
-cliente que apertar o botão cai numa página que não abre.
+O botão do template `pedido_enviado` aponta para
+`${LOJA_URL}/rastreio?codigo=<código>`, e a página existe:
+`frontend/app/(vitrine)/rastreio/`. Ela é **pública** de propósito — o cliente
+veio de um toque no WhatsApp e exigir login ali seria fricção no pior lugar — e
+por isso mesmo **não consulta o banco nem a transportadora**: só ecoa o código
+que veio na URL, oferece o link de rastreamento e aponta para `/account`. Quem
+adivinhar o código de um terceiro não descobre nada sobre o pedido dele.
 
-Confira **antes** de clicar em *Criar na Meta*: a URL do botão é fixa no momento
-da aprovação, e trocá-la depois exige **reaprovar o template**. Se for preciso
-mudar, o lugar é a constante `BOTAO_RASTREIO`, em
-`backend/src/utils/whatsappMensagens.js`.
+**Confira `LOJA_URL` antes de clicar em *Criar na Meta*.** A URL do botão é fixa
+no momento da aprovação: criar o template com `LOJA_URL=http://localhost:3000`
+(o valor do `.env.example`) congela o botão em localhost, e trocá-la depois
+exige apagar o template, recriar e **esperar nova aprovação** — com o aviso de
+envio fora do ar nesse meio-tempo. Sem a env vale `https://loja.cafecanastra.com`
+(atenção ao `loja.`: `cafecanastra.com` é outro site). A constante é
+`BOTAO_RASTREIO`, em `backend/src/utils/whatsappMensagens.js`, e
+`whatsapp_conteudo.test.js` trava o domínio.
 
 ## 12. Para quem for mexer no código
 
