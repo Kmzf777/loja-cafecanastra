@@ -190,6 +190,18 @@ São dois caminhos, e um deles é o único que funciona hoje:
   sem número a deixá-lo. **É ele quem de fato captura o número hoje.** A tela
   de espera do cadastro já diz isso ao cliente, com estas palavras: *"Seu
   WhatsApp não vai junto no link."*
+  **E é também a única porta para TROCAR o número**, o que importa mais do que
+  parece: um dígito errado passa por toda validação (`99999-0001` é tão válido
+  quanto `99999-0000`) e faria os avisos de pedido de alguém irem para um
+  estranho, a cada mudança de status, para sempre — não há tela de perfil,
+  `garantir_cliente` faz `RETURN` para quem já é cliente, o painel do gestor só
+  lê, e não existe `UPDATE clientes SET telefone` no Express. Quem grava é a
+  RPC `registrar_optin_whatsapp` (0019), que troca o número **e re-carimba o
+  consentimento no mesmo gesto** — o carimbo descreve o número que está gravado
+  agora, e não um consentimento antigo sobre um número novo. A tela só manda o
+  telefone **quando ele mudou** (`telefoneParaRegistrar`, em
+  `lib/conta/cadastro.ts`): mandar sempre re-carimbaria a cada visita e apagaria
+  a data em que a pessoa de fato deixou o número.
 
 Promoção é assunto separado: uma **caixa à parte, desmarcada**, com carimbo
 próprio (`whatsapp_promo_optin_em`). **Nenhum template de marketing é criado ou

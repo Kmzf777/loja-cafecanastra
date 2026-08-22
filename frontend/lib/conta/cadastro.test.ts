@@ -141,6 +141,7 @@ import {
   nomeParaCadastro,
   reenviarConfirmacao,
   registrarOptinDeWhatsapp,
+  telefoneParaRegistrar,
   urlDeRetorno,
   voltarAReceberNoWhatsapp,
 } from "./cadastro";
@@ -589,6 +590,72 @@ describe("registrarOptinDeWhatsapp", () => {
     // A frase não pode ser a do 42501 ("Entre na loja"): quem já está logado e
     // lê "entre na loja" não tem o que fazer.
     expect(erro.message).not.toMatch(/^Entre na loja/);
+  });
+});
+
+describe("telefoneParaRegistrar — trocar o número que entrou errado", () => {
+  // O PROBLEMA QUE ESTA FUNÇÃO FECHA: o telefone era gravável UMA vez e nunca
+  // mais. Não há tela de perfil, `garantir_cliente` faz RETURN quando a linha
+  // já existe (0017), o painel só lê e não há `UPDATE clientes SET telefone` no
+  // Express. Quem digitasse 99999-0001 em vez de 99999-0000 — formato válido,
+  // passa por toda validação — mandaria "Olá, Ana. Recebemos seu pedido…" para
+  // um estranho a cada mudança de status, veria o número errado na área da
+  // conta, e não teria onde trocar. Pior: se o estranho apertasse "Parar
+  // avisos", quem ficaria sem avisos era a Ana.
+  //
+  // A decisão de tela mora AQUI e não no componente porque componente não é
+  // testado nesta casa (o vitest roda em `node`, sem jsdom, e só sobre `.ts`).
+
+  it("número novo, cadastro sem número: manda o que a pessoa digitou", () => {
+    expect(telefoneParaRegistrar(null, "(31) 99999-0000")).toBe("(31) 99999-0000");
+    expect(telefoneParaRegistrar(undefined, "31999990000")).toBe("31999990000");
+  });
+
+  it("número diferente do gravado: manda — é a troca, e ela RE-CARIMBA o consentimento", () => {
+    // `registrar_optin_whatsapp` (0019) grava `whatsapp_optin_em = now()`
+    // sempre que há telefone, de propósito: o carimbo tem de descrever o número
+    // que está gravado AGORA. Um carimbo velho sobre um número novo é a prova
+    // errada, que é pior que prova nenhuma porque parece prova.
+    expect(telefoneParaRegistrar("5531999990000", "(31) 99999-0001")).toBe(
+      "(31) 99999-0001",
+    );
+  });
+
+  it("MESMO número, escrito de outro jeito: não manda nada", () => {
+    // A COMPARAÇÃO É PELO NÚMERO NORMALIZADO, e não pelo texto: o campo mostra
+    // a máscara, o banco guarda o que a pessoa digitou no cadastro (quase
+    // ninguém digita "+55"), e as três formas abaixo são o MESMO aparelho.
+    // Mandá-las re-carimbaria `whatsapp_optin_em` a cada visita à tela,
+    // apagando a data em que a pessoa de fato deixou o número.
+    for (const digitado of [
+      "5531999990000",
+      "31999990000",
+      "(31) 99999-0000",
+      "+55 (31) 99999-0000",
+      "  31 99999-0000  ",
+    ]) {
+      expect(telefoneParaRegistrar("5531999990000", digitado)).toBeUndefined();
+    }
+  });
+
+  it("campo em branco não manda nada — apagar o número não é um gesto desta tela", () => {
+    // A RPC é `COALESCE(telefone_limpo, c.telefone)`: ela não sabe apagar. Um
+    // branco que virasse chamada gravaria só a preferência e a tela diria
+    // "está tudo salvo" sobre um campo que a pessoa esvaziou de propósito.
+    expect(telefoneParaRegistrar("5531999990000", "")).toBeUndefined();
+    expect(telefoneParaRegistrar("5531999990000", "   ")).toBeUndefined();
+    expect(telefoneParaRegistrar(null, "")).toBeUndefined();
+  });
+
+  it("texto que não é telefone MANDA, para a recusa acontecer com nome", () => {
+    // A armadilha: comparar "não dá para normalizar" com "não dá para
+    // normalizar" e concluir "não mudou". O que a pessoa digitou seria
+    // engolido em silêncio e a tela diria "salvo". Aqui ele segue para
+    // `registrarOptinDeWhatsapp`, que recusa com TELEFONE_INVALIDO ANTES da
+    // rede — que é a mensagem que a pessoa precisa ler.
+    expect(telefoneParaRegistrar("5531999990000", "999")).toBe("999");
+    expect(telefoneParaRegistrar("nao-e-telefone", "tambem-nao-e")).toBe("tambem-nao-e");
+    expect(telefoneParaRegistrar("nao-e-telefone", "nao-e-telefone")).toBe("nao-e-telefone");
   });
 });
 

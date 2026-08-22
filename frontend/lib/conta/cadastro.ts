@@ -30,7 +30,7 @@
  */
 import type { User } from "@supabase/supabase-js";
 import { clienteNavegador } from "../supabase/cliente";
-import { paraWhatsapp } from "./telefone";
+import { paraE164, paraWhatsapp } from "./telefone";
 
 /** Onde o link do e-mail de confirmação cai de volta. */
 export const CAMINHO_CONFIRMACAO = "/account/verify-email";
@@ -304,6 +304,63 @@ export async function registrarOptinDeWhatsapp(
   if (!error) return;
 
   throw traduzirErroDeVinculo(error);
+}
+
+/**
+ * O que mandar no campo `telefone` da RPC: o que a pessoa digitou, ou nada.
+ *
+ * POR QUE ESTA DECISÃO EXISTE, e por que ela vale um módulo de `lib/`: o
+ * telefone era gravável UMA vez e nunca mais. Não há tela de perfil,
+ * `garantir_cliente` faz `RETURN` quando a linha já existe (0017:329-331), o
+ * painel do gestor só lê (`RegisteredClients.jsx`), e não há
+ * `UPDATE canastra.clientes SET telefone` em lugar nenhum do Express. Quem
+ * digitasse `99999-0001` em vez de `99999-0000` — formato perfeitamente válido,
+ * passa por `paraWhatsapp` sem reclamar — mandaria *"Olá, Ana. Recebemos seu
+ * pedido…"* para um ESTRANHO a cada mudança de status, veria o número errado na
+ * própria área da conta, e não teria onde trocar. E se o estranho apertasse
+ * "Parar avisos", quem ficaria sem avisos era a Ana.
+ *
+ * A CAPACIDADE JÁ EXISTIA: `registrar_optin_whatsapp` (0019) troca o número e
+ * RE-CARIMBA `whatsapp_optin_em` no mesmo gesto — `now()` e não
+ * `COALESCE(...)`, de propósito, porque o carimbo tem de descrever o número que
+ * está gravado AGORA (0019:174-179). Faltava a tela mandar o número.
+ *
+ * E FALTAVA MANDAR SÓ QUANDO ELE MUDOU, que é o que esta função decide. Mandar
+ * sempre re-carimbaria o consentimento a cada visita à tela, apagando a data em
+ * que a pessoa de fato deixou o número — que é a única coisa que aquela coluna
+ * existe para guardar.
+ *
+ * A COMPARAÇÃO É PELO NÚMERO NORMALIZADO, E NÃO PELO TEXTO. O campo mostra a
+ * máscara ("(31) 99999-0000"), o banco guarda o que a pessoa digitou no
+ * cadastro (quase ninguém digita "+55"), e `paraE164` é a lente que enxerga as
+ * três formas como o mesmo aparelho. `paraE164` e não `paraWhatsapp` porque
+ * aqui a pergunta é "mudou?" e não "serve?": um cadastro antigo pode ter um
+ * fixo gravado, e comparar com a régua estrita diria "mudou" toda vez.
+ *
+ * O RAMO QUE SALVA DO SILÊNCIO: só se considera "não mudou" quando os DOIS
+ * lados normalizam para algo. Dois textos impresentáveis normalizam para `null`
+ * cada um, e `null === null` diria "não mudou" — o que a pessoa digitou seria
+ * engolido em silêncio e a tela responderia "está tudo salvo". Com esta guarda,
+ * o texto segue para `registrarOptinDeWhatsapp`, que o recusa com
+ * `TELEFONE_INVALIDO` antes da rede.
+ *
+ * BRANCO É "NADA A FAZER", e nunca "apague meu número": a RPC é
+ * `COALESCE(telefone_limpo, c.telefone)` e não sabe apagar. Quem chama trata o
+ * branco como erro de formulário — sair daqui com `undefined` só garante que
+ * uma tela distraída não grave a preferência dizendo que gravou o número.
+ */
+export function telefoneParaRegistrar(
+  gravado: string | null | undefined,
+  digitado: string,
+): string | undefined {
+  const limpo = digitado.trim();
+  if (!limpo) return undefined;
+
+  const novo = paraE164(limpo);
+  const atual = paraE164(gravado);
+  if (novo && atual && novo === atual) return undefined;
+
+  return limpo;
 }
 
 /**

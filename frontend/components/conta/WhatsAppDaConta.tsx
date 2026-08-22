@@ -6,6 +6,7 @@ import {
   ErroDeVinculo,
   lerWhatsappDaConta,
   registrarOptinDeWhatsapp,
+  telefoneParaRegistrar,
   voltarAReceberNoWhatsapp,
   type ContatoDeWhatsapp,
 } from "@/lib/conta/cadastro";
@@ -30,12 +31,23 @@ import { formatarTelefone } from "@/lib/conta/telefone";
  * não aparece como aviso de erro. Quem não quiser deixar o número continua
  * comprando exatamente como antes — o e-mail de status nunca dependeu disto.
  *
- * E ELE TAMBÉM APARECE PARA QUEM JÁ TEM NÚMERO, com outra cara: ali ele é a
- * revogação da promoção, e ela é requisito, não conveniência. O Art. 8º §5º
- * pede que retirar o consentimento seja gratuito e FACILITADO; sem este ramo, a
- * única saída de quem marcou a caixa no cadastro seria responder PARAR — que
- * desliga também o aviso de pedido, ou seja, obriga a abrir mão de uma coisa
- * para recusar outra.
+ * E ELE TAMBÉM APARECE PARA QUEM JÁ TEM NÚMERO, e ali faz DUAS coisas:
+ *
+ *   1. A REVOGAÇÃO DA PROMOÇÃO, que é requisito e não conveniência. O Art. 8º
+ *      §5º pede que retirar o consentimento seja gratuito e FACILITADO; sem
+ *      este ramo, a única saída de quem marcou a caixa no cadastro seria
+ *      responder PARAR — que desliga também o aviso de pedido, ou seja, obriga
+ *      a abrir mão de uma coisa para recusar outra.
+ *   2. A TROCA DO NÚMERO, e esta é a única porta que existe. Não há tela de
+ *      perfil, `garantir_cliente` faz `RETURN` para quem já é cliente (0017), o
+ *      painel do gestor só lê e não há `UPDATE clientes SET telefone` no
+ *      Express. Sem o campo aqui, um dígito errado digitado no cadastro
+ *      mandaria os avisos de pedido de alguém para um ESTRANHO a cada mudança
+ *      de status — e a pessoa veria o número errado nesta tela sem ter onde
+ *      trocar. Quem grava é `registrar_optin_whatsapp` (0019), que troca o
+ *      número e re-carimba `whatsapp_optin_em` no mesmo gesto: o carimbo
+ *      descreve o número que está gravado AGORA, e não um consentimento de
+ *      janeiro sobre um número que entrou em agosto.
  *
  * NÃO HÁ TESTE DE COMPONENTE NESTA CASA (o vitest roda em `node`, sem jsdom, e
  * só sobre `.ts`), então TODA a decisão que dá para errar mora em
@@ -63,6 +75,10 @@ export function WhatsAppDaConta({ userId }: { userId: string }) {
       if (!vivo || !lido) return;
       setContato(lido);
       setPromocoes(lido.promocoes);
+      // O CAMPO NASCE COM O NÚMERO GRAVADO, e é isso que o torna corrigível:
+      // quem digitou 99999-0001 por engano vê o erro e edita um dígito. Vazio,
+      // ele pareceria pedir o número de novo a quem já o deu.
+      setTelefone(lido.telefone ?? "");
     });
     return () => {
       vivo = false;
@@ -86,8 +102,14 @@ export function WhatsAppDaConta({ userId }: { userId: string }) {
      * script, `noValidate`) chamaria a RPC só com `promocoes` e a tela diria
      * "está tudo salvo" sobre um número que não foi gravado — a pessoa sairia
      * daqui achando que a loja tem o WhatsApp dela.
+     *
+     * VALE NOS DOIS RAMOS DESDE QUE O CAMPO PASSOU A EXISTIR PARA QUEM JÁ TEM
+     * NÚMERO: esvaziá-lo não é "apague meu número" (a RPC é
+     * `COALESCE(telefone_limpo, c.telefone)` e não sabe apagar), é um formulário
+     * incompleto. Quem quer parar de receber usa PARAR ou o botão do menu, que
+     * é o gesto com nome próprio.
      */
-    if (!contato?.telefone && !telefone.trim()) {
+    if (!telefone.trim()) {
       setErro("Informe seu WhatsApp para salvar.");
       return;
     }
@@ -95,15 +117,22 @@ export function WhatsAppDaConta({ userId }: { userId: string }) {
     setSalvando(true);
     try {
       await registrarOptinDeWhatsapp({
-        // Só manda o telefone quando ele está sendo INFORMADO agora. No ramo de
-        // quem já tem número, o campo nem existe, e mandar o que já está
-        // gravado recarimbaria `whatsapp_optin_em` a cada visita — apagando a
-        // data em que a pessoa de fato deixou o número.
-        telefone: contato?.telefone ? undefined : telefone,
+        // SÓ MANDA O TELEFONE QUANDO ELE MUDOU — a decisão inteira mora em
+        // `telefoneParaRegistrar`, e é lá que ela é testada. Mandar o que já
+        // está gravado recarimbaria `whatsapp_optin_em` a cada visita,
+        // apagando a data em que a pessoa de fato deixou o número.
+        telefone: telefoneParaRegistrar(contato?.telefone, telefone),
         promocoes,
       });
       const salvo = await lerWhatsappDaConta(userId);
-      if (salvo) setContato(salvo);
+      if (salvo) {
+        setContato(salvo);
+        // O campo passa a mostrar o que FICOU GRAVADO, e não o que foi
+        // digitado: são a mesma coisa quando dá certo, e quando não dá (a
+        // leitura falha) a tela não pode continuar exibindo um número que
+        // talvez não esteja no banco.
+        setTelefone(salvo.telefone ?? "");
+      }
       setRecibo("Pronto. Está tudo salvo.");
     } catch (e) {
       setErro(
@@ -184,44 +213,48 @@ export function WhatsAppDaConta({ userId }: { userId: string }) {
       </h2>
 
       <form onSubmit={salvar} className="mt-5">
+        {/* §11: o convite diz o que a pessoa GANHA, e não o que falta no
+            cadastro dela. "Complete seu perfil" é a versão que trata a pessoa
+            como um formulário incompleto. */}
         {temNumero ? (
           <p className="text-[17px] leading-relaxed text-fuligem-80">
             Avisamos o andamento dos seus pedidos por mensagem no WhatsApp, em
-            nome do Café Canastra, no número{" "}
-            <span className="font-dado">
-              {formatarTelefone(contato.telefone)}
-            </span>
-            .
+            nome do Café Canastra. Se o número abaixo não for o certo, corrija
+            aqui — é esta a tela que troca o número. Para parar, responda PARAR
+            em qualquer mensagem.
           </p>
         ) : (
-          <>
-            {/* §11: o convite diz o que a pessoa GANHA, e não o que falta no
-                cadastro dela. "Complete seu perfil" é a versão que trata a
-                pessoa como um formulário incompleto. */}
-            <p className="text-[17px] leading-relaxed text-fuligem-80">
-              Deixe seu WhatsApp e avisamos o andamento de cada pedido por
-              mensagem, em nome do Café Canastra — da confirmação ao código de
-              rastreio. Para parar, responda PARAR em qualquer mensagem.
-            </p>
-            <div className="mt-5">
-              <label htmlFor="whatsapp-da-conta" className={ROTULO}>
-                WhatsApp
-              </label>
-              <input
-                id="whatsapp-da-conta"
-                name="telefone"
-                type="tel"
-                inputMode="numeric"
-                autoComplete="tel-national"
-                required
-                value={formatarTelefone(telefone)}
-                onChange={(e) => setTelefone(e.target.value)}
-                placeholder="(37) 99999-0000"
-                className={`${CAMPO} mt-1.5 font-dado`}
-              />
-            </div>
-          </>
+          <p className="text-[17px] leading-relaxed text-fuligem-80">
+            Deixe seu WhatsApp e avisamos o andamento de cada pedido por
+            mensagem, em nome do Café Canastra — da confirmação ao código de
+            rastreio. Para parar, responda PARAR em qualquer mensagem.
+          </p>
         )}
+
+        {/* O CAMPO APARECE NOS DOIS RAMOS, e é a correção do achado C: antes
+            ele só existia para quem NÃO tinha número, e por isso o telefone era
+            gravável uma vez e nunca mais — um dígito errado no cadastro mandava
+            os avisos de pedido de alguém para um estranho, para sempre. Quem
+            grava é `registrar_optin_whatsapp` (0019), que troca o número e
+            re-carimba o consentimento no mesmo gesto; quem decide se ele muda é
+            `telefoneParaRegistrar`, testado em `lib/conta/cadastro.test.ts`. */}
+        <div className="mt-5">
+          <label htmlFor="whatsapp-da-conta" className={ROTULO}>
+            WhatsApp
+          </label>
+          <input
+            id="whatsapp-da-conta"
+            name="telefone"
+            type="tel"
+            inputMode="numeric"
+            autoComplete="tel-national"
+            required
+            value={formatarTelefone(telefone)}
+            onChange={(e) => setTelefone(e.target.value)}
+            placeholder="(37) 99999-0000"
+            className={`${CAMPO} mt-1.5 font-dado`}
+          />
+        </div>
 
         {/* A caixa à parte, com a mesma finalidade dita por extenso do
             cadastro. Aqui ela é também a REVOGAÇÃO: desmarcar e salvar manda
@@ -263,7 +296,7 @@ export function WhatsAppDaConta({ userId }: { userId: string }) {
             disabled={salvando}
             className="disabled:cursor-not-allowed disabled:border-fuligem-20 disabled:text-fuligem-55"
           >
-            {salvando ? "Salvando…" : temNumero ? "Salvar preferência" : "Salvar WhatsApp"}
+            {salvando ? "Salvando…" : temNumero ? "Salvar" : "Salvar WhatsApp"}
           </Botao>
         </div>
       </form>
