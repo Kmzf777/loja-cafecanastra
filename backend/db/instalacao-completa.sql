@@ -52,7 +52,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 
 -- ----------------------------------------------------------------------------
--- 1. Estrutura: as 17 migrações, na ordem do runner
+-- 1. Estrutura: as 18 migrações, na ordem do runner
 -- ----------------------------------------------------------------------------
 
 -- Identico ao BOOTSTRAP de db/migrar.js — inclusive os REVOKE em
@@ -3938,6 +3938,107 @@ $garantir_cliente$;
 -- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
 -- primeiro CREATE de objeto ja existente.
 INSERT INTO canastra.migracoes (versao) VALUES ('0017_whatsapp_meta')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0018_whatsapp_privilegios
+-- ----------------------------------------------------------------------------
+
+-- As cinco colunas que 0017 acrescentou a `canastra.clientes` nasceram
+-- ESCREVIVEIS PELO PROPRIO TITULAR, pelo PostgREST, sem passar pelo Express.
+-- Esta migracao fecha quatro delas e deixa uma aberta de proposito.
+--
+-- COMO ELAS NASCERAM ABERTAS. `clientes` e a UNICA tabela desta loja em que
+-- `authenticated` conserva `UPDATE`, e 0006 o conserva DE PROPOSITO: a pessoa
+-- corrige o proprio nome, telefone e CPF pela tela de perfil, sob a politica
+-- `clientes_dono_atualiza`. Mas aquele GRANT e de TABELA, e grant de tabela nao
+-- tem lista -- ele vale para a tabela, hoje e para toda coluna que alguem
+-- acrescentar depois. 0017 acrescentou cinco e nao voltou aqui.
+--
+-- POR QUE ISSO E VAZAMENTO, E NAO ENFEITE:
+--
+--   whatsapp_wa_id ............. e a CHAVE DE DESTINO. E por ela que o bot
+--       decide para qual aparelho sai o aviso de um pedido. Um titular que
+--       escreva ali o wa_id de outra pessoa manda os avisos dos PROPRIOS
+--       pedidos para o aparelho dela -- numero, status, e o que mais o template
+--       carregar. Dado de pedido saindo da conta, por um UPDATE de navegador.
+--   whatsapp_ultima_entrada_em . e o relogio da janela de 24h da Meta e o teto
+--       de "um menu por janela" do roteador. Escrito a mao, contorna o teto e
+--       permite fazer o bot responder em laco.
+--   whatsapp_optin_em .......... sao PROVA DE CONSENTIMENTO. O onus de provar
+--   whatsapp_promo_optin_em      que o consentimento existiu e do controlador
+--       (LGPD Art. 8 par. 2), e um carimbo que o titular pode forjar -- ou
+--       apagar, depois de a loja ter mandado -- nao prova coisa nenhuma. A
+--       coluna existe justamente para ser prova; escrivel pelo interessado, ela
+--       deixa de ser.
+--
+-- `whatsapp_optout_em` E A UNICA QUE FICA, e ficar e o requisito: e o direito de
+-- parar de receber, e ele tem de caber num clique do navegador. Nao existe STOP
+-- nativo no WhatsApp (a Meta nao intercepta texto, ver 0017) -- parar e
+-- inteiramente responsabilidade da loja, e e esta coluna. Fecha-la seria trocar
+-- um furo por um problema pior.
+--
+-- A PEGADINHA DO POSTGRES, E E ELA QUE DITA A FORMA DESTE ARQUIVO: NAO EXISTE
+-- "REVOGAR UMA COLUNA". Enquanto houver `GRANT UPDATE` de TABELA vigente, o
+-- privilegio de coluna e irrelevante -- o de tabela vence, e um
+-- `REVOKE UPDATE (whatsapp_wa_id) ...` roda sem erro e sem efeito nenhum, que e
+-- o pior desfecho possivel: uma linha de DDL que parece ter fechado a porta.
+-- O unico gesto que funciona e revogar o UPDATE DA TABELA e devolver a LISTA
+-- EXPLICITA de colunas. E o mesmo que 0006 fez em `pedidos` (o admin muda
+-- status e rastreio, nunca `total`) e que 0012 fez em `config_loja` (o painel
+-- salva o titulo, nunca o refresh token do Bling).
+--
+-- A LISTA ABAIXO FOI MEDIDA NO CATALOGO, nao deduzida: antes desta migracao
+-- `authenticated` atualizava as DEZ colunas de `clientes` (`relacl` trazia
+-- `authenticated=rw`), entao a lista certa e aquelas dez menos as quatro de
+-- cima. `user_id` e `criado_em` ficam porque ja estavam -- esta migracao fecha o
+-- que 0017 abriu por descuido, e nao aproveita a viagem para estreitar o que
+-- 0006 decidiu de propriedade. `user_id` nao e um furo aberto por essa escolha:
+-- o `WITH CHECK (user_id = auth.uid())` de `clientes_dono_atualiza` recusa
+-- mover a linha para o uid de outra pessoa, e o REVOKE de INSERT de 0006 impede
+-- fabricar uma linha nova.
+--
+-- O `SELECT` NAO E TOCADO, e a omissao e deliberada: ler o proprio `wa_id` e o
+-- proprio carimbo de opt-in e o titular lendo dado dele, e estreitar o SELECT
+-- por coluna faria `select=*` do PostgREST passar a responder 42501 em
+-- `clientes` -- o preco que 0012 aceitou em `config_loja` para esconder um
+-- SEGREDO, e aqui nao ha segredo nenhum a esconder de quem e dono da linha.
+--
+-- `service_role` NAO APARECE NESTE ARQUIVO, e a ausencia e a regra: e credencial
+-- de servidor (0001), e e por ela que o bot carimba optin, grava o wa_id e move
+-- o relogio da janela. Um REVOKE que a pegasse junto deixaria o catalogo
+-- "seguro" e o bot morto. `anon` tambem nao aparece porque nunca teve nada em
+-- `clientes` (0006) -- medido, e nao suposto.
+--
+-- O QUE ESTA MIGRACAO **NAO** COBRE, e precisa estar escrito porque e onde a
+-- proxima pessoa vai procurar:
+--
+--   1. Ela nao alcanca o servico Node. Ele conecta como DONO do banco e nao
+--      passa por GRANT nenhum -- e tem de ser assim, senao nao ha bot. A trava
+--      de coluna cerca o NAVEGADOR, que e de onde vem o atacante deste modelo.
+--   2. Ela nao decide LINHA. Quem decide e a RLS, e continua sendo
+--      `clientes_dono_atualiza`. As duas camadas se somam: a politica diz QUAL
+--      linha, o GRANT diz QUAIS colunas -- e nenhuma das duas sabe fazer o
+--      trabalho da outra.
+--   3. Ela nao valida CONTEUDO. `whatsapp_optout_em` continua aceitando
+--      qualquer timestamp do titular, inclusive no futuro ou no passado. Como o
+--      unico efeito de um valor nao nulo ali e a loja PARAR de mandar, mentir
+--      nessa coluna so prejudica quem mentiu.
+--
+-- Consequencia conhecida, a mesma que 0006 mediu em `pedidos`: um UPDATE de
+-- PostgREST que inclua qualquer uma das quatro colunas fechadas passa a recusar
+-- o comando INTEIRO com 42501 -- barulhento, e nao um UPDATE que silenciosamente
+-- ignora a coluna e devolve 200.
+
+REVOKE UPDATE ON canastra.clientes FROM authenticated;
+
+GRANT UPDATE (user_id, nome, cpf, telefone, criado_em, whatsapp_optout_em)
+  ON canastra.clientes TO authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0018_whatsapp_privilegios')
   ON CONFLICT (versao) DO NOTHING;
 
 

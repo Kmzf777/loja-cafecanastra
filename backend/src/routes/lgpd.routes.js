@@ -81,7 +81,16 @@ async function recusarForaDaLoja(req, res, conexao) {
  *   `auth.users` ......... id + e-mail (o shim de teste só tem essas colunas, e
  *                          são as únicas que pertencem à PESSOA e não à
  *                          mecânica de sessão do GoTrue);
- *   `clientes` ........... o cadastro: nome, CPF, telefone;
+ *   `clientes` ........... o cadastro: nome, CPF, telefone — e, desde 0017, o
+ *                          `wa_id` do WhatsApp e os três carimbos de
+ *                          consentimento (opt-in de pedido, opt-in de promoção,
+ *                          opt-out) mais o relógio da janela de 24h;
+ *   `whatsapp_mensagens`   com quem a loja falou, quando, o que mandou e se
+ *                          chegou (0017). A ELIMINAÇÃO não a alcança de
+ *                          propósito — o `user_id` fica órfão, sem FK —, e é
+ *                          exatamente por isso que o ACESSO tem de alcançar:
+ *                          enquanto a conta existe, a pessoa tem direito de
+ *                          saber que a loja guarda esse rastro;
  *   `enderecos` .......... os endereços salvos;
  *   `pedidos` ............ a venda com a fotografia de entrega;
  *   `assinaturas` ........ o Clube (0015): endereço congelado na adesão, preço,
@@ -94,9 +103,12 @@ async function recusarForaDaLoja(req, res, conexao) {
  *
  * O QUE FICA DE FORA, e por quê: `carrinhos`/`carrinho_itens` (o carrinho em
  * curso é produto e quantidade — o que a própria pessoa está vendo na tela
- * agora, e some com a conta por ON DELETE CASCADE) e `admins` (é papel de
- * acesso, não dado pessoal). Linha já redigida sai redigida: a exportação
- * mostra o que a loja GUARDA, não o que ela um dia soube.
+ * agora, e some com a conta por ON DELETE CASCADE), `admins` (é papel de
+ * acesso, não dado pessoal), `whatsapp_config` (é a credencial da loja na
+ * Meta, não tem coluna de titular) e `whatsapp_eventos` (chaves de
+ * deduplicação do webhook, com prazo de 7 dias e sem `user_id` por onde
+ * filtrar). Linha já redigida sai redigida: a exportação mostra o que a loja
+ * GUARDA, não o que ela um dia soube.
  *
  * Registros órfãos de ANTIGOS titulares não aparecem (user_id NULL não pertence
  * a ninguém) — e é exatamente por isso que a redação precisa vir antes da
@@ -109,7 +121,9 @@ async function exportarDadosDoTitular(req, res, { conexao = pool } = {}) {
 
     const titular = (
       await conexao.query(
-        `SELECT c.user_id, u.email, c.nome, c.cpf, c.telefone, c.criado_em
+        `SELECT c.user_id, u.email, c.nome, c.cpf, c.telefone, c.criado_em,
+                c.whatsapp_wa_id, c.whatsapp_optin_em, c.whatsapp_promo_optin_em,
+                c.whatsapp_optout_em, c.whatsapp_ultima_entrada_em
            FROM canastra.clientes c
            LEFT JOIN auth.users u ON u.id = c.user_id
           WHERE c.user_id = $1`,
@@ -164,6 +178,37 @@ async function exportarDadosDoTitular(req, res, { conexao = pool } = {}) {
     ).rows;
 
     /**
+     * O rastro do WhatsApp (0017): o que a loja mandou para a pessoa, quando e
+     * se chegou. `telefone_final` são os QUATRO ÚLTIMOS dígitos e mais nada —
+     * 0017 recusou guardar telefone completo fora de `clientes`, e o completo
+     * já sai logo acima, em `cliente.telefone`.
+     *
+     * `erro_texto` e `erro_codigo` FICAM DE FORA, e a decisão é consciente. Em
+     * tese seriam a frase da Meta sobre a mensagem DO PRÓPRIO titular, e nada
+     * de terceiro — mas hoje NENHUM código deste repositório escreve essas duas
+     * colunas (o serviço de envio ainda não existe), então não há caminho de
+     * escrita que se possa ler para certificar isso. Exportar um campo de texto
+     * livre cuja origem ainda não foi escrita seria prometer ao titular algo
+     * que ninguém consegue auditar; e como a coluna é NULL em toda linha que
+     * existe hoje, omiti-la não esconde informação nenhuma. Quem escrever o
+     * envio decide aqui — com o writer na mão — se a frase entra.
+     *
+     * `wamid` também fica fora: é o identificador OPACO da mensagem dentro da
+     * Meta, útil para depurar a integração e não para a pessoa saber o que a
+     * loja guarda sobre ela.
+     */
+    const whatsappMensagens = (
+      await conexao.query(
+        `SELECT template, status, telefone_final, criado_em, enviado_em,
+                entregue_em
+           FROM canastra.whatsapp_mensagens
+          WHERE user_id = $1
+          ORDER BY criado_em`,
+        [userId],
+      )
+    ).rows;
+
+    /**
      * A newsletter é a única sem `user_id`: a inscrição do rodapé não exige
      * conta (0011), então o vínculo com a pessoa é o E-MAIL — o mesmo que a
      * consulta do titular acabou de trazer do GoTrue. `lower()` dos dois lados
@@ -195,11 +240,20 @@ async function exportarDadosDoTitular(req, res, { conexao = pool } = {}) {
         cpf: titular.cpf,
         telefone: titular.telefone,
         criado_em: titular.criado_em,
+        // As cinco de 0017. Nomes de COLUNA, iguais aos do banco, como o resto
+        // deste objeto: a exportação é uma cópia do que a loja guarda, e
+        // rebatizar campo aqui obrigaria quem atende o titular a traduzir.
+        whatsapp_wa_id: titular.whatsapp_wa_id,
+        whatsapp_optin_em: titular.whatsapp_optin_em,
+        whatsapp_promo_optin_em: titular.whatsapp_promo_optin_em,
+        whatsapp_optout_em: titular.whatsapp_optout_em,
+        whatsapp_ultima_entrada_em: titular.whatsapp_ultima_entrada_em,
       },
       enderecos,
       pedidos,
       assinaturas,
       avaliacoes,
+      whatsapp_mensagens: whatsappMensagens,
       newsletter,
     });
   } catch (erro) {
