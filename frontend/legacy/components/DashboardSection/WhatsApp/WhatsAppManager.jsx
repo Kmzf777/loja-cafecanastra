@@ -24,6 +24,7 @@ import {
   descreverSegredo,
   descreverStatus,
   descreverTemplate,
+  formularioAoReler,
   precisaDeAtencao,
   rotuloDeEnvio,
 } from "./whatsappContrato";
@@ -157,30 +158,12 @@ Interruptor.propTypes = {
   desabilitado: PropTypes.bool,
 };
 
-/**
- * O formulário nasce da configuração — MENOS os segredos, que nascem sempre em
- * branco porque o servidor não os devolve (e não deve).
- */
-function formularioDe(config) {
-  const form = {
-    ativo: Boolean(config?.ativo),
-    access_token: "",
-    app_secret: "",
-    verify_token: "",
-    phone_number_id: config?.phone_number_id ?? "",
-    waba_id: config?.waba_id ?? "",
-    numero_suporte: config?.numero_suporte ?? "",
-  };
-  for (const i of INTERRUPTORES) form[i.chave] = Boolean(config?.[i.chave]);
-  return form;
-}
-
 function WhatsAppManager() {
   const { authFetch } = useContext(authContext);
 
   const [status, setStatus] = useState(null);
   const [config, setConfig] = useState(null);
-  const [form, setForm] = useState(() => formularioDe(null));
+  const [form, setForm] = useState(() => formularioAoReler(null, null));
   const [templates, setTemplates] = useState([]);
   const [templatesDesligados, setTemplatesDesligados] = useState(false);
   const [erroTemplates, setErroTemplates] = useState(null);
@@ -197,9 +180,33 @@ function WhatsAppManager() {
   const [paraTeste, setParaTeste] = useState("");
   const [templateTeste, setTemplateTeste] = useState("");
 
+  /**
+   * Montagem e PÓS-SALVAMENTO: o formulário inteiro vem do servidor, com os
+   * três segredos em branco. Limpá-los depois de salvar é o certo — eles
+   * acabaram de ser gravados, e um token que fica no input depois disso é só
+   * texto claro esperando em memória sem ter mais o que fazer ali.
+   */
   const aplicarConfig = useCallback((nova) => {
     setConfig(nova);
-    setForm(formularioDe(nova));
+    setForm(formularioAoReler(null, nova));
+  }, []);
+
+  /**
+   * RELEITURA (o botão "Conferir de novo"): o servidor manda nos campos
+   * visíveis e nos interruptores, e O QUE ESTIVER DIGITADO NOS SEGREDOS FICA.
+   *
+   * O token de System User da Meta é exibido UMA ÚNICA VEZ no Business Manager.
+   * A sequência natural aqui é colar → salvar → conferir; quem inverte os dois
+   * últimos passos e encontra o campo vazio pode não ter mais o token. Ver
+   * `formularioAoReler` no contrato, que é onde a regra vive e é testada.
+   *
+   * Atualização FUNCIONAL: ler `form` de dentro do callback traria o valor
+   * capturado no render em que ele foi criado — e o que interessa é o que está
+   * digitado agora, no instante em que a resposta chega.
+   */
+  const relerConfig = useCallback((nova) => {
+    setConfig(nova);
+    setForm((atual) => formularioAoReler(atual, nova));
   }, []);
 
   /**
@@ -210,9 +217,13 @@ function WhatsAppManager() {
    * `ativo:false` recém-chegado ao lado de um diagnóstico velho (ou de nenhum),
    * que é exatamente a ambiguidade que essas duas colunas existem para desfazer.
    *
-   * O formulário é remontado junto (`aplicarConfig`), o que descarta o que
-   * estivesse digitado e ainda não salvo. É o comportamento certo aqui: o botão
-   * diz "conferir", e conferir contra o servidor é conferir com o que ele tem.
+   * O formulário é RELIDO, não remontado (`relerConfig`): os campos visíveis e
+   * os interruptores passam a ser os do servidor — é o que o botão promete, e é
+   * o que faz o checkbox "Integração ligada" acompanhar um desligamento
+   * automático em vez de contradizer a faixa de alarme —, mas o que estiver
+   * digitado nos três campos de segredo PERMANECE. O token da Meta é exibido
+   * uma única vez; esvaziar aquele campo pode custar ao gestor a instalação
+   * inteira.
    */
   const sondar = useCallback(async () => {
     setSondando(true);
@@ -221,10 +232,10 @@ function WhatsAppManager() {
       buscarConfig(authFetch),
     ]);
     setStatus(s.status);
-    if (c.config) aplicarConfig(c.config);
+    if (c.config) relerConfig(c.config);
     if (s.erro || c.erro) setErro(s.erro || c.erro);
     setSondando(false);
-  }, [authFetch, aplicarConfig]);
+  }, [authFetch, relerConfig]);
 
   const recarregarTemplates = useCallback(async () => {
     const r = await buscarTemplates(authFetch);

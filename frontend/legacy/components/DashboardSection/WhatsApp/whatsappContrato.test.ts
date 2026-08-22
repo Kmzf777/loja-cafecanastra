@@ -10,6 +10,7 @@ import {
   descreverDesligamento,
   descreverStatus,
   descreverTemplate,
+  formularioAoReler,
   fraseDeErro,
   oQueFalta,
   precisaDeAtencao,
@@ -556,6 +557,108 @@ describe("descreverDesligamento", () => {
     expect(d).not.toBeNull();
     expect(d?.tom).toBe("erro");
     expect(d?.motivo.length).toBeGreaterThan(10);
+  });
+});
+
+describe("formularioAoReler", () => {
+  /**
+   * O QUE ESTA FUNCAO PROTEGE: O TOKEN DE SYSTEM USER E EXIBIDO UMA UNICA VEZ.
+   *
+   * A Meta o mostra no Business Manager no momento em que ele e gerado, e nunca
+   * mais. A sequencia natural nesta tela e colar → salvar → conferir; quem
+   * inverte os dois ultimos passos (e "Conferir de novo" e exatamente o que se
+   * clica para ver se ja funcionou) perderia o valor colado. Para o gestor da
+   * loja, o conserto e voltar ao Business Manager e gerar outro token — que e a
+   * diferenca entre "configurei o bot" e "desisti".
+   *
+   * Do lado oposto: os campos VISIVEIS e os sete booleanos vem do servidor, e e
+   * o servidor que tem razao sobre eles. O caso que exige isso e o desligamento
+   * automatico: o bot poe `ativo` em false sozinho, e um checkbox que
+   * continuasse marcado faria o cartao contradizer a propria faixa de alarme
+   * logo acima dele.
+   */
+  const DIGITADO = {
+    ...FORM_LIMPO,
+    access_token: "EAAG1234567890abcdef",
+    app_secret: "9f0a1b2c3d4e5f6071",
+    verify_token: "canastra-cafe-2026",
+    numero_suporte: "5531988887777",
+  };
+
+  it("O TOKEN DIGITADO NAO SUME quando a tela reconfere com o servidor", () => {
+    const proximo: Record<string, unknown> = formularioAoReler(
+      DIGITADO,
+      CONFIG_COMPLETA,
+    );
+    expect(proximo.access_token).toBe("EAAG1234567890abcdef");
+    expect(proximo.app_secret).toBe("9f0a1b2c3d4e5f6071");
+    expect(proximo.verify_token).toBe("canastra-cafe-2026");
+  });
+
+  it("os campos visiveis e os interruptores vem do SERVIDOR", () => {
+    const proximo: Record<string, unknown> = formularioAoReler(
+      DIGITADO,
+      CONFIG_COMPLETA,
+    );
+    expect(proximo.phone_number_id).toBe("123456789012345");
+    expect(proximo.waba_id).toBe("987654321098765");
+    // O que estava digitado e nao foi salvo cede ao que o servidor tem: e o
+    // que o botao "Conferir de novo" promete.
+    expect(proximo.numero_suporte).toBe("5531999990000");
+  });
+
+  it("o `ativo` do servidor vence — o caso do desligamento automatico", () => {
+    // O bot desistiu e gravou `ativo:false`. O checkbox tem de acompanhar, ou o
+    // cartao diz "ligada" logo abaixo da faixa que diz "o bot se desligou".
+    const desligadaNoServidor = { ...CONFIG_COMPLETA, ativo: false, aviso_pendente: false };
+    const proximo: Record<string, unknown> = formularioAoReler(
+      { ...DIGITADO, ativo: true, aviso_pendente: true },
+      desligadaNoServidor,
+    );
+    expect(proximo.ativo).toBe(false);
+    expect(proximo.aviso_pendente).toBe(false);
+  });
+
+  it("segredo em branco continua em branco — nao ha o que preservar", () => {
+    const proximo: Record<string, unknown> = formularioAoReler(
+      FORM_LIMPO,
+      CONFIG_COMPLETA,
+    );
+    expect(proximo.access_token).toBe("");
+    expect(proximo.app_secret).toBe("");
+    expect(proximo.verify_token).toBe("");
+  });
+
+  it("A MASCARA NUNCA ENTRA NO FORMULARIO", () => {
+    // A config traz `access_token_mascara: "••••4821"`. Se ela virasse o
+    // `value` do input, voltaria no PUT e o servidor a gravaria COMO TOKEN.
+    const proximo: Record<string, unknown> = formularioAoReler(
+      null,
+      CONFIG_COMPLETA,
+    );
+    expect(proximo.access_token).toBe("");
+    expect("access_token_mascara" in proximo).toBe(false);
+    expect(Object.values(proximo)).not.toContain("••••4821");
+  });
+
+  it("sem formulario anterior (primeira montagem), os tres nascem em branco", () => {
+    const proximo: Record<string, unknown> = formularioAoReler(null, null);
+    expect(proximo.access_token).toBe("");
+    expect(proximo.phone_number_id).toBe("");
+    expect(proximo.ativo).toBe(false);
+    // E o formato e o mesmo que `corpoDaConfig` sabe peneirar.
+    expect(Object.keys(formularioAoReler(null, CONFIG_COMPLETA)).sort()).toEqual(
+      [
+        "ativo",
+        ...INTERRUPTORES.map((i) => i.chave),
+        "access_token",
+        "app_secret",
+        "verify_token",
+        "numero_suporte",
+        "phone_number_id",
+        "waba_id",
+      ].sort(),
+    );
   });
 });
 

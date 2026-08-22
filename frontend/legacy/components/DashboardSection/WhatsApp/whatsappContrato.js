@@ -617,6 +617,51 @@ export function rotuloDeEnvio(mensagem) {
 const PARECE_MASCARA = /^[••*]{2,}/;
 
 /**
+ * O ESTADO DO FORMULÁRIO depois de reler a configuração do servidor.
+ *
+ * O SERVIDOR TEM RAZÃO SOBRE OS CAMPOS VISÍVEIS; O GESTOR TEM RAZÃO SOBRE OS
+ * TRÊS SEGREDOS. A assimetria não é capricho — é um fato da Meta:
+ *
+ *   O TOKEN DE SYSTEM USER É EXIBIDO UMA ÚNICA VEZ. Ele aparece no Business
+ *   Manager no instante em que é gerado, e nunca mais. A sequência natural
+ *   desta tela é colar → salvar → conferir, e "Conferir de novo" é justamente
+ *   o que se clica para ver se já funcionou. Quem inverter os dois últimos
+ *   passos e encontrar o campo vazio pode simplesmente NÃO TER MAIS O TOKEN: o
+ *   conserto é voltar ao Business Manager e gerar outro. Para um gestor de
+ *   loja, essa é a distância entre "configurei o bot" e "desisti".
+ *
+ * Do outro lado, os visíveis e os sete booleanos vêm do servidor porque é isso
+ * que o botão promete — e porque o DESLIGAMENTO AUTOMÁTICO depende disso: o bot
+ * põe `ativo` em false sozinho quando a credencial morre, e um checkbox que
+ * continuasse marcado faria o cartão contradizer a faixa de alarme logo acima.
+ * O preço, dito na cara: um `numero_suporte` digitado e não salvo se perde ao
+ * conferir. É texto curto e retecrevível — o token não é.
+ *
+ * "Preservar o digitado" nos segredos é literalmente NÃO MEXER neles: eles são
+ * write-only e nunca recebem valor do servidor (o GET manda máscara, e máscara
+ * não entra em formulário — viraria valor no PUT).
+ *
+ * `formulario` nulo é a primeira montagem: não há o que preservar, e os três
+ * nascem em branco.
+ */
+export function formularioAoReler(formulario, config) {
+  const form = { ativo: Boolean(config?.ativo) };
+
+  for (const i of INTERRUPTORES) form[i.chave] = Boolean(config?.[i.chave]);
+  for (const chave of CAMPOS_VISIVEIS) form[chave] = config?.[chave] ?? "";
+
+  for (const chave of SEGREDOS) {
+    const digitado = formulario?.[chave];
+    // Só string com conteúdo é "digitado". Espaço em branco não é token, e
+    // nada aqui vem do `config` — nem a máscara.
+    form[chave] =
+      typeof digitado === "string" && digitado.trim() ? digitado : "";
+  }
+
+  return form;
+}
+
+/**
  * O corpo do `PUT /whatsapp/config`, montado do formulário — e a peneira que
  * evita os dois desastres opostos desta tela.
  *
