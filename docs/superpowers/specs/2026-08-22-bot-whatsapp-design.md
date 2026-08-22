@@ -325,8 +325,28 @@ guardas corretamente cinco vezes.
 1. **C1 não tem guarda de mudança.** `OrderController.js:243` chama
    `updateOrderStatus` sem comparar `currentStatus !== newStatus`. Dois cliques
    no painel = dois e-mails hoje. E-mail duplicado é chato; WhatsApp duplicado
-   custa dinheiro e derruba a nota de qualidade do template. A comparação entra
-   **dentro do wrapper**, para valer para os seis de uma vez.
+   custa dinheiro e derruba a nota de qualidade do template.
+
+   **Este parágrafo dizia "a comparação entra dentro do wrapper", e estava
+   errado.** Corrigido durante a implementação, porque o conserto 2 logo abaixo
+   o contradiz: C1 passa `updated`, que é a linha **já com o status novo**. O
+   wrapper nunca vê o status velho e, portanto, não tem o que comparar.
+
+   O que o wrapper usa no lugar é um **ledger**: existe linha em
+   `whatsapp_mensagens` para este pedido, este template, e com status diferente
+   de `falhou`? Então já avisamos. É melhor que a comparação para o que
+   importa — sobrevive a reinício de processo e cobre os seis call sites — mas
+   é, por natureza, **só do WhatsApp**: a linha só nasce quando o envio de fato
+   foi tentado.
+
+   A consequência, dita com todas as letras: **o e-mail continua sem guarda de
+   duplicata**, exatamente como hoje. Estendê-la a ele seria pior que não ter,
+   porque o ledger não existe para quem não tem telefone, para quem deu
+   opt-out, nem com a integração desligada — que é o estado padrão. O e-mail
+   passaria a depender do WhatsApp para não se repetir, e deixaria de se
+   proteger justamente quando o WhatsApp está fora. Se um dia a loja quiser
+   parar o e-mail duplicado, o lugar é o próprio C1, que tem `currentStatus`
+   lido em `OrderController.js:172` e `newStatus` no corpo — não o wrapper.
 2. **C1 passa a linha velha.** `updated` (`OrderController.js:243`) já é a
    projeção completa e correta, com `tracking_code` e o status novo — é ele que o
    wrapper recebe, não `order` (`:171`).
