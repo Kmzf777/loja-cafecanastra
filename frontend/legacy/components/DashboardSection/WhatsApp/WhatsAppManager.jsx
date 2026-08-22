@@ -19,6 +19,7 @@ import Loading from "../../Loading/Loading";
 import {
   CAMPOS_ESPERADOS,
   INTERRUPTORES,
+  descreverDesligamento,
   descreverNumero,
   descreverSegredo,
   descreverStatus,
@@ -201,13 +202,29 @@ function WhatsAppManager() {
     setForm(formularioDe(nova));
   }, []);
 
+  /**
+   * A sonda relê O STATUS E A CONFIGURAÇÃO, e a segunda metade não é zelo:
+   * `ultimo_erro` e `desligado_em` — o diagnóstico do desligamento automático —
+   * viajam SÓ em `GET /whatsapp/config`. O `GET /status` monta a resposta campo
+   * a campo e não os inclui. Sondando só o status, "Conferir de novo" mostraria
+   * `ativo:false` recém-chegado ao lado de um diagnóstico velho (ou de nenhum),
+   * que é exatamente a ambiguidade que essas duas colunas existem para desfazer.
+   *
+   * O formulário é remontado junto (`aplicarConfig`), o que descarta o que
+   * estivesse digitado e ainda não salvo. É o comportamento certo aqui: o botão
+   * diz "conferir", e conferir contra o servidor é conferir com o que ele tem.
+   */
   const sondar = useCallback(async () => {
     setSondando(true);
-    const { status: s, erro: falha } = await buscarStatus(authFetch);
-    setStatus(s);
-    if (falha) setErro(falha);
+    const [s, c] = await Promise.all([
+      buscarStatus(authFetch),
+      buscarConfig(authFetch),
+    ]);
+    setStatus(s.status);
+    if (c.config) aplicarConfig(c.config);
+    if (s.erro || c.erro) setErro(s.erro || c.erro);
     setSondando(false);
-  }, [authFetch]);
+  }, [authFetch, aplicarConfig]);
 
   const recarregarTemplates = useCallback(async () => {
     const r = await buscarTemplates(authFetch);
@@ -268,6 +285,9 @@ function WhatsAppManager() {
 
   const estado = useMemo(() => descreverStatus(status), [status]);
   const numero = useMemo(() => descreverNumero(status?.numero), [status]);
+  // `null` quando ninguem desistiu de nada — e' assim que o vazio nao vira
+  // alarme falso.
+  const desligamento = useMemo(() => descreverDesligamento(config), [config]);
 
   /**
    * Integração não pronta é ESTADO CONHECIDO: os botões que precisam da Meta
@@ -339,6 +359,23 @@ function WhatsAppManager() {
             {sondando ? "Conferindo…" : "Conferir de novo"}
           </ButtonSecondary>
         </div>
+
+        {/* NO ALTO DE TUDO, e antes da tarja de estado: um bot que parou
+            SOZINHO nao e a mesma coisa que um bot que falta configurar. Sem
+            esta faixa, "desligado" nao distingue "fui eu quem desligou" de "a
+            credencial morreu ontem a noite e nenhum cliente foi avisado desde
+            entao" — e a segunda e urgente. Nada disso aparece quando
+            `desligado_em` e nulo: religar limpa as duas colunas, e o vazio E a
+            resposta. */}
+        {desligamento && (
+          <Tarja tom={desligamento.tom} titulo={desligamento.titulo}>
+            Parou em <strong>{dataHoraBr(desligamento.desligado_em)}</strong>.{" "}
+            {desligamento.frase}
+            <div style={{ marginTop: 6, fontSize: "0.85rem" }}>
+              O que a Meta respondeu: <em>{desligamento.motivo}</em>
+            </div>
+          </Tarja>
+        )}
 
         <Tarja tom={estado.tom} titulo={estado.titulo}>
           {estado.frase}

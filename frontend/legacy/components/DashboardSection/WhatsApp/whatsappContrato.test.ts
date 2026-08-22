@@ -7,6 +7,7 @@ import {
   corpoDaConfig,
   descreverNumero,
   descreverSegredo,
+  descreverDesligamento,
   descreverStatus,
   descreverTemplate,
   fraseDeErro,
@@ -55,6 +56,10 @@ const CONFIG_VAZIA = {
   access_token_mascara: null,
   app_secret_mascara: null,
   verify_token_mascara: null,
+  // O diagnostico do desligamento automatico (0020). Em branco quer dizer
+  // "ninguem desistiu de nada ainda".
+  ultimo_erro: null,
+  desligado_em: null,
 };
 
 /** A mesma coisa com tudo preenchido. Repare que os segredos aparecem SÓ como
@@ -476,6 +481,81 @@ describe("corpoDaConfig", () => {
         "waba_id",
       ].sort(),
     );
+  });
+
+  it("o DIAGNOSTICO do desligamento automatico nao volta pelo PUT", () => {
+    // `ultimo_erro` e `desligado_em` ficam fora de `CAMPOS_DE_TEXTO` no backend
+    // de proposito: quem as escreve e o bot ao desistir, e o PUT nao as aceita.
+    // Um painel capaz de manda-las seria um painel capaz de "explicar" um
+    // desligamento que nunca houve. Hoje elas nao passam por OMISSAO — este
+    // teste transforma a omissao em afirmacao.
+    const corpo: Record<string, unknown> = corpoDaConfig({
+      ...FORM_LIMPO,
+      ultimo_erro: "A Meta recusou a credencial (codigo 190).",
+      desligado_em: "2026-08-22T03:14:00.000Z",
+    });
+    expect("ultimo_erro" in corpo).toBe(false);
+    expect("desligado_em" in corpo).toBe(false);
+  });
+});
+
+describe("descreverDesligamento", () => {
+  /**
+   * O bot se desliga sozinho quando a credencial da Meta morre (codigos 190,
+   * 200, 10 e 131031) e deixa escrito por que. Sem estas duas colunas na tela,
+   * o gestor abre o painel, le "desligado", e nao tem como distinguir "fui eu
+   * quem desligou" de "a credencial morreu ontem a noite e nenhum cliente foi
+   * avisado desde entao". Sao duas conversas diferentes, e a segunda e urgente.
+   */
+  const MOTIVO =
+    "A Meta recusou a credencial: o token de acesso foi revogado (190).";
+
+  it("`desligado_em` preenchido e O SINAL — com a data e a frase da Meta", () => {
+    const d = descreverDesligamento({
+      ...CONFIG_VAZIA,
+      ultimo_erro: MOTIVO,
+      desligado_em: "2026-08-22T03:14:00.000Z",
+    });
+    expect(d).not.toBeNull();
+    expect(d?.tom).toBe("erro");
+    // A frase da Meta chega inteira: ela ja vem redigida (sem token, sem
+    // telefone) e e o diagnostico.
+    expect(d?.motivo).toContain(MOTIVO);
+    // E a tela precisa dizer o que fazer, nao so o que houve.
+    expect(d?.frase.toLowerCase()).toContain("credencial");
+    // A data crua atravessa para a tela formatar — sem ela, "desligado" nao
+    // diz se foi ha dez minutos ou em marco.
+    expect(d?.desligado_em).toBe("2026-08-22T03:14:00.000Z");
+  });
+
+  it("em branco NAO inventa estado: religar limpa as duas, de proposito", () => {
+    // O backend apaga as duas ao religar pelo painel. Em branco significa
+    // "desligamento humano, ou nunca aconteceu" — e o branco E a resposta.
+    expect(descreverDesligamento(CONFIG_VAZIA)).toBeNull();
+    expect(descreverDesligamento(CONFIG_COMPLETA)).toBeNull();
+    expect(descreverDesligamento(null)).toBeNull();
+    expect(descreverDesligamento(undefined)).toBeNull();
+  });
+
+  it("e `desligado_em` que manda, nao `ultimo_erro` sozinho", () => {
+    // Um motivo sem carimbo nao distingue "morreu agora" de "morreu em marco,
+    // alguem religou e ninguem limpou". Sem a data, nao ha alarme.
+    expect(
+      descreverDesligamento({ ...CONFIG_VAZIA, ultimo_erro: MOTIVO }),
+    ).toBeNull();
+  });
+
+  it("carimbo sem motivo ainda alarma, e diz que o motivo nao foi registrado", () => {
+    // As duas andam juntas, mas uma linha antiga (ou uma gravacao pela metade)
+    // nao pode fazer o alarme sumir — o bot parou, e isso e o que importa.
+    const d = descreverDesligamento({
+      ...CONFIG_VAZIA,
+      ultimo_erro: null,
+      desligado_em: "2026-08-22T03:14:00.000Z",
+    });
+    expect(d).not.toBeNull();
+    expect(d?.tom).toBe("erro");
+    expect(d?.motivo.length).toBeGreaterThan(10);
   });
 });
 

@@ -302,6 +302,53 @@ export function descreverStatus(status) {
 }
 
 /**
+ * O DESLIGAMENTO AUTOMÁTICO — o estado mais grave que esta tela sabe exibir.
+ *
+ * O bot se desliga sozinho quando a Meta diz que a credencial ou a conta morreu
+ * (códigos 190, 200, 10 e 131031: token revogado, permissão retirada, conta
+ * bloqueada pela política). Ao desistir, ele grava em `whatsapp_config` o motivo
+ * e a hora, e é `GET /whatsapp/config` que os devolve — INTEIROS, sem máscara,
+ * porque não são segredo: são o diagnóstico.
+ *
+ * SEM ISTO NA TELA, "desligado" é ambíguo — e a ambiguidade é cara. O gestor
+ * abre o painel, lê "desligado", e não tem como distinguir "fui eu quem
+ * desligou, mês passado, para uma manutenção" de "a credencial morreu ontem à
+ * noite e nenhum cliente foi avisado desde então". A segunda é urgente e não
+ * chega por e-mail nenhum: só está aqui.
+ *
+ * `desligado_em` É O SINAL, e não `ultimo_erro` sozinho. Religar pelo painel
+ * apaga as duas de propósito (`WhatsappController.gravarConfig`), então em
+ * branco quer dizer "desligamento humano, ou nunca aconteceu" — e o branco É a
+ * resposta. Daí o `null` de volta: não há estado a inventar para o vazio, e
+ * quem chama renderiza nada.
+ *
+ * A DATA VOLTA CRUA. Formatar aqui prenderia o módulo ao fuso de quem roda o
+ * teste; a tela já formata com `toLocaleString("pt-BR")`. E ela não é enfeite:
+ * "parou às 03:14 de hoje" e "parou em março" pedem reações diferentes.
+ */
+export function descreverDesligamento(config) {
+  const quando = config?.desligado_em;
+  if (!quando) return null;
+
+  return {
+    tom: "erro",
+    titulo: "O bot se desligou sozinho",
+    // A frase da Meta chega inteira — ela já vem redigida pelo cliente da Graph
+    // API (sem token, sem telefone) e é o diagnóstico. Sem ela, sobra "parou".
+    motivo:
+      typeof config?.ultimo_erro === "string" && config.ultimo_erro.trim()
+        ? config.ultimo_erro.trim()
+        : "O motivo não ficou registrado — veja o log do servidor na data abaixo.",
+    frase:
+      "A Meta recusou a credencial desta loja e o bot se desligou para não " +
+      "seguir falhando a cada pedido. Nenhum cliente é avisado por WhatsApp " +
+      "desde então. Cole uma credencial nova acima e ligue a integração de " +
+      "novo — religar aqui apaga este diagnóstico.",
+    desligado_em: quando,
+  };
+}
+
+/**
  * O número da Meta — que HOJE ainda não existe, e é por isso que esta função
  * trata o `null` como o caso principal e não como falha.
  *
