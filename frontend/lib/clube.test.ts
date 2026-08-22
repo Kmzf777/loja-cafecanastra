@@ -52,8 +52,8 @@ function lotesDeTeste(): Lote[] {
       linha: "classico",
       variantes: [
         variante("CLA-250G", "grao", 250),
-        variante("CLA-250M", "coado-papel", 250),
-        variante("CLA-500M", "coado-papel", 500, { preco: 7150 }),
+        variante("CLA-250M", "moido", 250),
+        variante("CLA-500M", "moido", 500, { preco: 7150 }),
         // Caixa fechada NÃO entra no Clube:
         { ...variante("CLA-CX", "grao", 250), pacotes: 3 },
       ],
@@ -154,8 +154,10 @@ describe("opcoesDoClube", () => {
 
   it("acha a combinação exata e devolve undefined para o que não existe", () => {
     const [classico] = opcoesDoClube(lotesDeTeste());
-    expect(varianteDoClube(classico, "coado-papel", 500)?.precoCentavos).toBe(7150);
-    expect(varianteDoClube(classico, "espresso", 250)).toBeUndefined();
+    expect(varianteDoClube(classico, "moido", 500)?.precoCentavos).toBe(7150);
+    // 1 kg moido nao existe nesta linha — o wizard DESABILITA em vez de
+    // esconder, e e este `undefined` que ele le.
+    expect(varianteDoClube(classico, "moido", 1000)).toBeUndefined();
   });
 });
 
@@ -163,10 +165,10 @@ describe("preSelecaoDaQuery (?cafe=&moagem= vindos da PDP)", () => {
   const opcoes = opcoesDoClube(lotesDeTeste());
 
   it("aceita o que existe", () => {
-    const params = new URLSearchParams("cafe=classico&moagem=coado-papel");
+    const params = new URLSearchParams("cafe=classico&moagem=moido");
     expect(preSelecaoDaQuery(params, opcoes)).toEqual({
       cafe: "classico",
-      moagem: "coado-papel",
+      moagem: "moido",
     });
   });
 
@@ -174,6 +176,11 @@ describe("preSelecaoDaQuery (?cafe=&moagem= vindos da PDP)", () => {
     expect(
       preSelecaoDaQuery(new URLSearchParams("cafe=nao-existe&moagem=turbo"), opcoes),
     ).toEqual({});
+    // E o metodo de preparo, que ate esta mudanca ERA moagem valida, agora cai
+    // no padrao como qualquer outra query inventada.
+    expect(
+      preSelecaoDaQuery(new URLSearchParams("cafe=classico&moagem=aeropress"), opcoes),
+    ).toEqual({ cafe: "classico" });
     // moagem válida sem café: vale contra a primeira opção.
     expect(
       preSelecaoDaQuery(new URLSearchParams("moagem=grao"), opcoes),
@@ -195,7 +202,7 @@ describe("montarCorpoDeAssinatura + assinarClube", () => {
   it("o corpo leva sku/quantidade/frequência/endereço — e NUNCA preço", () => {
     const [classico] = opcoesDoClube(lotesDeTeste());
     const corpo = montarCorpoDeAssinatura({
-      variante: varianteDoClube(classico, "coado-papel", 250)!,
+      variante: varianteDoClube(classico, "moido", 250)!,
       quantidade: 2,
       frequenciaDias: 30,
       endereco,

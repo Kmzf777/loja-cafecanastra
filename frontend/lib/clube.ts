@@ -9,7 +9,7 @@ import type { Endereco } from "./sacola/checkout";
 
 /**
  * Clube da Canastra — a lógica PURA do wizard de assinatura, separada da tela
- * (app/(vitrine)/clube/AssinaturaWizard.tsx) para o Vitest fixá-la sem DOM.
+ * (app/[locale]/(vitrine)/clube/AssinaturaWizard.tsx) para o Vitest fixá-la sem DOM.
  *
  * QUEM DECIDE DINHEIRO É O SERVIDOR. O `precoComDesconto` daqui existe para a
  * ETIQUETA do resumo; o backend recalcula os mesmos 10% sobre o preço do BANCO

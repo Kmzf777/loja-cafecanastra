@@ -59,11 +59,32 @@ function descricaoDe(produto) {
   }
 
   partes.push(`${linha.torra}. ${linha.corpo}.`);
-  partes.push(
-    `${CATALOGO.marca.atributos.join(" · ")}. Selo ${CATALOGO.marca.selo}.`,
-  );
+  partes.push(`${CATALOGO.marca.atributos.join(" · ")}. Selo ${seloDe(linha)}.`);
 
   return partes.join(" ");
+}
+
+/**
+ * O selo do SKU, montado a partir da nota DA LINHA — nao do `marca.selo`.
+ *
+ * ISTO ERA UM BUG DE TEXTO DE PRODUTO NO BANCO. `marca.selo` e
+ * "GOURMET / ESPECIAL / SCA 80+", o selo da COLECAO Canastra, e ele era
+ * colado na descricao de todo SKU — inclusive nos do Nectar de Minas, que tem
+ * 75 pontos e NAO e cafe especial. O proprio `selo_observacao` do JSON avisa
+ * a excecao; o seed nao a lia. A descricao nao aparece na vitrine (que le so
+ * preco e estoque da API), mas aparece no painel e e o que o Bling puxa para
+ * a nota fiscal e para o marketplace.
+ *
+ * A regra e a MESMA de frontend/lib/catalogo/rotulos.ts: 80 e o corte da SCA
+ * e e ele que autoriza a palavra "especial"; `scaExata: false` significa piso
+ * e e o unico caso em que se escreve "+". Duas implementacoes porque o backend
+ * e JS e nao importa o TypeScript da vitrine — se uma mudar, a outra tem de
+ * mudar junto.
+ */
+function seloDe(linha) {
+  const classificacao = linha.sca >= 80 ? "ESPECIAL" : "GOURMET";
+  const nota = linha.scaExata ? `SCA ${linha.sca}` : `SCA ${linha.sca}+`;
+  return `${classificacao} / ${nota}`;
 }
 
 /** Peso real do pacote em kg, para o calculo de frete do checkout. */

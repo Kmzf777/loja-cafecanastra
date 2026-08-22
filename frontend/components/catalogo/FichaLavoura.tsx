@@ -26,9 +26,12 @@ const DEFINICOES: Record<string, string> = {
   Torra:
     "Quanto tempo e a que temperatura o grão foi torrado. Torras mais escuras trazem mais corpo e amargor; mais claras preservam acidez e fruta.",
   Corpo: "O peso do café na boca — de aquoso e leve a denso e encorpado.",
-  Variedades: "As cultivares do pé de café, como Bourbon, Catuaí ou Mundo Novo.",
+  // O exemplo saiu: com as cultivares reais logo abaixo, citar Bourbon e Mundo
+  // Novo aqui punha na mesma ficha três nomes que esta lavoura não planta.
+  Variedades:
+    "As cultivares do pé de café — a espécie botânica de onde o grão vem, e o que mais explica tamanho, densidade e aroma.",
   Pontuação:
-    "Nota de 0 a 100 dada em prova cega segundo o protocolo da SCA. Acima de 80 o café é classificado como especial. A embalagem declara 80+, que é o piso da coleção.",
+    "Nota de 0 a 100 dada em prova cega segundo o protocolo da SCA. De 80 para cima o café é classificado como especial; abaixo disso é gourmet. Onde o site mostra 80+, o número é o piso que a embalagem declara para a coleção, não a nota daquele café; onde mostra um número sem o +, é a nota que a marca publica para aquela linha.",
   Preparo: "Os métodos em que esta linha costuma render melhor.",
 };
 
@@ -38,7 +41,7 @@ export function FichaLavoura({ lote }: { lote: Lote }) {
     ["Torra", lote.torra],
     ["Corpo", lote.corpo],
     ["Variedades", lote.origem.variedades.join(", ")],
-    ["Pontuação", formatarSca(lote.sca)],
+    ["Pontuação", formatarSca(lote.sca, lote.scaExata)],
     ["Preparo", lote.preparoSugerido],
   ];
 

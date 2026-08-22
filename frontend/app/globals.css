@@ -234,3 +234,34 @@
 :root {
   color-scheme: light;
 }
+
+/* ---------------------------------------------------------------------------
+   Movimento reduzido — estetica.md §9, "obrigatorio".
+
+   O documento exige este bloco desde a Fase 0 e ele nao existia em lugar
+   nenhum do repositorio. Nao e enfeite de acessibilidade: quem liga
+   "reduzir movimento" no sistema costuma fazer isso por enxaqueca vestibular
+   ou por transtorno de sensibilidade a movimento, e cada transicao de 320 ms
+   do <CardCafe>, cada `translate` de hover e cada `scroll-behavior: smooth`
+   cobra dessa pessoa.
+
+   FORA DO `.vitrine` DE PROPOSITO — e a unica regra deste arquivo que alcanca
+   /dashboard tambem. O painel legado tem animacao propria em
+   styled-components, e a preferencia do sistema vale para o site inteiro:
+   respeitar so metade seria nao respeitar.
+
+   `!important` porque isto precisa vencer qualquer utilitario do Tailwind e
+   qualquer estilo inline; e o unico lugar do arquivo em que ele se justifica.
+   `.01ms` e nao `0` porque um `transitionend` que nunca dispara trava
+   componente que espera por ele.
+--------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

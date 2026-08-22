@@ -6,21 +6,25 @@
       "captura-loja": "Screenshot da propria loja.cafecanastra.com enviado pelo dono do projeto. Evidencia primaria: preco e estado de estoque lidos da tela.",
       "pesquisa-web": "Resultado de busca que cita a pagina do produto. Confiavel para nome, URL e descricao sensorial; para preco vale menos que a captura.",
       "embalagem": "Lido na propria arte do pacote (frontend/public/*.png).",
-      "inferido": "Derivado do padrao dos outros SKUs. Marcado sempre que usado — nunca apresentado como dado da loja."
+      "inferido": "Derivado do padrao dos outros SKUs. Marcado sempre que usado — nunca apresentado como dado da loja.",
+      "material-da-marca": "Descricao de produto publicada pela propria marca no seu material comercial, entregue pelo dono do projeto. Evidencia primaria para texto sensorial, torra, intensidade e pontuacao SCA — e o que a marca de fato afirma sobre cada linha, e vence a pesquisa-web onde os dois divergem."
     },
     "acesso_direto_bloqueado": "Este ambiente nao alcanca loja.cafecanastra.com (a politica de egresso responde 403 no CONNECT), entao nada foi raspado do site. Por isso a procedencia por campo importa: quando o dominio for liberado, da para reconferir SKU a SKU pelo campo `url`.",
     "moeda": "precoCentavos esta em centavos de real. 3970 = R$ 39,70."
   },
-
   "marca": {
     "nome": "Café Canastra",
     "desde": 1985,
     "origem": "Serra da Canastra — Minas Gerais",
     "selo": "GOURMET / ESPECIAL / SCA 80+",
-    "selo_observacao": "Os pacotes de cafe trazem 'GOURMET'; as caixas de Drip Coffee trazem 'SPECIALTY'. Ambos com 'ESPECIAL' e 'SCA 80+'. Fonte: embalagem nas capturas e nas artes em frontend/public.",
+    "selo_observacao": "Os pacotes de cafe trazem 'GOURMET'; as caixas de Drip Coffee trazem 'SPECIALTY'. Ambos com 'ESPECIAL' e 'SCA 80+'. Fonte: embalagem nas capturas e nas artes em frontend/public. EXCECAO: o Nectar de Minas tem 75 pontos e NAO e cafe especial — este selo de colecao nao vale para ele, e o componente SeloSCA decide pela `sca` da linha, nunca por este campo.",
     "sca": 80,
-    "sca_observacao": "A embalagem declara 'SCA 80+', que e um piso, nao uma nota exata. Qualquer pontuacao com decimal exibida no site seria invencao — o mock antigo mostrava 84,25 e 85,50.",
-    "variedades": ["Bourbon", "Catuaí Vermelho", "Araras", "Mundo Novo"],
+    "sca_observacao": "80 e o PISO da colecao Canastra, nao a nota de nenhum cafe: a embalagem declara 'SCA 80+'. Duas linhas tem nota publicada pela marca e a nota vence o piso — Microlote 86 e Nectar de Minas 75. Cada linha carrega `sca` e `scaExata`; `exata: false` significa piso e e o unico caso em que a tela escreve '+'. Decimal continua proibido: o mock antigo exibia 84,25 e 85,50, notas que nenhuma prova de xicara desta casa produziu.",
+    "variedades": [
+      "Araras",
+      "Caturra 2SL",
+      "Paraíso"
+    ],
     "atributos": [
       "100% arábica",
       "Origem única da Serra da Canastra",
@@ -29,23 +33,30 @@
       "Sem glúten",
       "Vegano"
     ],
-    "fonte": "pesquisa-web"
+    "fonte": "material-da-marca",
+    "fonte_observacao": "O bloco `marca` tem procedencia MISTA e cada campo carrega a sua: `selo` veio da embalagem (ver selo_observacao), `variedades` da historia publicada pela propria marca (ver variedades_observacao) e `atributos` do material comercial dela. O campo dizia 'pesquisa-web', que era verdade quando as variedades eram Bourbon/Catuai Vermelho/Mundo Novo e deixou de ser quando a marca as desmentiu.",
+    "variedades_observacao": "As tres variedades plantadas na Serra da Canastra, confirmadas pela marca. A lista anterior (Bourbon, Catuai Vermelho, Araras, Mundo Novo) vinha de pesquisa-web e contradizia o que a propria marca publica."
   },
-
   "linhas": [
     {
       "slug": "classico",
       "nome": "Canastra Clássico",
       "corToken": "--color-fuligem",
       "embalagem": "Pacote preto",
-      "pontoTorra": 4,
-      "torra": "Torra média-escura (French roast)",
+      "pontoTorra": 5,
+      "torra": "Torra escura",
       "corpo": "Corpo intenso",
-      "notas": ["amadeirado", "chocolate", "especiarias"],
-      "descricao": "Torra média-escura de maior intensidade. Corpo cheio, notas amadeiradas e levemente achocolatadas, com finalização de especiarias.",
+      "notas": [
+        "caramelo",
+        "chocolate"
+      ],
+      "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra escura, intensidade 8. Notas caramelizadas e achocolatadas.",
       "preparoSugerido": "Ristretto e espresso",
       "imagem": "/cafe-classico.png",
-      "fonte": "pesquisa-web"
+      "fonte": "material-da-marca",
+      "sca": 80,
+      "scaExata": false,
+      "torra_observacao": "A torra em texto e o `pontoTorra` de 1 a 5 sao o MESMO dado em duas formas, e produtos.test.ts trava a igualdade contra PONTO_TORRA. A intensidade que a marca declara (7 e 8) e outro eixo — forca na xicara, nao cor do grao: Canela e Suave sao os dois 7 e tem torras diferentes. Ela vive na descricao, com a mesma palavra da marca, porque declarar 'intensidade 8 de 10' seria inventar a escala."
     },
     {
       "slug": "suave",
@@ -55,25 +66,35 @@
       "pontoTorra": 3,
       "torra": "Torra média",
       "corpo": "Corpo médio",
-      "notas": ["frutado", "chocolate", "doce"],
-      "descricao": "Torra média, mais delicada. Notas frutadas e levemente achocolatadas, doçura limpa e final leve.",
+      "notas": [
+        "chocolate",
+        "citrico"
+      ],
+      "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra média, intensidade 7. Notas achocolatadas e finalização cítrica.",
       "preparoSugerido": "Coador, prensa francesa e aeropress",
       "imagem": "/cafe-suave.png",
-      "fonte": "pesquisa-web"
+      "fonte": "material-da-marca",
+      "sca": 80,
+      "scaExata": false
     },
     {
       "slug": "canela",
       "nome": "Canastra Canela",
       "corToken": "--color-vermelho",
       "embalagem": "Pacote vermelho",
-      "pontoTorra": 4,
-      "torra": "Torra média-escura",
+      "pontoTorra": 5,
+      "torra": "Torra escura",
       "corpo": "Corpo intenso",
-      "notas": ["canela", "chocolate", "doce"],
-      "descricao": "Café torrado e moído com canela, moída junto ao grão. O aromatizado da casa.",
+      "notas": [
+        "caramelo",
+        "canela"
+      ],
+      "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra escura, intensidade 7. Notas caramelizadas, com canela natural moída junto ao grão.",
       "preparoSugerido": "Coador",
       "imagem": "/cafe-canela.png",
-      "fonte": "embalagem"
+      "fonte": "material-da-marca",
+      "sca": 80,
+      "scaExata": false
     },
     {
       "slug": "microlote",
@@ -82,30 +103,40 @@
       "embalagem": "Stand-up pouch kraft, ilustração da cachoeira Casca d'Anta",
       "pontoTorra": 2,
       "torra": "Torra clara-média",
-      "corpo": "Corpo sedoso",
-      "notas": ["frutado", "floral", "doce"],
-      "descricao": "Lote separado da safra, em quantidade limitada. É o café mais caro por grama da casa — vendido só em 250 g, só em grão.",
+      "corpo": "Corpo médio",
+      "notas": [
+        "cacau",
+        "melaco",
+        "citrico"
+      ],
+      "descricao": "100% arábica especial, 86 pontos SCA. Médio corpo, notas de cacau, melaço e finalização suavemente cítrica. Lote separado da safra, em quantidade limitada: vendido só em 250 g, só em grão.",
       "preparoSugerido": "Coado e aeropress",
       "imagem": "/microlote-png.png",
-      "fonte": "captura-loja"
+      "fonte": "material-da-marca",
+      "sca": 86,
+      "scaExata": true
     },
     {
       "slug": "nectar-de-minas",
       "nome": "Néctar de Minas",
       "corToken": "--color-mata",
       "embalagem": "Pacote preto, \"Café Superior\"",
-      "pontoTorra": 4,
-      "torra": "Torra média-escura",
+      "pontoTorra": 5,
+      "torra": "Torra escura",
       "corpo": "Corpo intenso",
-      "notas": ["chocolate", "castanha", "doce"],
-      "descricao": "Marca irmã, tipo exportação. Vendida na mesma loja, em pacote de 1 kg em grãos.",
+      "notas": [
+        "caramelo",
+        "chocolate"
+      ],
+      "descricao": "100% arábica gourmet, 75 pontos SCA. Torra escura, intensidade 8. Notas caramelizadas e achocolatadas. Marca irmã, tipo exportação, vendida na mesma loja em pacote de 1 kg em grãos.",
       "preparoSugerido": "Espresso",
       "imagem": "/cafe-classico.png",
       "imagemObservacao": "FALTA ARTE PROPRIA. O pacote real é preto com a marca Néctar de Minas, diferente do Clássico. Está reusando a arte do Clássico como fallback até a foto entrar em public/.",
-      "fonte": "captura-loja"
+      "fonte": "material-da-marca",
+      "sca": 75,
+      "scaExata": true
     }
   ],
-
   "produtos": [
     {
       "sku": "classico-graos-250",
@@ -205,7 +236,6 @@
       "estoque": 10,
       "fonte": "pesquisa-web"
     },
-
     {
       "sku": "suave-graos-250",
       "linha": "suave",
@@ -290,7 +320,6 @@
       "estoque": 10,
       "fonte": "pesquisa-web"
     },
-
     {
       "sku": "microlote-graos-250",
       "linha": "microlote",
@@ -305,7 +334,6 @@
       "estoque": 8,
       "fonte": "captura-loja"
     },
-
     {
       "sku": "nectar-de-minas-graos-1000",
       "linha": "nectar-de-minas",
@@ -320,7 +348,6 @@
       "estoque": 12,
       "fonte": "captura-loja"
     },
-
     {
       "sku": "kit-canela-classico-suave-moido-3x250",
       "linha": "canela",
@@ -336,7 +363,6 @@
       "kit": true,
       "fonte": "pesquisa-web"
     },
-
     {
       "sku": "drip-suave-display-10",
       "linha": "suave",
@@ -446,7 +472,6 @@
       "estoque": 0,
       "fonte": "captura-loja"
     },
-
     {
       "sku": "capsula-classico-1-caixa",
       "linha": "classico",

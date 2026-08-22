@@ -106,7 +106,7 @@ export type Sessao = { usuario: Usuario; accessToken: string };
 /**
  * Os dois papéis que a vitrine reconhece.
  *
- * `destinoDe` compara com `"admin"`, e `app/(vitrine)/account/page.tsx` também.
+ * `destinoDe` compara com `"admin"`, e `app/(transacional)/account/page.tsx` também.
  * O valor do não-admin nunca foi lido por ninguém — o Express mandava
  * `"customer"`; aqui é `"cliente"`, em português como o resto do módulo.
  */

@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { dicionario } from "@/lib/i18n/dicionario";
+import { href } from "@/lib/i18n/rotas";
+import type { Locale } from "@/lib/i18n/tipos";
 import {
   EVENTO_CONSENTIMENTO,
   gravarConsentimento,
@@ -27,8 +30,17 @@ import {
  * aviso na ordem do documento; botões reais com foco visível no padrão da
  * casa. O foco NÃO é sequestrado — o aviso não impede navegar; modal de
  * consentimento que trava a página é dark pattern.
+ *
+ * O IDIOMA VEM POR PROP, da moldura. Um pedido de consentimento que a pessoa
+ * não consegue ler não é consentimento — e o link para a Política precisa
+ * levar à versão no idioma dela, senão o banner promete uma explicação e
+ * entrega outra língua. Aqui, ao contrário do <AtalhosDoCliente>, o dicionário
+ * é importado direto: o banner já é a única coisa da moldura que muda a página
+ * inteira, e ele carrega frase, não rótulo.
  */
-export function BannerCookies() {
+export function BannerCookies({ locale }: { locale: Locale }) {
+  const d = dicionario(locale);
+
   // `null` = ainda não sabemos (SSR e primeiro paint) — não renderiza nada
   // para o HTML do servidor bater com o do cliente. `"pendente"` = sem escolha
   // registrada, o aviso aparece.
@@ -55,19 +67,18 @@ export function BannerCookies() {
   return (
     <aside
       role="region"
-      aria-label="Aviso de cookies"
+      aria-label={d.cookies.aviso}
       className="fixed inset-x-0 bottom-0 z-50 border-t border-fuligem-20 bg-cal-puro px-4 py-4 md:px-10"
       style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
     >
       <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-6 gap-y-3">
         <p className="min-w-[16rem] flex-1 text-[14px] leading-relaxed text-fuligem-80">
-          Usamos cookies de medição para entender o que funciona na loja. Os
-          essenciais — sessão e sacola — ficam de qualquer jeito.{" "}
+          {d.cookies.texto}{" "}
           <Link
-            href="/politica-de-privacidade"
+            href={href(locale, "/politica-de-privacidade")}
             className="text-vermelho underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
           >
-            Política de privacidade
+            {d.rodape.politicaDePrivacidade}
           </Link>
         </p>
         <div className="flex flex-wrap gap-2">
@@ -76,14 +87,14 @@ export function BannerCookies() {
             onClick={() => decidir("essencial")}
             className="h-11 rounded-bt border border-fuligem px-5 text-[12px] font-semibold uppercase tracking-[0.1em] transition-colors hover:bg-fuligem hover:text-cal focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
           >
-            Só o essencial
+            {d.cookies.soOEssencial}
           </button>
           <button
             type="button"
             onClick={() => decidir("aceito")}
             className="h-11 rounded-bt bg-fuligem px-5 text-[12px] font-semibold uppercase tracking-[0.1em] text-cal transition-colors hover:bg-fuligem-80 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
           >
-            Aceitar
+            {d.cookies.aceitar}
           </button>
         </div>
       </div>

@@ -1,20 +1,47 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Serra } from "@/components/marca/Serra";
-import { AtalhosDoCliente } from "./AtalhosDoCliente";
+import { dicionario, type Dicionario } from "@/lib/i18n/dicionario";
+import { href } from "@/lib/i18n/rotas";
+import type { Locale } from "@/lib/i18n/tipos";
+import {
+  AtalhosDoCliente,
+  type RotulosDeAtalho,
+} from "./AtalhosDoCliente";
 import { AvisoFreteGratis } from "./AvisoFreteGratis";
+import { SeletorDeIdiomaDaPagina } from "./SeletorDeIdiomaDaPagina";
 
 /**
  * estetica.md §5.8 e §10.
  *
  * Mobile-first: a navegacao nasce como acordeao em tela cheia e so vira barra
- * horizontal a partir de `md`. O §10 pede exatamente isso ("Mega menu ->
+ * horizontal a partir de `xl`. O §10 pede exatamente isso ("Mega menu ->
  * acordeao em tela cheia").
+ *
+ * POR QUE `xl` (1280px) E NAO `md` (768px), QUE ERA O CORTE ATE A ONDA 4.
+ * A barra ganhou duas coisas nesta onda: o quarto item de navegacao
+ * (`/historia`) e o seletor de idioma. Em ingles — que e o idioma mais largo
+ * dos tres, porque "SUBSCRIPTION" e "OUR STORY" nao encurtam — a barra pede
+ * cerca de 1.185px: 150 de logo + 417 de navegacao + 176 de busca + 142 de
+ * atalhos + 132 de seletor + 80 de respiro lateral + os vaos. Em 768px isso
+ * nao cabe de jeito nenhum, e o que acontece quando nao cabe e sempre o mesmo:
+ * o campo de busca encolhe ate virar um retangulo mudo e a navegacao aperta os
+ * alvos de toque abaixo dos 44px do §10. O estetica.md ja dizia que desktop
+ * comeca em 1200px; o corte em `md` e que era otimista.
+ *
+ * Entre 768px e 1280px o acordeao e a navegacao — e ele nao e um consolo: cabe
+ * tudo (busca, quatro links, idioma), com linha de 64px e alvo de sobra. De
+ * quebra, some um defeito antigo: a altura do painel e `100dvh - 72px`, e o
+ * cabecalho so passa de 72px agora que o acordeao ja saiu de cena.
  *
  * O menu usa <details>/<summary>, nao estado de React. Tres razoes: funciona
  * com JS desabilitado (§12), ja vem com semantica de expandido/recolhido e
  * navegacao por teclado, e mantem o Cabecalho como Server Component — o header
  * nao entra no bundle de JS da rota.
+ *
+ * TODO CAMINHO PASSA POR `href(locale, ...)`. Antes desta onda o `NAV` e o
+ * logo eram caminhos crus, entao em `/en/cafes` o menu devolvia a pessoa para
+ * o portugues — o site tinha tres idiomas e uma navegacao so.
  *
  * LARGURA DO LOGO: o ativo e 3508x2481. Sem `w-[...]` explicito no <img>, o
  * flex do header passa a ser dimensionado pela largura intrinseca da imagem e
@@ -23,11 +50,24 @@ import { AvisoFreteGratis } from "./AvisoFreteGratis";
  * a largura e fixada aqui, e a altura acompanha.
  */
 
-const NAV = [
-  { href: "/cafes", rotulo: "Cafés" },
-  { href: "/clube", rotulo: "Assinatura" },
-  { href: "/a-serra", rotulo: "A Serra" },
-];
+/**
+ * Os quatro destinos da navegacao, em caminho CANONICO (sempre em portugues,
+ * sempre sem prefixo). Quem prefixa e o `href()`.
+ *
+ * `/bio` fica FORA de proposito: e endereco de perfil de Instagram, alcancado
+ * por link direto, e um quinto item espremeria a barra que ja esta no limite.
+ * `/rastreabilidade` tambem fica fora — ela e um link externo para a base do
+ * Cerrado Mineiro, e vive no rodape, onde as verificacoes de origem cabem sem
+ * competir com o caminho de venda.
+ */
+function navegacao(d: Dicionario) {
+  return [
+    { caminho: "/cafes", rotulo: d.nav.cafes },
+    { caminho: "/clube", rotulo: d.nav.assinatura },
+    { caminho: "/a-serra", rotulo: d.nav.aSerra },
+    { caminho: "/historia", rotulo: d.nav.historia },
+  ];
+}
 
 /**
  * Caixa de busca — form GET puro para /cafes?q=…, submit nativo.
@@ -38,38 +78,46 @@ const NAV = [
  * (barra desktop e painel mobile) para o htmlFor não duplicar, e o `rotulo`
  * distingue os dois landmarks `role="search"` para o leitor de tela — dois
  * landmarks iguais na mesma página obrigam a visitar ambos para saber qual é.
+ *
+ * O `action` passa pelo `href()` como qualquer link: em `/en` o resultado da
+ * busca tem de cair em `/en/cafes`, senao pesquisar e um jeito de sair do
+ * idioma sem perceber.
  */
 function FormBusca({
   id,
-  rotulo,
+  locale,
+  d,
   className = "",
+  noMenu = false,
 }: {
   id: string;
-  rotulo: string;
+  locale: Locale;
+  d: Dicionario;
   className?: string;
+  noMenu?: boolean;
 }) {
   return (
     <form
-      action="/cafes"
+      action={href(locale, "/cafes")}
       method="get"
       role="search"
-      aria-label={rotulo}
+      aria-label={noMenu ? d.nav.buscarNoMenu : d.nav.buscar}
       className={`flex items-stretch ${className}`}
     >
       <label htmlFor={id} className="sr-only">
-        Buscar cafés
+        {d.nav.buscar}
       </label>
       <input
         id={id}
         type="search"
         name="q"
-        placeholder="Buscar café"
+        placeholder={d.nav.buscar}
         autoComplete="off"
         className="h-11 w-full min-w-0 border border-r-0 border-fuligem-20 bg-cal-puro px-3 text-[14px] placeholder:text-fuligem-55 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
       />
       <button
         type="submit"
-        aria-label="Buscar"
+        aria-label={d.nav.buscar}
         className="flex h-11 w-11 shrink-0 items-center justify-center border border-fuligem-20 text-fuligem-55 transition-colors hover:border-fuligem hover:text-fuligem focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
       >
         <svg
@@ -89,52 +137,75 @@ function FormBusca({
   );
 }
 
-function Logo() {
+function Logo({ locale, d }: { locale: Locale; d: Dicionario }) {
   return (
     <Link
-      href="/"
-      aria-label="Café Canastra — página inicial"
+      href={href(locale, "/")}
+      // O nome do link é o nome da marca mais o destino, traduzido.
+      // `comum.voltarAoInicio` existia no dicionário sem nenhum consumidor —
+      // este é o consumidor certo, porque é literalmente o que o link faz.
+      aria-label={`Café Canastra — ${d.comum.voltarAoInicio}`}
       className="flex shrink-0 items-center focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
     >
       <Image
         src="/logo-canastra.png"
+        // O `alt` NÃO se traduz: ele descreve o lockup impresso na embalagem,
+        // que diz "Café Canastra · Desde 1985" nos três idiomas. Traduzir aqui
+        // descreveria uma imagem que não existe.
         alt="Café Canastra, desde 1985"
         width={3508}
         height={2481}
         priority
-        sizes="(min-width: 768px) 150px, 108px"
-        className="h-auto w-[108px] object-contain md:w-[150px]"
+        sizes="(min-width: 1280px) 150px, 108px"
+        className="h-auto w-[108px] object-contain xl:w-[150px]"
       />
     </Link>
   );
 }
 
-export function Cabecalho() {
+export function Cabecalho({ locale }: { locale: Locale }) {
+  const d = dicionario(locale);
+  const nav = navegacao(d);
+
+  /**
+   * O recorte do dicionário que atravessa a fronteira de cliente. Montado uma
+   * vez porque o <AtalhosDoCliente> é renderizado duas — barra e telefone — e
+   * tudo que passa por essa fronteira vai serializado no payload da rota.
+   */
+  const atalhos: RotulosDeAtalho = {
+    conta: d.nav.conta,
+    minhaConta: d.nav.minhaConta,
+    sacola: d.nav.sacola,
+    sacolaVazia: d.nav.sacolaVazia,
+    item: d.comum.item,
+    itens: d.comum.itens,
+  };
+
   return (
     <header>
       {/* Barra de aviso — §5.8 */}
       <div className="bg-fuligem text-cal">
         <p className="mx-auto flex min-h-9 max-w-[1440px] flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 py-2 text-center font-dado text-[10px] leading-tight tracking-[0.04em] sm:text-[11px] md:px-10">
-          <span>Torrado sob demanda</span>
+          <span>{d.barra.torradoSobDemanda}</span>
           {/* O piso do frete grátis vem de GET /config e pode mudar sem
               deploy — só este trecho é ilha client; o separador vai junto
               porque a promessa inteira some quando o admin a desliga. */}
-          <AvisoFreteGratis />
+          <AvisoFreteGratis rotulo={d.barra.freteGratisAcimaDe} />
         </p>
       </div>
 
       <div className="sticky top-0 z-40 border-b border-fuligem-20 bg-cal">
-        <div className="mx-auto flex h-[72px] max-w-[1440px] items-center justify-between gap-4 px-4 md:h-[92px] md:px-10">
-          <Logo />
+        <div className="mx-auto flex h-[72px] max-w-[1440px] items-center justify-between gap-4 px-4 xl:h-[92px] xl:px-10">
+          <Logo locale={locale} d={d} />
 
-          {/* Navegacao de desktop */}
-          <div className="hidden items-center gap-8 md:flex">
-            <nav aria-label="Principal">
-              <ul className="flex items-center gap-8">
-                {NAV.map((item) => (
-                  <li key={item.href}>
+          {/* Navegacao de desktop — só a partir de `xl`, ver a nota do topo. */}
+          <div className="hidden items-center gap-6 xl:flex 2xl:gap-8">
+            <nav aria-label={d.nav.principal}>
+              <ul className="flex items-center gap-6 2xl:gap-8">
+                {nav.map((item) => (
+                  <li key={item.caminho}>
                     <Link
-                      href={item.href}
+                      href={href(locale, item.caminho)}
                       className="text-[13px] font-semibold uppercase tracking-[0.12em] transition-colors hover:text-vermelho focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
                     >
                       {item.rotulo}
@@ -143,49 +214,75 @@ export function Cabecalho() {
                 ))}
               </ul>
             </nav>
-            <FormBusca id="busca-desktop" rotulo="Buscar cafés" className="w-56" />
-            <AtalhosDoCliente />
+            <FormBusca
+              id="busca-desktop"
+              locale={locale}
+              d={d}
+              className="w-44 2xl:w-56"
+            />
+            <AtalhosDoCliente r={atalhos} />
+            <SeletorDeIdiomaDaPagina
+              id="idioma-desktop"
+              locale={locale}
+              variante="barra"
+            />
           </div>
 
           {/* Em mobile a sacola fica FORA do acordeao: é o atalho que a pessoa
-              mais procura e não pode depender de abrir o menu antes. */}
-          <div className="flex items-center gap-2 md:hidden">
-            <AtalhosDoCliente />
+              mais procura e não pode depender de abrir o menu antes. A CONTA
+              NÃO: `conta={false}` é o que devolve a barra de 360px para dentro
+              da tela — a medição está no comentário do <AtalhosDoCliente>, e o
+              atalho reaparece dentro do acordeão, logo abaixo. */}
+          <div className="flex items-center gap-2 xl:hidden">
+            <AtalhosDoCliente r={atalhos} conta={false} />
 
-            {/* Acordeao de mobile — sem JS. O `md:hidden` mora só no <div>
+            {/* Acordeao de mobile — sem JS. O `xl:hidden` mora só no <div>
                 pai, que já esconde tudo isto no desktop. */}
             <details className="group [&[open]_.rotulo-abrir]:hidden [&[open]_.rotulo-fechar]:inline">
-              <summary
-                className="flex h-11 min-w-11 cursor-pointer list-none items-center gap-2 border border-fuligem-20 px-3 text-[12px] font-semibold uppercase tracking-[0.12em] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
-                aria-label="Abrir menu"
-              >
+              {/* SEM `aria-label`: o nome acessível vem do texto visível, que
+                  troca de "Menu" para "Fechar" quando o painel abre. Um
+                  aria-label fixo em "Abrir menu" sobrepõe o texto e passa a
+                  mentir na metade dos estados. */}
+              <summary className="flex h-11 min-w-11 cursor-pointer list-none items-center gap-2 border border-fuligem-20 px-3 text-[12px] font-semibold uppercase tracking-[0.12em] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho">
                 <span aria-hidden className="flex w-4 flex-col gap-[3px]">
                   <span className="h-px w-full bg-fuligem" />
                   <span className="h-px w-full bg-fuligem" />
                   <span className="h-px w-full bg-fuligem" />
                 </span>
-                <span className="rotulo-abrir">Menu</span>
-                <span className="rotulo-fechar hidden">Fechar</span>
+                <span className="rotulo-abrir">{d.nav.menu}</span>
+                <span className="rotulo-fechar hidden">{d.nav.fechar}</span>
               </summary>
 
               {/* Painel ancorado ao proprio header (`top-full`), e nao a
                   viewport: a barra de aviso muda de altura quando o texto
                   quebra em telas estreitas, entao qualquer deslocamento fixo
-                  erraria. */}
+                  erraria.
+
+                  MOBILE-FIRST NO SENTIDO LITERAL: em 360px o painel e a tela
+                  inteira (`inset-x-0`), porque nao ha outro lugar para ele. A
+                  partir de `sm` ele encosta a direita e vira gaveta de 420px —
+                  a mesma largura da gaveta da sacola do §5.9 —, senao entre
+                  600px e 1280px uma folha em branco de 1.200px de largura
+                  serviria quatro linhas de texto. */}
               <nav
-                aria-label="Principal"
-                className="absolute inset-x-0 top-full z-50 flex h-[calc(100dvh-72px)] flex-col overflow-y-auto border-t border-fuligem-20 bg-cal"
+                aria-label={d.nav.principal}
+                className="absolute inset-x-0 top-full z-50 flex h-[calc(100dvh-72px)] flex-col overflow-y-auto border-t border-fuligem-20 bg-cal sm:inset-x-auto sm:right-0 sm:w-[420px] sm:border-l"
               >
                 {/* A busca abre o painel: quem toca em "Menu" no celular esta
                     procurando alguma coisa — o campo vem antes dos links. */}
                 <div className="border-b border-fuligem-20 px-4 py-4">
-                  <FormBusca id="busca-mobile" rotulo="Buscar cafés (menu)" />
+                  <FormBusca
+                    id="busca-mobile"
+                    locale={locale}
+                    d={d}
+                    noMenu
+                  />
                 </div>
                 <ul className="flex flex-col">
-                  {NAV.map((item) => (
-                    <li key={item.href} className="border-b border-fuligem-20">
+                  {nav.map((item) => (
+                    <li key={item.caminho} className="border-b border-fuligem-20">
                       <Link
-                        href={item.href}
+                        href={href(locale, item.caminho)}
                         className="flex min-h-[64px] items-center justify-between px-5 text-[20px] font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-vermelho"
                       >
                         {item.rotulo}
@@ -197,6 +294,29 @@ export function Cabecalho() {
                   ))}
                 </ul>
 
+                {/* A conta, que saiu da barra de 360px para o documento parar
+                    de rolar de lado. Vem depois dos destinos de catálogo e em
+                    corpo menor de propósito: é a prateleira secundária do
+                    menu, não um quinto café. O caminho é cru porque
+                    `/account` é transacional e vive fora do `[locale]` — o
+                    próprio `href()` o devolveria assim. */}
+                <Link
+                  href="/account"
+                  className="flex min-h-[56px] items-center justify-between border-b border-fuligem-20 px-5 text-[13px] font-semibold uppercase tracking-[0.12em] text-fuligem-55 transition-colors hover:text-fuligem focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-vermelho"
+                >
+                  {d.nav.minhaConta}
+                  <span aria-hidden className="font-dado text-fuligem-20">
+                    →
+                  </span>
+                </Link>
+
+                {/* O seletor de idioma entra AQUI, e não na barra de cima, em
+                    telefone: em 360px o cabeçalho já carrega logo, conta,
+                    sacola e o botão de menu, e um quinto elemento reduziria
+                    todos abaixo dos 44px. A variante "painel" já traz o filete
+                    inferior que continua o ritmo das linhas do menu. */}
+                <SeletorDeIdiomaDaPagina id="idioma-mobile" locale={locale} />
+
                 {/* mt-auto empurra a assinatura para o rodape do painel: o
                     menu ocupa a tela inteira, entao o espaco vazio fica no
                     meio e nao entre o ultimo link e a serra. */}
@@ -206,6 +326,7 @@ export function Cabecalho() {
                     className="h-10 w-full text-fuligem-20"
                     strokeWidth={1.5}
                   />
+                  {/* Nome próprio de lugar: não se traduz em idioma nenhum. */}
                   <p className="mt-6 font-dado text-[11px] uppercase tracking-[0.1em] text-fuligem-55">
                     Serra da Canastra · Minas Gerais
                   </p>

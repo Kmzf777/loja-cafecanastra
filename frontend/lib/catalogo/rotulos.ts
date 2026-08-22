@@ -44,6 +44,12 @@ const NOTAS_IRREGULARES: Record<string, string> = {
   chocolate: "Chocolate",
   castanha: "Castanha",
   jabuticaba: "Jabuticaba",
+  // As três que entraram com as notas publicadas pela marca. Ficam aqui, e não
+  // no fallback, porque o fallback só sabe trocar hífen por espaço: ele
+  // devolveria "Melaco" e "Citrico", sem os acentos que a palavra tem.
+  caramelo: "Caramelo",
+  melaco: "Melaço",
+  citrico: "Cítrico",
   frutado: "Frutado",
   floral: "Floral",
   amendoa: "Amêndoa",
@@ -77,7 +83,30 @@ export function formatarPeso(gramas: number): string {
     : `${gramas} g`;
 }
 
-/** "SCA 80+" — o piso declarado na embalagem, nunca uma nota exata. */
-export function formatarSca(sca: number): string {
-  return `SCA ${Math.floor(sca)}+`;
+/**
+ * "SCA 80+" quando o número é o PISO da embalagem; "SCA 86" quando é a nota
+ * daquela linha.
+ *
+ * O "+" é uma afirmação, não enfeite: ele diz "pelo menos isto". Colocá-lo
+ * numa nota exata inventa um piso que ninguém declarou; tirá-lo do piso
+ * transforma o mínimo da coleção na nota de cada café. `Math.floor` continua
+ * barrando o decimal do mock antigo (84,25) por qualquer das duas portas.
+ */
+export function formatarSca(sca: number, exata: boolean): string {
+  const n = Math.floor(sca);
+  return exata ? `SCA ${n}` : `SCA ${n}+`;
+}
+
+/**
+ * Café especial ou café gourmet — e quem decide é o número, não o marketing.
+ *
+ * 80 é o corte da própria SCA, e é ele que autoriza a palavra "especial". O
+ * Néctar de Minas tem 75: chamá-lo de especial seria mentir exatamente no selo
+ * que a marca usa para se provar. A embalagem dele diz gourmet, e é isso que a
+ * vitrine passa a dizer. Ver `<SeloSCA>`, que muda de forma por esta função.
+ */
+export type ClassificacaoSca = "especial" | "gourmet";
+
+export function classificacaoSca(sca: number): ClassificacaoSca {
+  return sca >= 80 ? "especial" : "gourmet";
 }

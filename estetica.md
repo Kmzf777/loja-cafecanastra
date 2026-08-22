@@ -282,8 +282,24 @@ Reprodução literal da plaqueta da embalagem. É o elemento que costura pacote 
      filete 1px · raio 0
 ```
 
-Variantes: `claro` (filete Fuligem sobre Cal) · `escuro` (filete Cal sobre Fuligem) · `compacto` (só "SCA 84", para card de produto).
+Variantes: `claro` (filete Fuligem sobre Cal) · `escuro` (filete Cal sobre Fuligem) · `compacto` (para card de produto).
 Aparece em: card de produto, PDP, filtro ativo, página de origem.
+
+> **Corrigido em 22/08/2026, e a correção é de honestidade, não de estilo.** Este
+> documento descrevia a plaqueta como texto fixo — "SPECIALTY / ESPECIAL /
+> SCA 80+" em toda linha — porque era o que a embalagem da coleção Canastra
+> traz. **O Néctar de Minas tem 75 pontos**, abaixo do corte de 80 da própria
+> SCA: ele não é café especial, é gourmet, e a embalagem *dele* diz isso.
+> Uma plaqueta que afirma "ESPECIAL" numa linha de 75 mente exatamente no selo
+> que a marca usa para se provar.
+>
+> O componente passou a decidir pela nota **da linha** (`sca`, `scaExata`), e
+> não por `marca.selo`: escreve `ESPECIAL` a partir de 80 e `GOURMET` abaixo, e
+> o `+` só aparece quando o número é piso (`scaExata: false`). O `compacto`
+> ganhou uma segunda linha — a classificação junto da nota —, porque com 86 e
+> 75 na mesma grade um "SCA 75" solto ao lado de um "SCA 80+" é número sem
+> régua. A mesma regra vale para a descrição de produto que o seed grava no
+> banco (`backend/db/seed.js`). Ver `frontend/lib/catalogo/rotulos.ts`.
 
 ### 5.2 Card de produto (`<CardCafe>`)
 
@@ -342,11 +358,25 @@ Cada rótulo tem um `?` que abre tooltip com definição em uma frase — o deta
 
 ### 5.5 Seletor de moagem (`<SeletorMoagem>`)
 
-Grade de 7 opções, cada uma com pictograma de traço fino (1,5px, estilo do contorno da serra):
-
-`Grão` · `Espresso` · `Coado (papel)` · `Coador de pano` · `Prensa francesa` · `Italiana / Moka` · `Aeropress`
+**Duas opções**, lado a lado: `Em grãos` · `Moído`.
 
 Selecionado: fundo Fuligem, texto Cal. Não selecionado: filete Fuligem-20. **Padrão: Grão.**
+Combinação que não existe no catálogo aparece **desabilitada**, nunca escondida:
+uma linha só em grão precisa mostrar que "Moído" existe na casa e falta nela.
+
+> **Corrigido em 22/08/2026.** Este documento pedia uma grade de 7 opções —
+> `Grão`, `Espresso`, `Coado (papel)`, `Coador de pano`, `Prensa francesa`,
+> `Italiana / Moka`, `Aeropress` — e o painel as tinha. **Eram sete botões para
+> dois produtos:** os seis métodos apontavam todos para o mesmo SKU moído, com
+> o mesmo preço e o mesmo estoque. A loja vende dois formatos; os métodos são
+> uma escolha de *como moer*, não seis prateleiras.
+>
+> O que se comprava e o que se prepara viraram dois tipos separados em
+> `lib/catalogo/tipos.ts`: `Moagem` (`grao | moido`) e `Metodo` (os seis). Os
+> pictogramas e os seis métodos **continuam na página**, na seção "Como
+> preparar" da PDP, que é onde eles sempre foram orientação de receita. O
+> filtro "Moagem" saiu da PLP pelo mesmo motivo: o filtro "Formato" ao lado já
+> cobre o eixo.
 
 ### 5.6 Alternador Avulso / Assinatura (`<ModoCompra>`)
 
@@ -386,6 +416,23 @@ Altura 48px (44px mínimo de toque), padding lateral 24px, Archivo 600 caixa alt
 - Logo reduzido à esquerda (≠ Ceremony, por proporção do nosso lockup).
 - **Mega menu "Cafés"** em 3 colunas: *Por linha* (Especiais SCA 80+ / Clássicos / Aromatizados) · *Por preparo* (Grão / Moído / Espresso) · *Em destaque* (2 cards com foto).
 - Sticky com fundo `--c-cal` a partir de 80px de scroll, filete inferior Fuligem-20. Sem blur/glassmorphism.
+
+> **Atualizado em 22/08/2026 — o site passou a falar três línguas.** A barra
+> ganhou um quarto item de navegação (`História`) e o `<SeletorDeIdioma>`, e
+> com eles o desenho acima só cabe a partir de **1280px**: em inglês, o cluster
+> da direita soma ~970px ao lado de um logo de 150px. Abaixo disso o acordeão
+> de tela cheia do §10 **é** a navegação — ele já leva busca, os quatro
+> destinos, a conta e o idioma, com linha de 64px e alvo de toque de sobra.
+> Isto é coerente com o próprio §10, que fixa desktop em 1200px; o corte
+> anterior, em 768px, é que era otimista.
+>
+> **Em 360px a barra tem logo, sacola e menu, e nada mais.** O atalho da conta
+> saiu dela e foi para dentro do acordeão: com ele, o cabeçalho media 401px numa
+> tela de 360 e o documento inteiro rolava de lado. A sacola fica de fora porque
+> é o atalho que a pessoa mais procura e não pode depender de abrir o menu antes.
+>
+> O seletor de idioma tem duas variantes pelo mesmo motivo: `painel` (célula de
+> 56px, dentro do acordeão) e `barra` (célula de 44×44, só a partir de 1280px).
 
 ### 5.9 Gaveta da sacola
 

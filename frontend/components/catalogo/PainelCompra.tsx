@@ -12,6 +12,9 @@ import {
 import { Botao, BotaoLink } from "@/components/ui/Botao";
 import { useSacola } from "@/lib/sacola/sacola";
 import { eventoAddToCart } from "@/lib/analytics";
+import { dicionario } from "@/lib/i18n/dicionario";
+import { href } from "@/lib/i18n/rotas";
+import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 
 /**
  * Painel de compra da PDP — estetica.md §5.5, §5.6 e §7.3.
@@ -19,12 +22,17 @@ import { eventoAddToCart } from "@/lib/analytics";
  * Reune tres pecas do documento que so fazem sentido juntas porque
  * compartilham o mesmo estado (moagem, peso, modo):
  *   §5.6 <ModoCompra>     — abas Compra unica / Assinatura, ACIMA do preco
- *   §5.5 <SeletorMoagem>  — 7 opcoes nomeadas por metodo, padrao "Grao"
+ *   §5.5 <SeletorMoagem>  — grao ou moido, padrao "Grao"
  *        peso             — 250 / 500 / 1000 g
  *
- * Combinacao inexistente e DESABILITADA, nunca escondida (§5.5): o cliente
- * escolhe "Prensa francesa", nao "grossa", e precisa ver que aquela opcao
- * existe no catalogo mesmo quando falta para este lote.
+ * O §5.5 pedia SETE botoes, um por metodo de preparo, e este painel os tinha.
+ * Eram sete opcoes para dois produtos: os seis metodos apontavam todos para o
+ * mesmo SKU moido, com o mesmo preco e o mesmo estoque. O metodo continua na
+ * pagina, na secao "Como preparar", que e onde ele sempre foi orientacao de
+ * receita em vez de escolha de prateleira.
+ *
+ * Combinacao inexistente e DESABILITADA, nunca escondida (§5.5): uma linha so
+ * em grao precisa mostrar que "Moido" existe no catalogo e falta nela.
  */
 
 const PESOS: PesoGramas[] = [250, 500, 1000];
@@ -33,7 +41,23 @@ function rotuloPeso(g: PesoGramas) {
   return g === 1000 ? "1 kg" : `${g} g`;
 }
 
-export function PainelCompra({ lote }: { lote: Lote }) {
+export function PainelCompra({
+  lote,
+  locale = LOCALE_PADRAO,
+}: {
+  lote: Lote;
+  /**
+   * O idioma da PDP. Os dois links para o Clube precisam dele: crus, eles
+   * atravessavam a fronteira do idioma no meio do funil de assinatura.
+   *
+   * O RESTO DO TEXTO DESTE PAINEL AINDA ESTA EM PORTUGUES nos tres idiomas, e
+   * isso e pendencia declarada, nao descuido — sao ~15 frases sem chave no
+   * dicionario (a Onda 3A cobriu a moldura e o editorial dos cafes, nao a
+   * interface de compra). O que ja tinha chave, "Esgotado", passou a le-la.
+   */
+  locale?: Locale;
+}) {
+  const d = dicionario(locale);
   /**
    * O estado inicial sai do catalogo, nao de constantes.
    *
@@ -243,7 +267,10 @@ export function PainelCompra({ lote }: { lote: Lote }) {
         <legend className="text-[12px] font-semibold uppercase tracking-[0.14em] text-fuligem-55">
           Moagem
         </legend>
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {/* Duas colunas em qualquer largura: com dois botões, `grid-cols-2`
+            já cabe folgado em 360 px e evita que um deles fique órfão numa
+            segunda linha quando a grade cresce. */}
+        <div className="mt-3 grid grid-cols-2 gap-2">
           {MOAGENS.map((m) => {
             const existe = moagensValidas.has(m.valor);
             return (
@@ -253,7 +280,7 @@ export function PainelCompra({ lote }: { lote: Lote }) {
                 disabled={!existe}
                 aria-pressed={moagem === m.valor}
                 title={existe ? undefined : "Não disponível para este lote"}
-                className={`border px-3 py-2.5 text-left text-[13px] transition-colors ${
+                className={`min-h-12 border px-4 py-3 text-left text-[14px] transition-colors ${
                   moagem === m.valor
                     ? "border-fuligem bg-fuligem text-cal"
                     : "border-fuligem-20 hover:border-fuligem"
@@ -264,6 +291,20 @@ export function PainelCompra({ lote }: { lote: Lote }) {
             );
           })}
         </div>
+        {/* A ponte que os sete botões faziam: quem chegava procurando
+            "Aeropress" precisa saber para onde o método foi. Aponta para a
+            seção que existe nesta mesma página, e não promete escolha de
+            método no pedido — não há campo para isso no checkout. */}
+        <p className="mt-2.5 text-[13px] text-fuligem-55">
+          Moído no dia do pedido. A moagem de cada método está em{" "}
+          <a
+            href="#como-preparar"
+            className="underline decoration-fuligem-20 underline-offset-4 hover:text-vermelho"
+          >
+            Como preparar
+          </a>
+          .
+        </p>
       </fieldset>
 
       {/* ── Peso ───────────────────────────────────────────────────────────── */}
@@ -328,7 +369,7 @@ export function PainelCompra({ lote }: { lote: Lote }) {
       {assinando ? (
         <div ref={ctaRef} className="mt-8">
           <BotaoLink
-            href={`/clube?cafe=${lote.slug}&moagem=${moagem}`}
+            href={href(locale, `/clube?cafe=${lote.slug}&moagem=${moagem}`)}
             variante="primario"
             className="w-full"
           >
@@ -368,7 +409,7 @@ export function PainelCompra({ lote }: { lote: Lote }) {
           className="flex-1 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
         >
           {indisponivel
-            ? "Esgotado"
+            ? d.comum.esgotado
             : adicionado
               ? "Na sacola ✓"
               : "Adicionar à sacola"}
@@ -425,7 +466,7 @@ export function PainelCompra({ lote }: { lote: Lote }) {
           </div>
           {assinando ? (
             <BotaoLink
-              href={`/clube?cafe=${lote.slug}&moagem=${moagem}`}
+              href={href(locale, `/clube?cafe=${lote.slug}&moagem=${moagem}`)}
               variante="primario"
               tabIndex={ctaVisivel ? -1 : undefined}
               className="shrink-0"
@@ -440,7 +481,7 @@ export function PainelCompra({ lote }: { lote: Lote }) {
               tabIndex={ctaVisivel ? -1 : undefined}
               className="shrink-0 disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
             >
-              {indisponivel ? "Esgotado" : adicionado ? "✓" : "Adicionar"}
+              {indisponivel ? d.comum.esgotado : adicionado ? "✓" : "Adicionar"}
             </Botao>
           )}
         </div>

@@ -32,7 +32,15 @@ export const metadata: Metadata = {
     default: "Café Canastra",
     template: "%s — Café Canastra",
   },
-  description: "Café que vem de cima. Torrado sob demanda, desde 1985.",
+  /**
+   * "Torrado sob demanda, desde 1985" DIZIA UMA COISA QUE NÃO ACONTECEU: a
+   * família Boaventura planta café desde 1985 (em Patrocínio, no Cerrado), a
+   * Serra da Canastra veio em 2008 e a torrefação própria é de 2016. A mesma
+   * frase foi corrigida no herói da home e em /a-serra; ela sobrevivia aqui,
+   * que é justamente o texto que o Google mostra no resultado de busca.
+   */
+  description:
+    "Café de origem única da Serra da Canastra, torrado sob demanda em lotes pequenos. Café da família desde 1985.",
   openGraph: {
     type: "website",
     locale: "pt_BR",
@@ -54,10 +62,30 @@ export const metadata: Metadata = {
 };
 
 /**
- * Layout raiz — envolve TANTO a vitrine quanto o painel legado em /dashboard.
+ * Layout raiz — envolve TUDO: a vitrine traduzida em `app/[locale]/`, o caminho
+ * de compra em `app/(transacional)/` e o painel legado em `/dashboard`.
  * Nada de estilo visual entra aqui: as classes de fonte apenas expoem
  * --fonte-ui / --fonte-dado no <html>; quem as aplica e `.vitrine`, em
  * app/globals.css. Ver o comentario no topo daquele arquivo.
+ *
+ * POR QUE O `lang` DAQUI É FIXO EM pt-BR, MESMO COM O SITE EM TRÊS IDIOMAS.
+ *
+ * O layout raiz é o único que pode renderizar `<html>`, e ele recebe apenas os
+ * parâmetros dinâmicos do PRÓPRIO caminho — que não tem nenhum. O `[locale]`
+ * está um nível abaixo e não chega aqui. As duas saídas conhecidas custam mais
+ * do que resolvem:
+ *
+ *   - ler `headers()` aqui tornaria TODA a árvore dinâmica, e a PDP estática é
+ *     a rota que justifica o projeto (estetica.md §7.3);
+ *   - múltiplos layouts raiz, um por grupo, forçam RECARGA COMPLETA DE PÁGINA
+ *     ao atravessar de um grupo para o outro — ou seja, no pulo da vitrine
+ *     para a sacola e o checkout, no meio do caminho que traz o dinheiro.
+ *
+ * Então pt-BR fica como o idioma do DOCUMENTO — que é a verdade para o painel,
+ * para todo o caminho de compra e para a vitrine em português — e o idioma da
+ * superfície traduzida é declarado um nível abaixo, no elemento que envolve
+ * todo o conteúdo visível (`app/moldura-da-loja.tsx`). Leitor de tela usa o
+ * `lang` mais interno; buscador usa o `hreflang` de `lib/i18n/rotas.ts`.
  */
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

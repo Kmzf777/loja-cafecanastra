@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
+  ESPERA_MAXIMA_MS,
   listarLotes,
   listarKits,
   obterLote,
@@ -31,6 +32,23 @@ describe("repositorio do catalogo", () => {
     const r = await listarLotes({ formato: "graos" });
     expect(r.length).toBeGreaterThan(0);
     expect(r.every((l) => l.variantes.some((v) => v.formato === "graos"))).toBe(true);
+  });
+
+  it("nao filtra mais por moagem — o eixo e do filtro Formato, e so dele", async () => {
+    /**
+     * O filtro "Moagem" saiu da PLP. Ele oferecia SETE valores (grão mais os
+     * seis métodos de preparo) para o mesmo eixo que "Formato" já cobre com
+     * grãos / moído / drip / cápsula: dois filtros para um eixo é ruído, e o de
+     * sete mentia sobre um catálogo que vende dois.
+     *
+     * O `@ts-expect-error` é metade do teste: ele quebra o build no dia em que
+     * `moagem` voltar a `Filtros`. A outra metade é a linha de baixo — um link
+     * antigo com `?moagem=grao` na URL não pode continuar escondendo linha
+     * nenhuma da vitrine em silêncio.
+     */
+    // @ts-expect-error `moagem` deixou de ser filtro do contrato
+    const comFiltroMorto = await listarLotes({ moagem: "grao" });
+    expect(comFiltroMorto).toEqual(await listarLotes());
   });
 
   it("filtra por peso do pacote", async () => {
@@ -158,5 +176,89 @@ describe("repositorio do catalogo", () => {
     expect(caixa?.preco).toBe(10970);
     expect(caixa?.linha).toBe("canela");
     expect(caixa?.imagem).toBe("/cafe-canela.png");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * O teto de espera da API — a contingência que segurava a vitrine
+ * ------------------------------------------------------------------ */
+
+/**
+ * `fetch` NÃO TEM TIMEOUT PRÓPRIO, e esta chamada não tinha nenhum.
+ *
+ * O irmão deste código, `lib/avaliacoes/servidor.ts`, já carregava o teto e a
+ * explicação: um servidor que aceita a conexão e nunca responde deixa a
+ * promessa pendurada para sempre. Aqui a consequência é maior, porque quem
+ * espera é a home, a PLP e a revalidação de toda PDP — as três param, sem log
+ * e sem erro, com o banco inteiro de pé.
+ *
+ * A saída certa já existia e nunca era alcançada: o `catch` que devolve mapa
+ * vazio e deixa a vitrine vender pelo JSON versionado. Loja com preço de ontem
+ * é melhor que loja que não abre.
+ */
+describe("a API que não responde", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("arma um sinal de aborto em toda pergunta ao banco", async () => {
+    const vistos: (AbortSignal | undefined)[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit = {}) => {
+      vistos.push(init.signal ?? undefined);
+      return { ok: true, json: async () => ({ products: [] }) };
+    });
+
+    await listarLotes();
+    await listarKits();
+
+    expect(vistos.length).toBeGreaterThan(0);
+    for (const sinal of vistos) {
+      expect(
+        sinal,
+        "fetch sem `signal`: a promessa pode pendurar para sempre",
+      ).toBeInstanceOf(AbortSignal);
+      // Armado, não disparado: um sinal já abortado cancelaria toda leitura.
+      expect(sinal!.aborted).toBe(false);
+    }
+  });
+
+  it("o teto é um número finito de segundos, como o do irmão", () => {
+    expect(Number.isFinite(ESPERA_MAXIMA_MS)).toBe(true);
+    expect(ESPERA_MAXIMA_MS).toBeGreaterThan(0);
+    expect(ESPERA_MAXIMA_MS).toBeLessThanOrEqual(5000);
+  });
+
+  it("o mecanismo do teto rejeita sozinho, e é o mesmo de servidor.ts", async () => {
+    // Prova o desenho em 20 ms para o de verdade não custar 3 s na suíte: é
+    // `AbortSignal.timeout` quem dispara, e é `TimeoutError` que chega no
+    // `catch` do repositório como qualquer outra falha de rede.
+    const sinal = AbortSignal.timeout(20);
+    await new Promise((resolva) => sinal.addEventListener("abort", resolva));
+    expect((sinal.reason as Error).name).toBe("TimeoutError");
+  });
+
+  it("estourado o prazo, a vitrine cai para o JSON e continua vendendo", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new DOMException("The operation was aborted.", "TimeoutError");
+    });
+
+    const lotes = await listarLotes();
+    const classico = lotes.find((l) => l.slug === "classico");
+
+    // A loja inteira de pé, com o preço versionado do JSON.
+    expect(lotes.length).toBeGreaterThanOrEqual(5);
+    expect(precoMinimo(classico!)).toBe(3970);
+    // E sem `produtoId`: é assim que o PainelCompra sabe avisar em vez de
+    // fingir que guardou o item.
+    expect(classico!.variantes.every((v) => v.produtoId === undefined)).toBe(true);
+  });
+
+  it("a PDP e os kits caem para o JSON pelo mesmo caminho", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new DOMException("The operation was aborted.", "TimeoutError");
+    });
+
+    expect((await obterLote("suave"))?.slug).toBe("suave");
+    expect(await listarKits()).toHaveLength(3);
   });
 });

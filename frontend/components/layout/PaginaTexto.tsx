@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { dicionario } from "@/lib/i18n/dicionario";
+import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 
 /**
  * Moldura das paginas institucionais.
@@ -6,14 +8,21 @@ import type { ReactNode } from "react";
  * Medida de leitura de 62ch (estetica.md §4.2: 60-72 caracteres, nunca
  * full-width). O corpo em Archivo, os titulos de secao em Archivo 600 — a
  * Redaction so entra acima de 40px, o que aqui vale apenas para o <h1>.
+ *
+ * O `locale` existe por causa de UMA LINHA: "Atualizado em {data}". O título e
+ * o corpo já chegam traduzidos das páginas, mas este rótulo morava aqui
+ * cravado em português, e em `/en` a página saía com "Atualizado em August
+ * 2026" — meia frase em cada idioma, no primeiro elemento abaixo do título.
  */
 export function PaginaTexto({
   titulo,
   atualizacao,
+  locale = LOCALE_PADRAO,
   children,
 }: {
   titulo: string;
   atualizacao: string;
+  locale?: Locale;
   children: ReactNode;
 }) {
   return (
@@ -22,7 +31,7 @@ export function PaginaTexto({
         {titulo}
       </h1>
       <p className="mt-4 font-dado text-[12px] uppercase tracking-[0.1em] text-fuligem-55">
-        Atualizado em {atualizacao}
+        {dicionario(locale).comum.atualizadoEm} {atualizacao}
       </p>
 
       <div

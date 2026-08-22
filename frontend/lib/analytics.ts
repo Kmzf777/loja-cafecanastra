@@ -145,7 +145,7 @@ export function eventoBeginCheckout(itens: ItemAnalytics[]): void {
  * Compra fechada.
  *
  * PONTO DE DISPARO (Onda 2-D): a confirmação do checkout —
- * `concluir()` em app/(vitrine)/checkout/page.tsx, UMA vez por pedido (uma
+ * `concluir()` em app/(transacional)/checkout/page.tsx, UMA vez por pedido (uma
  * ref barra StrictMode e re-render), com `transaction_id` = orderId real e
  * itens identificados pelo skuLoja (o mesmo id do add_to_cart e do
  * begin_checkout, senão o funil não fecha).

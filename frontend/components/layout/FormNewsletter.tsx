@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Botao } from "@/components/ui/Botao";
 import { API_BASE } from "@/lib/api-base";
+import type { Dicionario } from "@/lib/i18n/dicionario";
 
 /**
  * Newsletter do rodapé (estetica.md §5.10: "quatro colunas + newsletter").
@@ -26,7 +27,7 @@ type Estado =
   | { fase: "obrigado" }
   | { fase: "erro"; mensagem: string };
 
-export function FormNewsletter() {
+export function FormNewsletter({ t }: { t: Dicionario["newsletter"] }) {
   const [email, setEmail] = useState("");
   const [estado, setEstado] = useState<Estado>({ fase: "parado" });
 
@@ -51,13 +52,13 @@ export function FormNewsletter() {
         fase: "erro",
         mensagem:
           resposta.status === 400
-            ? "Confira o e-mail digitado."
-            : "Não deu agora. Tente de novo em instantes.",
+            ? t.emailInvalido
+            : t.falhou,
       });
     } catch {
       setEstado({
         fase: "erro",
-        mensagem: "Não deu agora. Tente de novo em instantes.",
+        mensagem: t.falhou,
       });
     }
   }
@@ -65,21 +66,21 @@ export function FormNewsletter() {
   return (
     <div>
       <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-juta">
-        Novidades
+        {t.titulo}
       </h2>
       <p className="mt-4 max-w-[44ch] text-[15px] text-cal/80">
-        Café novo e o que acontece na serra, no seu e-mail.
+        {t.chamada}
       </p>
 
       {estado.fase === "obrigado" ? (
         <p aria-live="polite" className="mt-4 text-[15px] text-cal">
-          Pronto. Seu e-mail está na lista.
+          {t.obrigado}
         </p>
       ) : (
         <form onSubmit={assinar} className="mt-4">
           <div className="flex max-w-[420px] flex-col gap-3 sm:flex-row">
             <label htmlFor="newsletter-email" className="sr-only">
-              E-mail
+              {t.email}
             </label>
             <input
               id="newsletter-email"
@@ -87,7 +88,7 @@ export function FormNewsletter() {
               required
               maxLength={254}
               autoComplete="email"
-              placeholder="seu@email.com"
+              placeholder={t.exemploDeEmail}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="h-12 w-full border border-cal/25 bg-transparent px-3 text-[15px] text-cal placeholder:text-cal/40 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
@@ -98,7 +99,9 @@ export function FormNewsletter() {
               disabled={estado.fase === "enviando"}
               className="shrink-0 disabled:opacity-60"
             >
-              {estado.fase === "enviando" ? "Enviando…" : "Assinar"}
+              {estado.fase === "enviando"
+                ? t.enviando
+                : t.assinar}
             </Botao>
           </div>
           <p aria-live="polite" className="mt-2 min-h-5 text-[13px] text-cal/70">

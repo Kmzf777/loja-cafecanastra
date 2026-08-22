@@ -765,6 +765,136 @@ describe("duas abas entrando ao mesmo tempo", () => {
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * A sacola gravada ANTES de a moagem virar dois valores
+ * ------------------------------------------------------------------ */
+
+/**
+ * O PIOR BUG POSSÍVEL AQUI É A SACOLA SUMIR NO LOGIN, e esta é a única mudança
+ * do catálogo capaz de causá-lo.
+ *
+ * Até a separação de `Moagem` e `Metodo`, a PDP gravava no item o rótulo do
+ * MÉTODO escolhido — "Espresso", "Aeropress", "Coado (papel)" —, e o `cart` de
+ * quem montou a sacola antes da mudança ainda carrega esses rótulos. Eles não
+ * existem mais no contrato.
+ *
+ * O que este bloco fixa é o desfecho: o item vira "Moído", que é o que ele
+ * SEMPRE FOI de verdade (os seis métodos eram o mesmo SKU, o mesmo preço e o
+ * mesmo estoque), continua na sacola e não derruba a fusão. Nenhum centavo e
+ * nenhuma unidade mudam de mão — só o rótulo passa a dizer a verdade.
+ */
+describe("sacola de antes da mudança de moagem", () => {
+  it.each([
+    ["Espresso"],
+    ["Aeropress"],
+    ["Coado (papel)"],
+    ["Prensa francesa"],
+    ["Italiana / Moka"],
+    ["Coador de pano"],
+    // Os VALORES do contrato antigo, e não só os rótulos: o painel legado
+    // grava nesta mesma chave e a sacola pode ter vindo dele.
+    ["aeropress"],
+    ["espresso"],
+    // Coisa que nunca esteve no contrato. Por eliminação é moído: se fosse
+    // grão, diria grão. Sumir com o item por causa do rótulo seria pior.
+    ["turbo"],
+  ])("item com moagem %s funde como Moído, e NÃO some", (antiga) => {
+    const [limpo] = limparItens([item({ moagem: antiga })]);
+
+    expect(limpo, `a sacola perdeu o item de moagem "${antiga}"`).toBeDefined();
+    expect(limpo.product_id).toBe(UUID_A);
+    expect(limpo.quantity).toBe(2);
+    expect(limpo.moagem).toBe("Moído");
+  });
+
+  it.each([["Grão"], ["grao"], ["grão"], ["Em grãos"]])(
+    "%s continua grão — a moagem que existe não é reescrita",
+    (grao) => {
+      expect(limparItens([item({ moagem: grao })])[0]?.moagem).toBe("Grão");
+    },
+  );
+
+  it("item sem moagem continua sem moagem — nada é inventado", () => {
+    expect(limparItens([item()])[0]).not.toHaveProperty("moagem");
+  });
+
+  it("dois métodos do MESMO pacote viram uma linha só, com a soma", () => {
+    // "Espresso 2" e "Aeropress 3" do mesmo SKU eram, no estoque, cinco
+    // pacotes moídos. Sem a normalização eles seguiriam como duas chaves
+    // diferentes em `chaveDoItem` e o cliente veria duas linhas idênticas.
+    const local = limparItens([
+      item({ moagem: "Espresso", quantity: 2 }),
+      item({ moagem: "Aeropress", quantity: 3 }),
+    ]);
+
+    const somada = somarSacolas(local, []);
+    expect(somada).toHaveLength(1);
+    expect(somada[0].moagem).toBe("Moído");
+    expect(somada[0].quantity).toBe(5);
+  });
+
+  it("a fusão inteira roda: o item vai para a RPC já como Moído", async () => {
+    dados.set(
+      CHAVE_DA_SACOLA,
+      JSON.stringify([item({ moagem: "Aeropress", quantity: 2 })]),
+    );
+    cenario.itensDaConta = [];
+
+    const resultado = await fundirSacola();
+
+    expect(resultado.situacao).toBe("fundida");
+    expect(cenario.chamadas).toHaveLength(1);
+    expect(
+      (cenario.chamadas[0]?.argumentos as { itens: { moagem: string }[] }).itens,
+    ).toEqual([expect.objectContaining({ produto_id: UUID_A, moagem: "Moído" })]);
+  });
+
+  /**
+   * A CONTA TAMBÉM TEM O RÓTULO VELHO. `canastra.carrinho_itens` guarda o que
+   * a fusão de antes mandou, e nesta fase nada apaga linha de lá — a releitura
+   * traz "Espresso" de volta. Se a volta não fosse normalizada junto, a sacola
+   * relida voltaria a divergir da local e a próxima carga de página acharia
+   * pendência onde não há.
+   */
+  it("a sacola relida da conta volta normalizada, sem duplicar a linha", async () => {
+    dados.set(CHAVE_DA_SACOLA, "[]");
+    cenario.itensDaConta = [
+      {
+        produto_id: UUID_A,
+        quantidade: 2,
+        preco: 39.9,
+        nome: "Canastra Tradicional",
+        imagem: "/cafe.jpg",
+        tamanho: "Pacote com 250 g",
+        moagem: "Espresso",
+      },
+      {
+        produto_id: UUID_A,
+        quantidade: 3,
+        preco: 39.9,
+        nome: "Canastra Tradicional",
+        imagem: "/cafe.jpg",
+        tamanho: "Pacote com 250 g",
+        moagem: "Aeropress",
+      },
+    ];
+
+    const resultado = await fundirSacola();
+
+    expect(resultado.situacao).toBe("fundida");
+    const itens = resultado.situacao === "fundida" ? resultado.itens : [];
+    expect(itens).toHaveLength(1);
+    expect(itens[0]?.moagem).toBe("Moído");
+    expect(itens[0]?.quantity).toBe(5);
+
+    // E a visita seguinte não acha pendência nenhuma: é o que prova que os
+    // dois lados falam a mesma língua depois da normalização.
+    reiniciarFusao();
+    expect((await fundirSacola()).situacao).toBe("semNovidade");
+    expect(falso.rpc).not.toHaveBeenCalled();
+  });
+});
+
 describe("as verificações de compilação existem e nunca rodam", () => {
   it("continua referenciada para não parecer código morto", () => {
     expect(typeof verificacoesDeCompilacao).toBe("function");

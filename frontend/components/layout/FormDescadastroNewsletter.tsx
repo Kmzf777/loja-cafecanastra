@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Botao } from "@/components/ui/Botao";
 import { API_BASE } from "@/lib/api-base";
+import type { Dicionario } from "@/lib/i18n/dicionario";
 
 /**
  * "Retirar o consentimento de e-mail" — a saída da lista de novidades.
@@ -33,7 +34,7 @@ type Estado =
   | { fase: "pronto" }
   | { fase: "erro"; mensagem: string };
 
-export function FormDescadastroNewsletter() {
+export function FormDescadastroNewsletter({ t }: { t: Dicionario["newsletter"] }) {
   const [email, setEmail] = useState("");
   const [estado, setEstado] = useState<Estado>({ fase: "parado" });
 
@@ -58,13 +59,13 @@ export function FormDescadastroNewsletter() {
         fase: "erro",
         mensagem:
           resposta.status === 400
-            ? "Confira o e-mail digitado."
-            : "Não deu agora. Tente de novo em instantes.",
+            ? t.emailInvalido
+            : t.falhou,
       });
     } catch {
       setEstado({
         fase: "erro",
-        mensagem: "Não deu agora. Tente de novo em instantes.",
+        mensagem: t.falhou,
       });
     }
   }
@@ -72,19 +73,18 @@ export function FormDescadastroNewsletter() {
   return (
     <div className="mt-6 max-w-[52ch] border border-fuligem-20 bg-cal-puro p-5">
       <div className="text-[14px] leading-relaxed text-fuligem-80">
-        Digite o e-mail que você cadastrou e ele sai da lista de novidades. Os
-        avisos sobre os seus pedidos continuam chegando.
+        {t.sairTexto}
       </div>
 
       {estado.fase === "pronto" ? (
         <div aria-live="polite" className="mt-4 text-[15px] text-fuligem">
-          Pronto. Esse e-mail não está mais na lista de novidades.
+          {t.sairPronto}
         </div>
       ) : (
         <form onSubmit={descadastrar} className="mt-4">
           <div className="flex flex-col gap-3 sm:flex-row">
             <label htmlFor="descadastro-email" className="sr-only">
-              E-mail
+              {t.email}
             </label>
             <input
               id="descadastro-email"
@@ -92,7 +92,7 @@ export function FormDescadastroNewsletter() {
               required
               maxLength={254}
               autoComplete="email"
-              placeholder="seu@email.com"
+              placeholder={t.exemploDeEmail}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="h-12 w-full border border-fuligem/25 bg-transparent px-3 text-[15px] text-fuligem placeholder:text-fuligem-55 focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
@@ -103,7 +103,9 @@ export function FormDescadastroNewsletter() {
               disabled={estado.fase === "enviando"}
               className="shrink-0 disabled:opacity-60"
             >
-              {estado.fase === "enviando" ? "Enviando…" : "Sair da lista"}
+              {estado.fase === "enviando"
+                ? t.enviando
+                : t.sairBotao}
             </Botao>
           </div>
           <div

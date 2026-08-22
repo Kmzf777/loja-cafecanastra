@@ -67,6 +67,7 @@
  * não sabe, funde apenas o que não tem selo e relê a conta em vez de somar tudo
  * de novo. Ver `novoSelo()` e o bloco de divergência em `executarFusao`.
  */
+import { MOAGENS } from "../catalogo/tipos";
 import { recuperarSessao } from "../conta/sessao";
 import { clienteNavegador } from "../supabase/cliente";
 import type { ItemParaFundir, Tabelas } from "../supabase/tipos";
@@ -182,6 +183,38 @@ function chaveDoItem(item: { product_id: string; moagem?: string }): string {
 }
 
 /**
+ * O rótulo de moagem que a sacola guarda hoje, a partir do que ela guardava
+ * antes — e é a única razão de este módulo conhecer o catálogo.
+ *
+ * O QUE ACONTECEU. Até a moagem virar dois valores (`grao` | `moido`), a PDP
+ * gravava no item o rótulo do MÉTODO escolhido: "Espresso", "Aeropress",
+ * "Coado (papel)". Esses rótulos saíram do contrato, e o `cart` de quem montou
+ * a sacola antes ainda os carrega. Sem esta função eles atravessariam a fusão
+ * intactos: o item apareceria com um rótulo que não existe mais, e duas linhas
+ * do MESMO pacote ("Espresso" e "Aeropress") continuariam sendo duas chaves
+ * distintas em `chaveDoItem` — duas linhas idênticas na tela do cliente.
+ *
+ * POR QUE O DESCONHECIDO VIRA MOÍDO, E POR QUE ISSO É SEGURO. Os seis métodos
+ * eram o MESMO SKU, o mesmo preço e o mesmo estoque do pacote moído: nenhum
+ * centavo e nenhuma unidade mudam de mão na conversão, só o rótulo. E, por
+ * eliminação, o que não diz grão não é grão — se fosse, diria. Perder o item
+ * por causa de um rótulo velho seria muito pior: sacola que evapora no login é
+ * a pior falha possível deste módulo.
+ *
+ * As quatro grafias de grão são aceitas porque o valor pode ter vindo do
+ * contrato (`grao`), do rótulo de tela ("Grão"), do rótulo de FORMATO
+ * ("Em grãos") ou do painel legado.
+ */
+const GRAO = /\bgr[aã]os?\b/;
+
+export function normalizarMoagem(bruto: string): string {
+  // Os rótulos saem de MOAGENS e não de literais: renomear "Moído" na vitrine
+  // sem trazer a sacola junto criaria de novo duas grafias para a mesma coisa.
+  const [grao, moido] = MOAGENS;
+  return GRAO.test(bruto.toLowerCase()) ? grao.rotulo : moido.rotulo;
+}
+
+/**
  * Descarta no NAVEGADOR o que a RPC descartaria no banco — e avisa.
  *
  * POR QUE NÃO DEIXAR O BANCO FILTRAR, já que ele filtra: porque o filtro de lá é
@@ -237,8 +270,13 @@ export function limparItens(bruto: unknown[]): ItemDaSacola[] {
       quantity: Math.min(quantidade, TETO_DE_QUANTIDADE),
       image: typeof item.image === "string" ? item.image : "",
       size: typeof item.size === "string" ? item.size : "",
+      // A normalização é AQUI porque `limparItens` é o único funil por onde
+      // passam as duas listas que a subtração compara: a sacola local e a
+      // base gravada. Normalizar só um dos lados faria uma sacola já fundida
+      // voltar a parecer pendente, que é exatamente o desastre que o selo
+      // existe para evitar. Ver `normalizarMoagem`.
       ...(typeof item.moagem === "string" && item.moagem
-        ? { moagem: item.moagem }
+        ? { moagem: normalizarMoagem(item.moagem) }
         : {}),
       // O selo atravessa a limpeza: sem isto, passar a sacola por aqui apagaria
       // a prova de que ela já está na conta, e a fusão seguinte dobraria tudo.
@@ -345,7 +383,12 @@ export function traduzirDaConta(linhas: LinhaDaConta[]): ItemDaSacola[] {
     quantity: Number(linha.quantidade) || 0,
     image: linha.imagem ?? "",
     size: linha.tamanho ?? "",
-    ...(linha.moagem ? { moagem: linha.moagem } : {}),
+    // A CONTA TAMBÉM GUARDA O RÓTULO VELHO: nesta fase nada apaga linha de
+    // `canastra.carrinho_itens`, então uma fusão de antes da mudança deixou
+    // "Espresso" gravado lá para sempre. Sem normalizar na volta, a sacola
+    // relida divergiria da local — que já vem normalizada por `limparItens` —
+    // e a visita seguinte acharia pendência onde não há.
+    ...(linha.moagem ? { moagem: normalizarMoagem(linha.moagem) } : {}),
   }));
 }
 
@@ -723,5 +766,8 @@ async function lerSacolaDaConta(
   // Esta linha é o que transforma uma coluna renomeada numa migração em erro de
   // compilação, em vez de uma sacola vazia em produção.
   const linhas: LinhaDaConta[] = data ?? [];
-  return traduzirDaConta(linhas);
+  // `somarSacolas` colapsa o que a normalização da moagem acabou de tornar
+  // igual: "Espresso 2" e "Aeropress 3" do mesmo pacote eram, no estoque,
+  // cinco moídos, e viriam da conta como duas linhas idênticas na tela.
+  return somarSacolas(traduzirDaConta(linhas), []);
 }

@@ -25,6 +25,28 @@ import type { Filtros, Kit, Lote, Ordenacao, Variante } from "./tipos";
 /** Quanto tempo o Next guarda a resposta da API antes de perguntar de novo. */
 const SEGUNDOS_DE_CACHE = 60;
 
+/**
+ * TETO DE ESPERA DA API, e ele faltava aqui.
+ *
+ * `fetch` nao tem timeout proprio. Uma API que aceita a conexao e nunca
+ * responde — o processo travado, a conexao com o banco esgotada, o container
+ * subindo — deixa esta promessa pendurada para SEMPRE. Nao e hipotese: e o
+ * mesmo defeito que `lib/avaliacoes/servidor.ts` ja documentava e resolvia com
+ * 3 segundos, e aqui ele custa mais caro, porque quem espera e a home, a PLP e
+ * a revalidacao de toda PDP. As tres param juntas, sem log e sem erro, com o
+ * banco perfeitamente de pe.
+ *
+ * A alternativa a esperar ja estava escrita e nunca era alcancada: o `catch`
+ * abaixo devolve mapa vazio e a vitrine vende pelo JSON versionado. Loja com
+ * preco de ontem e melhor que loja que nao abre, e o checkout reconfere preco
+ * e estoque no servidor antes de cobrar.
+ *
+ * 3 segundos, o MESMO numero do irmao, de proposito: sao duas leituras de
+ * contingencia do mesmo tipo, e dois tetos diferentes seriam duas conversas
+ * sobre o mesmo problema.
+ */
+export const ESPERA_MAXIMA_MS = 3000;
+
 type ProdutoDaApi = {
   product_id: string;
   sku: string | null;
@@ -36,6 +58,10 @@ async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
   try {
     const res = await fetch(`${API_BASE}/dashboard?limit=200`, {
       next: { revalidate: SEGUNDOS_DE_CACHE },
+      // Estourado o prazo, o `fetch` rejeita com TimeoutError e o `catch`
+      // logo abaixo trata isso como qualquer outra falha de rede: mapa vazio,
+      // vitrine no JSON. Ver `ESPERA_MAXIMA_MS`.
+      signal: AbortSignal.timeout(ESPERA_MAXIMA_MS),
     });
     if (!res.ok) return new Map();
 
@@ -47,6 +73,8 @@ async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
     );
   } catch {
     // Silencioso de proposito: a vitrine cai para o JSON e continua vendendo.
+    // Cai aqui tanto a API fora do ar quanto a API que passou do teto de
+    // espera — para a loja, sao a mesma coisa.
     return new Map();
   }
 }
@@ -107,7 +135,6 @@ export async function listarLotes(
     if (filtros.linha && lote.linha !== filtros.linha) return false;
     if (filtros.pontoTorraMin && lote.pontoTorra < filtros.pontoTorraMin) return false;
     if (filtros.pontoTorraMax && lote.pontoTorra > filtros.pontoTorraMax) return false;
-    if (filtros.moagem && !lote.variantes.some((v) => v.moagem === filtros.moagem)) return false;
     if (filtros.formato) {
       const emVariantes = lote.variantes.some((v) => v.formato === filtros.formato);
       const emEspeciais = lote.formatosEspeciais.some(

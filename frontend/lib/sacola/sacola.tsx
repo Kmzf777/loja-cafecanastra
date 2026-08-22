@@ -10,7 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { clienteNavegador } from "@/lib/supabase/cliente";
-import { CHAVE_DA_SACOLA, fundirSacola, reiniciarFusao } from "./fusao";
+import {
+  CHAVE_DA_SACOLA,
+  fundirSacola,
+  normalizarMoagem,
+  reiniciarFusao,
+} from "./fusao";
 
 /**
  * Sacola da vitrine.
@@ -109,7 +114,16 @@ function lerLocal(): ItemDaSacola[] {
   if (typeof window === "undefined") return [];
   try {
     const bruto = JSON.parse(localStorage.getItem(CHAVE) || "[]");
-    return Array.isArray(bruto) ? bruto : [];
+    if (!Array.isArray(bruto)) return [];
+    // O MESMO acerto que a fusão faz, para quem NUNCA entra na conta: a sacola
+    // montada antes de a moagem virar dois valores guarda o rótulo do método
+    // ("Aeropress", "Espresso"), que saiu do contrato. Aqui é só o que a tela
+    // mostra — quantidade, preço e `product_id` não são tocados.
+    return (bruto as ItemDaSacola[]).map((i) =>
+      i && typeof i.moagem === "string" && i.moagem
+        ? { ...i, moagem: normalizarMoagem(i.moagem) }
+        : i,
+    );
   } catch {
     return [];
   }

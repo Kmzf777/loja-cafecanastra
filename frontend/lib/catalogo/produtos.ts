@@ -17,13 +17,15 @@
 // quadrado distorce a imagem e estoura o CLS, que o §10 exige abaixo de 0,05.
 
 import bruto from "../../../data/catalogo-canastra.json";
+import editorialTraduzido from "../../../data/catalogo-canastra.i18n.json";
+import { LOCALES, LOCALE_PADRAO } from "../i18n/tipos";
+import type { Locale } from "../i18n/tipos";
 import type {
   Formato,
   FormatoEspecial,
   Kit,
   Linha,
   Lote,
-  Moagem,
   Preparo,
   PesoGramas,
   Variante,
@@ -31,12 +33,6 @@ import type {
 
 type ProdutoBruto = (typeof bruto.produtos)[number];
 type LinhaBruta = (typeof bruto.linhas)[number];
-
-/** Métodos que a casa mói sob demanda a partir do mesmo SKU "moído". */
-const METODOS: Moagem[] = [
-  "espresso", "coado-papel", "coador-pano",
-  "prensa-francesa", "italiana-moka", "aeropress",
-];
 
 /**
  * Receitas de preparo por perfil de torra.
@@ -67,10 +63,15 @@ const ehPeso = (g: number): g is PesoGramas => g === 250 || g === 500 || g === 1
 /**
  * Uma linha do catálogo bruto vira as variantes compráveis da PDP.
  *
- * "em grãos" produz uma variante (moagem = grão). "moído" produz seis — uma por
- * método — todas apontando para o MESMO `skuLoja`, com o mesmo preço e o mesmo
- * estoque, porque na loja é um produto só. Kits ficam de fora: uma caixa com um
- * pacote de cada linha não é uma variante de nenhuma delas.
+ * UM SKU DE PACOTE, UMA VARIANTE. Até esta mudança, "moído" produzia SEIS — uma
+ * por método de preparo — todas com o MESMO `skuLoja`, o mesmo preço e o mesmo
+ * estoque, e o comentário daqui admitia isso sem tirar a consequência: a PDP
+ * mostrava sete botões para dois produtos e o `productJsonLd` precisava
+ * desduplicar as ofertas na saída. Os seis métodos continuam vivos onde sempre
+ * pertenceram, na seção "Como preparar" (ver `Metodo` em tipos.ts).
+ *
+ * Kits ficam de fora: uma caixa com um pacote de cada linha não é variante de
+ * nenhuma delas.
  */
 function variantesDa(linha: LinhaBruta): Variante[] {
   const out: Variante[] = [];
@@ -91,13 +92,11 @@ function variantesDa(linha: LinhaBruta): Variante[] {
       estoque: p.estoque,
     };
 
-    if (p.formato === "graos") {
-      out.push({ ...base, sku: `${p.sku}-grao`, moagem: "grao" });
-    } else {
-      for (const moagem of METODOS) {
-        out.push({ ...base, sku: `${p.sku}-${moagem}`, moagem });
-      }
-    }
+    // O `sku` da vitrine continua sendo `<skuLoja>-<moagem>`: é chave de
+    // combinação da PDP, e mantê-lo derivado do skuLoja é o que deixa a
+    // rastreabilidade legível num console.log.
+    const moagem = p.formato === "graos" ? "grao" : "moido";
+    out.push({ ...base, sku: `${p.sku}-${moagem}`, moagem });
   }
 
   return out;
@@ -141,7 +140,12 @@ function monta(linha: LinhaBruta): Lote {
     linha: linha.slug as Linha,
     notas: linha.notas,
     pontoTorra,
-    sca: bruto.marca.sca,
+    // A SCA vem da LINHA, não da marca: `bruto.marca.sca` é o piso da coleção
+    // e continua sendo, mas duas linhas têm nota própria publicada (86 e 75) e
+    // a nota vence o piso. Ler a marca aqui é o que anunciava "SCA 80+" num
+    // café de 75 pontos. Ver o comentário de `sca` em tipos.ts.
+    sca: linha.sca,
+    scaExata: linha.scaExata,
     descricao: linha.descricao,
     torra: linha.torra,
     corpo: linha.corpo,
@@ -173,6 +177,107 @@ function monta(linha: LinhaBruta): Lote {
 }
 
 export const LOTES: Lote[] = bruto.linhas.map(monta);
+
+/**
+ * O MESMO catálogo, em inglês e espanhol.
+ *
+ * A tradução mora fora de `data/catalogo-canastra.json` de propósito: aquele
+ * arquivo é lido também por `backend/db/seed.js`, e mudar a forma dele para
+ * caber três idiomas arriscaria o caminho de venda — seed, preço, SKU, nota
+ * fiscal — para ganhar texto. `data/catalogo-canastra.i18n.json` entra por
+ * fora, indexado por slug; se ele sumir, a loja continua vendendo, em
+ * português.
+ *
+ * O DESENHO É O DE `aplicarDadosAoVivo()` em repositorio.ts, e isso não é
+ * coincidência: lá o comercial do banco vence o editorial do JSON campo a
+ * campo, e o que não veio fica como estava. Aqui o texto traduzido vence o
+ * português campo a campo, e o que não veio fica em português. Duas camadas,
+ * uma regra só — e ela é a razão de o idioma nunca produzir tela vazia.
+ *
+ * As duas camadas COMPÕEM, nesta ordem: o repositório sobrepõe preço e estoque,
+ * a página traduz o texto. Por isso `traduzirLote` recebe o lote pronto em vez
+ * de reler o JSON — reler devolveria o preço de ontem a quem trocou de idioma.
+ */
+
+/**
+ * O que muda de idioma, e só isso.
+ *
+ * `nome` está no contrato mas nenhuma linha o usa: nome de linha é nome
+ * próprio, e "Canastra Clássico" é o que está impresso no pacote que chega na
+ * casa da pessoa. Fica aqui porque um dia pode haver um nome que se traduza —
+ * e porque é ele que dá o caso vivo de queda para o português no teste.
+ *
+ * Preço, estoque, SKU e `produtoId` NÃO entram: são o mesmo número nos três
+ * idiomas, e um segundo lugar para editá-los é um segundo lugar onde eles
+ * podem estar errados.
+ */
+type EditorialTraduzido = Partial<
+  Pick<Lote, "nome" | "descricao" | "torra" | "corpo" | "preparoSugerido" | "notas">
+>;
+
+const CAMPOS_TRADUZIVEIS: readonly (keyof EditorialTraduzido)[] = [
+  "nome",
+  "descricao",
+  "torra",
+  "corpo",
+  "preparoSugerido",
+  "notas",
+];
+
+type TraducoesPorSlug = Record<string, Partial<Record<Locale, EditorialTraduzido>>>;
+
+// A conversão passa por `unknown` porque o JSON tem duas formas: as cinco
+// linhas e o `_leia_me`, que é prosa de documentação e não casa com nenhum
+// slug do catálogo. `traducaoDe` é o único ponto que lê este mapa, e ele
+// procura por slug — o que não for slug nunca é alcançado.
+const TRADUCOES = editorialTraduzido as unknown as TraducoesPorSlug;
+
+/** Campo ausente, string em branco ou lista vazia são a mesma coisa: não há tradução. */
+function temConteudo(valor: string | string[] | undefined): boolean {
+  if (valor === undefined) return false;
+  return Array.isArray(valor) ? valor.length > 0 : valor.trim().length > 0;
+}
+
+/**
+ * Sobrepõe o editorial traduzido sobre UM lote, campo a campo.
+ *
+ * Recebe o lote já montado — inclusive com preço e estoque do banco, se o
+ * repositório já os aplicou — e devolve o mesmo lote quando não há nada a
+ * traduzir. Devolver o próprio objeto no caso do português não é micro-otimização:
+ * é o que garante que exista uma versão só do catálogo em pt na memória.
+ */
+export function traduzirLote(lote: Lote, locale: Locale): Lote {
+  if (locale === LOCALE_PADRAO) return lote;
+
+  const traducao = TRADUCOES[lote.slug]?.[locale];
+  if (!traducao) return lote;
+
+  const fundido: Lote = { ...lote };
+  for (const campo of CAMPOS_TRADUZIVEIS) {
+    const valor = traducao[campo];
+    if (!temConteudo(valor)) continue;
+    // `Object.assign` em vez de `fundido[campo] = valor`: `campo` percorre as
+    // chaves de um `Pick` de `Lote`, então os tipos casam campo a campo — mas
+    // o TypeScript não consegue provar isso dentro do laço, e a alternativa
+    // seria um cast por campo.
+    Object.assign(fundido, { [campo]: valor });
+  }
+  return fundido;
+}
+
+const LOTES_POR_IDIOMA = Object.fromEntries(
+  LOCALES.map((locale) => [locale, LOTES.map((l) => traduzirLote(l, locale))]),
+) as Record<Locale, Lote[]>;
+
+/**
+ * O catálogo inteiro num idioma. Para `pt` são os próprios `LOTES`.
+ *
+ * Quem já tem o lote na mão — a PDP, que o recebeu do repositório com preço ao
+ * vivo — usa `traduzirLote`. Esta função é para quem parte do catálogo.
+ */
+export function lotesDoLocale(locale: Locale): Lote[] {
+  return LOTES_POR_IDIOMA[locale];
+}
 
 /** Dados institucionais verificados, para as páginas de marca. */
 export const MARCA = bruto.marca;

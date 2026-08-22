@@ -3,6 +3,9 @@ import Link from "next/link";
 import type { Lote } from "@/lib/catalogo/tipos";
 import { precoMinimo, formatarPreco, temEstoque } from "@/lib/catalogo/repositorio";
 import { LINHAS, rotuloNota } from "@/lib/catalogo/rotulos";
+import { dicionario } from "@/lib/i18n/dicionario";
+import { href } from "@/lib/i18n/rotas";
+import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 import { SeloSCA } from "./SeloSCA";
 import { PontoTorra } from "./PontoTorra";
 
@@ -23,7 +26,20 @@ import { PontoTorra } from "./PontoTorra";
  *    o que recorta o quadrado — decisao de enquadramento provisoria.
  */
 
-export function CardCafe({ lote }: { lote: Lote }) {
+export function CardCafe({
+  lote,
+  locale = LOCALE_PADRAO,
+}: {
+  lote: Lote;
+  /**
+   * O idioma da página que renderiza o card. Tem padrão porque o card aparece
+   * em cinco lugares e um deles — o "not-found" da PDP — não recebe os
+   * parâmetros de rota do App Router e por isso não sabe o idioma. Está
+   * documentado no topo daquele arquivo.
+   */
+  locale?: Locale;
+}) {
+  const d = dicionario(locale);
   const linha = LINHAS[lote.linha];
   const preco = precoMinimo(lote);
   const disponivel = temEstoque(lote);
@@ -31,7 +47,9 @@ export function CardCafe({ lote }: { lote: Lote }) {
   return (
     <article className="group relative h-full">
       <Link
-        href={`/cafes/${lote.slug}`}
+        // O link mais clicado do site inteiro. Cru, ele tirava do inglês
+        // qualquer pessoa que clicasse num café a partir de /en/cafes.
+        href={href(locale, `/cafes/${lote.slug}`)}
         className="flex h-full flex-col border border-fuligem-20 bg-cal-puro transition-[box-shadow,border-color,transform] duration-[320ms] ease-canastra hover:-translate-x-1 hover:-translate-y-1 hover:border-vermelho hover:shadow-[4px_4px_0_var(--color-fuligem)] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:outline-vermelho"
       >
         {/* Fita da linha: a cor vem da embalagem, nunca inventada (§4.1). */}
@@ -61,6 +79,7 @@ export function CardCafe({ lote }: { lote: Lote }) {
           />
           <SeloSCA
             sca={lote.sca}
+            scaExata={lote.scaExata}
             variante="compacto"
             className="absolute bottom-3 right-3"
           />
@@ -95,12 +114,12 @@ export function CardCafe({ lote }: { lote: Lote }) {
           <p className="mt-auto flex items-baseline gap-2 pt-4">
             {preco === null ? (
               <span className="text-[13px] uppercase tracking-[0.14em] text-fuligem-55">
-                Indisponível
+                {d.comum.indisponivel}
               </span>
             ) : (
               <>
                 <span className="text-[11px] uppercase tracking-[0.14em] text-fuligem-55">
-                  a partir de
+                  {d.comum.aPartirDe}
                 </span>
                 <span
                   className="font-dado text-[17px] tracking-[0.02em]"
@@ -112,7 +131,7 @@ export function CardCafe({ lote }: { lote: Lote }) {
                 </span>
                 {!disponivel ? (
                   <span className="text-[11px] uppercase tracking-[0.14em] text-vermelho">
-                    esgotado
+                    {d.comum.esgotado}
                   </span>
                 ) : null}
               </>

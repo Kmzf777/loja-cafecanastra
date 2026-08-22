@@ -1,9 +1,38 @@
-# Café Canastra — loja
+# Café Canastra — o site oficial e a loja
 
-Loja do Café Canastra: vitrine em Next 15, autenticação e dados no **Supabase**
-(GoTrue + PostgREST + PostgreSQL) e um serviço Express para pagamento, webhook,
-frete, e-mail, ERP e assinatura. Café de origem única da Serra da Canastra, em
-Minas Gerais.
+**Site oficial e loja do Café Canastra, na mesma aplicação e em três idiomas.**
+Vitrine em Next 15, autenticação e dados no **Supabase** (GoTrue + PostgREST +
+PostgreSQL) e um serviço Express para pagamento, webhook, frete, e-mail, ERP e
+assinatura. Café de origem única da Serra da Canastra, em Minas Gerais.
+
+> Até agosto de 2026 a marca tinha **dois sites**: este, que vendia e não
+> contava a história, e `cafecanastra.com`, um Next separado que contava a
+> história em português, inglês e espanhol e não vendia. Quem chegava pela
+> marca não achava a loja; quem chegava pela loja não achava a marca; e quem
+> chegava de fora do Brasil — para onde a família exporta desde 1996 — não lia
+> nem uma coisa nem outra. **Os dois viraram um.** A história, a serra, a
+> rastreabilidade, os termos e a política moram aqui, ao lado do catálogo.
+
+### Os três idiomas, e a fronteira deles
+
+Português, inglês e espanhol. **As URLs em português não mudaram**: `pt` é o
+padrão e não aparece no endereço — o middleware faz um *rewrite* interno de
+`/cafes` para `/pt/cafes`, então nenhum link, nenhum backlink e nenhuma entrada
+de sitemap existente quebrou. `/en/cafes` e `/es/cafes` são reais e têm
+`hreflang` completo e recíproco.
+
+**Traduzido:** home, catálogo (PLP e PDP, com o editorial dos cinco cafés),
+`/clube`, `/a-serra`, `/historia`, `/bio`, `/rastreabilidade`, termos,
+privacidade, cabeçalho e rodapé.
+
+**Não traduzido, e isto é decisão do cliente, não pendência:** sacola,
+checkout, conta, `/pedido/[id]`, e-mails e painel. O frete é Melhor Envio (só
+Brasil) e o pagamento é Mercado Pago BR — traduzir o checkout sem resolver esses
+dois seria prometer uma compra que a loja não consegue entregar. Em `en` e `es`
+uma faixa acima do conteúdo avisa isso antes, em vez de deixar a pessoa
+descobrir no meio do pagamento. Essas rotas vivem fora do `[locale]`, em
+`app/(transacional)/`, e por isso `/en/checkout` nem existe (é 308 para
+`/checkout`).
 
 > Este repositório nasceu de um fork do **Shopnaw Store** (loja de camisetas) e
 > foi convertido. O painel já não fala de camiseta em tela nenhuma; o que sobrou
@@ -85,9 +114,12 @@ explica variável por variável; o resumo é este:
 ## Verificação
 
 ```bash
-npm --prefix backend test   # 366 testes: pagamento, banco (RLS, migrações, RPCs),
-                            # cupons, Bling, LGPD, avaliações e Clube
-npm test                    # 317 testes da vitrine (vitest, 25 arquivos)
+npm --prefix backend test   # 398 testes: pagamento, banco (RLS, migrações, RPCs),
+                            # cupons, Bling, LGPD, avaliações e Clube.
+                            # Sobe um PostgreSQL temporário POR ARQUIVO — sem
+                            # disco livre o initdb falha e ~175 testes caem em
+                            # bloco. É a máquina, não o código
+npm test                    # 579 testes da vitrine (vitest, 42 arquivos)
 npm run verifica:rls        # a fronteira de RLS contra uma instância Supabase real
 npm run verifica            # 37 checagens num Chromium (exige tudo no ar)
 ```
@@ -111,6 +143,9 @@ Clube, avaliações e `/pedido/[id]` só têm cobertura nas suítes acima.
 ```
 data/catalogo-canastra.json   catálogo real, com procedência por SKU
                               — fonte única da vitrine E do seed do banco
+data/catalogo-canastra.i18n.json   o editorial das cinco linhas em en e es,
+                              indexado por slug. Preço, estoque e SKU NÃO
+                              entram: são o mesmo número nos três idiomas
 
 backend/
   db/migrations/              migrações versionadas do schema `canastra` (0001–0016)
@@ -128,20 +163,40 @@ backend/
   src/utils/                  status de pedido, cupom, estoque, CSV, e-mail
 
 frontend/
-  app/(vitrine)/              a loja: home, cafés, PDP, sacola, checkout, conta,
-                              clube, pedido/[id], a serra, políticas
+  app/[locale]/(vitrine)/     a metade TRADUZIDA: home, cafés, PDP, clube,
+                              a serra, história, bio, rastreabilidade, termos
+                              e política. `[locale]` é pt | en | es
+  app/(transacional)/         o caminho de compra, pt-BR nos três idiomas:
+                              sacola, checkout, account, pedido/[id]. Fora do
+                              `[locale]` de propósito — ver "os três idiomas"
+  app/moldura-da-loja.tsx     cabeçalho, rodapé, grão e sacola. Componente, e
+                              não layout, porque os dois grupos acima são
+                              irmãos em níveis diferentes (a nota está lá)
   app/dashboard/              painel admin (ilha client-only sobre legacy/)
-  app/sitemap.ts robots.ts    SEO técnico; ícones ficam ao lado
+  app/sitemap.ts robots.ts    SEO técnico; ícones ficam ao lado. O sitemap sai
+                              das MESMAS funções que geram o hreflang das
+                              páginas — 42 URLs, rota × idioma
+  lib/i18n/                   os três idiomas: tipos, o dicionário tipado (o
+                              `pt` é a fonte do tipo, e o build quebra se
+                              faltar chave em `en` ou `es`) e o `href()` por
+                              onde TODO link da vitrine passa
   lib/supabase/               clientes do navegador e do servidor, tipos, ambiente
-  lib/catalogo/               contrato do catálogo e a fusão do comercial ao vivo
+  lib/catalogo/               contrato do catálogo, a fusão do comercial ao vivo
+                              e a fusão do editorial traduzido
   lib/sacola/                 sacola, checkout, cartão, cupom, idempotência e a
                               fusão da sacola no login
   lib/avaliacoes/             leitura, envio e moderação de avaliação
   lib/clube.ts                planos, frequências e preço do Clube
   lib/conta/                  sessão, cadastro e senha (GoTrue)
   lib/seo/                    JSON-LD de Product/Offer e aggregateRating
-  middleware.ts               renova a sessão do GoTrue (NÃO guarda rota — quem
-                              protege a conta é a RLS)
+  components/layout/          moldura: cabeçalho, rodapé, seletor de idioma,
+                              banner de cookies, newsletter
+  components/catalogo/        card, painel de compra, selo SCA, ficha, avaliações
+  components/blog/            a seção "Em breve" da home (casca desenhada e
+                              vazia por decisão — não existe rota /blog)
+  middleware.ts               o rewrite de idioma E a renovação da sessão do
+                              GoTrue (NÃO guarda rota — quem protege a conta é
+                              a RLS)
   legacy/                     código do projeto original, ainda em uso no painel
 
 deploy/
@@ -157,11 +212,17 @@ scripts/
                               — pronto e NUNCA executado (docs/go-live.md §6)
 
 docs/
-  go-live.md                  o que ainda depende de gente, não de código
+  go-live.md                  o que ainda depende de gente, não de código —
+                              inclusive a DECISÃO DE DOMÍNIO, que trava o mapa
+                              de redirects dos dois sites antigos
   deploy.md                   subir na VPS do zero: Docker ou PM2, nginx, TLS
   bling.md                    runbook do ERP: app, escopos, SKUs, fiscal
   producao.md                 as armadilhas que quebram em silêncio
+  performance-dev.md          por que `next dev` demora NESTA máquina: cada
+                              hipótese medida, com o custo de corrigir e o que
+                              não vale corrigir
   seguranca-dados-pessoais.md dado pessoal removido e o que falta fazer
+  superpowers/                specs e planos das ondas de trabalho
 estetica.md                   direção de arte e design system
 ```
 
@@ -186,7 +247,11 @@ Leia, nesta ordem:
 
 1. **`docs/go-live.md`** — o que falta e quem faz. Credenciais, os passos
    manuais que falham sem erro nenhum, o catálogo que precisa de decisão
-   comercial, o backup e a reescrita do histórico do Git.
+   comercial, o backup, a reescrita do histórico do Git e a **decisão de
+   domínio** — se o site único atende em `cafecanastra.com` ou em
+   `loja.cafecanastra.com`. O código é agnóstico, mas **o mapa de redirects
+   301 dos dois sites antigos não pode ser escrito antes dessa decisão**, e
+   sem ele a fusão custa a autoridade orgânica que a marca acumulou.
 2. **`docs/deploy.md`** — como subir na VPS, do zero, por Docker ou por PM2.
 3. **`docs/bling.md`** — o runbook do ERP, se for ligar a NF-e.
 4. **`docs/producao.md`** — as armadilhas, seção por seção. É o que se lê às 2h
@@ -214,6 +279,8 @@ O que mais custa tempo, em resumo:
   `deploy/ecosystem.config.cjs` já fixa `instances: 1` (`docs/bling.md`).
 - Resolva o histórico do Git (`docs/seguranca-dados-pessoais.md` e
   `docs/go-live.md` §6). O script existe e **nunca foi executado**.
+- **Decida o domínio** e só então monte os redirects 301 (`docs/go-live.md`
+  §10). É a decisão que trava mais coisa depois dela.
 
 A instância Supabase é **compartilhada com outros projetos da VPS**, e
 self-hosted não é multi-projeto: um `auth.users` e um segredo de JWT para todos.

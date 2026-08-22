@@ -20,6 +20,12 @@ import {
  * frete grátis (piso 0 no servidor), a promessa inteira some — separador
  * junto. Um "Torrado sob demanda ·" com o resto amputado denunciaria o
  * remendo.
+ *
+ * O RÓTULO VEM POR PROP e o VALOR continua formatado em pt-BR, e a mistura é
+ * deliberada: o texto muda de idioma, mas o piso é em real e só vale para o
+ * Brasil (o frete é Melhor Envio) — "Free shipping over R$ 149" diz a verdade
+ * inteira; convertê-lo ou reformatá-lo para outra locale prometeria uma
+ * cobrança que a loja não faz.
  */
 
 /** 14900 → "R$ 149"; 14950 → "R$ 149,50" — a barra sempre foi curta. */
@@ -31,7 +37,7 @@ function precoCurto(centavos: number): string {
   });
 }
 
-export function AvisoFreteGratis() {
+export function AvisoFreteGratis({ rotulo }: { rotulo: string }) {
   const [minimo, setMinimo] = useState<number | null>(
     FRETE_GRATIS_PADRAO_CENTAVOS,
   );
@@ -53,7 +59,9 @@ export function AvisoFreteGratis() {
       <span aria-hidden className="text-fuligem-55">
         ·
       </span>
-      <span>Frete grátis acima de {precoCurto(minimo)}</span>
+      <span>
+        {rotulo} {precoCurto(minimo)}
+      </span>
     </>
   );
 }

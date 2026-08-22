@@ -28,6 +28,13 @@ Cada bloco depende do anterior. Pular etapa aqui custa caro depois.
 | 6 | Medição (GA4) e WhatsApp | você | vende às cegas |
 | 7 | Revisão jurídica dos textos (§7) | um advogado | a loja publica que seus termos não valem |
 | 8 | LGPD: reescrever o histórico | quem administra o repositório | risco jurídico aberto |
+| 9 | **Decisão de domínio + redirects 301 (§10)** | você | a fusão dos dois sites joga fora a autoridade orgânica dos dois |
+
+> A decisão de domínio (§10) é **anterior** ao bloco 1 na prática: ela define o
+> `NEXT_PUBLIC_SITE_URL` com que a VPS sobe, e é ele que alimenta o
+> `metadataBase`, o `sitemap.xml`, o `robots.txt` e o JSON-LD. Ela está no fim
+> desta lista só porque o mapa de redirects, que é o trabalho pesado dela, pode
+> ser montado em paralelo com o resto.
 
 ---
 
@@ -165,14 +172,47 @@ Isso é uma porteira de go-live, e a decisão é do dono da loja:
 - **O caminho certo:** um advogado revisa os dois textos (eles precisam refletir
   o que a loja realmente faz — e agora fazem bastante coisa: cartão, assinatura
   recorrente, cookies de medição, avaliações, prazo de troca). Com a revisão
-  feita, remove-se o componente `AvisoJuridico` das duas páginas
-  (`frontend/components/layout/PaginaTexto.tsx` é quem o define).
+  feita, o aviso sai — e **são três remoções, não uma**, desde que os textos
+  passaram a existir em inglês e espanhol:
+
+  1. o componente `AvisoJuridico` em
+     `frontend/components/layout/PaginaTexto.tsx`, que é a versão em português;
+  2. o objeto `AVISO_JURIDICO` de
+     `frontend/app/[locale]/(vitrine)/termos-de-uso/conteudo.ts`;
+  3. o mesmo objeto em
+     `frontend/app/[locale]/(vitrine)/politica-de-privacidade/conteudo.ts`.
+
+  Em cada `page.tsx` some junto o ramo ternário que escolhe entre os dois. A
+  **cláusula de prevalência** (`AVISO_DE_TRADUCAO`) é outra coisa e **fica**:
+  ela diz que a versão em português é a que rege legalmente, e isso continua
+  verdade depois da revisão do advogado.
 - **O que não dá:** ir ao ar com o aviso. Uma loja cujos próprios termos anunciam
   que não valem é pior do que uma loja sem termos.
 
 Não removi o aviso por conta própria de propósito: apagá-lo não torna o texto
 válido, só esconde do cliente que ele não foi revisado — e esta loja passou a
 entrega inteira fechando promessas falsas, não criando novas.
+
+**A revisão precisa cobrir os três idiomas.** As versões em inglês e espanhol
+não são tradução juramentada nem revisão jurídica — foram escritas junto com o
+código, como o português. Revisar só o português e apagar o aviso dos três
+deixaria dois documentos legais no ar sem que ninguém os tenha lido. O que
+protege hoje é a cláusula de prevalência, e ela é um remendo, não uma revisão.
+
+**Duas lacunas de conteúdo que o advogado vai cobrar, e que nenhum código
+resolve:**
+
+- **O CNPJ da Boaventura Cafés Especiais Ltda não existe em fonte nenhuma** —
+  nem no site institucional, nem neste repositório. Termos de uso sem o CNPJ de
+  quem vende é lacuna real, e o número **não foi inventado** (há teste que falha
+  se alguém escrever algo com cara de CNPJ ali). O cliente precisa fornecê-lo.
+- **Confirmar que a LOJA é operada pela Boaventura Cafés Especiais Ltda.** A
+  razão social veio das páginas do site institucional, que falavam do site
+  informativo. Ninguém confirmou que a pessoa jurídica que vende café online é a
+  mesma.
+- **Encarregado de dados (DPO).** A LGPD (art. 41) exige indicar. A Política
+  aponta hoje o e-mail comercial como canal do titular, e não declara que não há
+  DPO — porque declarar isso por conta própria seria pior. Precisa de decisão.
 
 **Enquanto isso:** confira também que o canal de contato prometido nas duas
 páginas existe de verdade. Elas mandam o cliente exercer direitos de LGPD e
@@ -198,10 +238,20 @@ e o runbook explica o agendamento. Falta:
 ## 9. Verificação final
 
 ```bash
-npm --prefix backend test      # banco, RLS, pagamento, cupons, Bling, LGPD, Clube
-npm --prefix frontend run test # vitrine, checkout, SEO, analytics
+npm --prefix backend test      # 398 testes: banco, RLS, pagamento, cupons,
+                               # Bling, LGPD, Clube
+npm --prefix frontend run test # 579 testes: vitrine, checkout, SEO, analytics,
+                               # i18n e o dicionário dos três idiomas
+npm --prefix frontend run build # prova que generateStaticParams dá conta de
+                               # idioma × slug e que não falta chave no dicionário
 npm run verifica:rls           # a fronteira de RLS contra uma instância real
 ```
+
+A suíte do backend **sobe um PostgreSQL temporário por arquivo de teste**. Ela
+precisa de disco livre e de RAM: com pouco espaço, o `initdb` falha e ~175
+testes caem em bloco com "Postgres nao subiu em 127.0.0.1:*". Se isso acontecer,
+o problema é a máquina, não o código — os clusters abandonados ficam em
+`%TEMP%/canastra-pg-*` e podem ser apagados.
 
 O `verifica:rls` é o único que sai da máquina: ele prova o **caminho** inteiro
 (GoTrue → Kong → PostgREST → política), não só a política. Ele **escreve** no
@@ -211,7 +261,90 @@ E o checklist de conferência pós-deploy está em `deploy.md` §11.
 
 ---
 
-## 10. O que mudou de verdade nesta entrega
+## 10. A DECISÃO DE DOMÍNIO — e o mapa de redirects que depende dela
+
+**Esta é a pendência nomeada da fusão dos dois sites, e ela é sua.** O código é
+agnóstico de propósito: tudo que precisa saber o endereço do site lê
+`NEXT_PUBLIC_SITE_URL` por uma função só (`frontend/lib/seo/jsonld.ts`,
+`urlDoSite()`), e dela saem o `metadataBase`, o `sitemap.xml`, o `robots.txt`,
+o `hreflang` e o JSON-LD. Trocar de domínio é trocar uma variável de ambiente e
+subir de novo. **O que não é agnóstico é o que acontece com os endereços
+antigos**, e é aí que se ganha ou se joga fora a autoridade orgânica que as duas
+marcas acumularam.
+
+### A decisão, em uma pergunta
+
+**O site único atende em `cafecanastra.com` (raiz) ou em `loja.cafecanastra.com`
+(subdomínio)?**
+
+| | `cafecanastra.com` na raiz | `loja.cafecanastra.com` |
+|---|---|---|
+| **A favor** | É o endereço que a marca imprime, fala e divulga. Herda a autoridade do institucional, que é o mais antigo dos dois. Um domínio só para lembrar, para o cliente e para o Google. | Zero mudança no que já existe: nenhum link de loja, nenhum e-mail transacional e nenhum retorno de Mercado Pago muda de endereço. |
+| **Contra** | **Todas** as URLs da loja mudam de host — e-mails de pedido antigos, links de confirmação do GoTrue, retorno do Mercado Pago, QR impresso. Cada um precisa de 301. | A raiz fica órfã ou vira redirect, e a marca continua com o endereço bonito apontando para outro lugar. O que se divulga não é o que vende. |
+| **Custo** | um mapa de 301 grande, feito uma vez | um mapa de 301 menor, e uma decisão de marca adiada para sempre |
+
+**Não há resposta técnica para isto.** É decisão de marca. O que existe de
+técnico é a consequência, e ela está abaixo.
+
+### O que fica travado enquanto a decisão não vier
+
+- [ ] `NEXT_PUBLIC_SITE_URL` na VPS — e com ela `metadataBase`, `sitemap.xml`,
+      `robots.txt`, `hreflang` e JSON-LD, que hoje caem no padrão de
+      `urlDoSite()`.
+- [ ] O certificado TLS e o `server_name` do nginx (`deploy/nginx/loja.conf`).
+- [ ] A **allow-list de redirecionamento do GoTrue** e o `SITE_URL` dele. Sem
+      atualizar, confirmação de e-mail e recuperação de senha mandam o cliente
+      para o domínio antigo (`producao.md` §3.5).
+- [ ] As URLs de retorno e de webhook do Mercado Pago.
+- [ ] **O mapa de redirects 301 abaixo.**
+
+### O mapa de redirects 301 — o esqueleto, à espera da decisão
+
+Ele **não pode ser montado antes**, porque metade das linhas depende de qual dos
+dois hosts sobrevive. O que já se sabe:
+
+**Do institucional (`cafecanastra.com`) para cá.** As rotas foram absorvidas e
+os endereços mudaram de forma:
+
+| Endereço antigo | Destino | Observação |
+|---|---|---|
+| `/historia` | `/historia` | mesmo caminho — só muda o host, se mudar |
+| `/en/historia`, `/es/historia` | `/en/historia`, `/es/historia` | o prefixo de idioma sobreviveu igual |
+| `/sobre/origem` | `/a-serra` | era um stub vazio lá; o conteúdo real é o daqui |
+| `/termos-uso` | `/termos-de-uso` | **o nome do caminho mudou** |
+| `/politica-privacidade` | `/politica-de-privacidade` | **o nome do caminho mudou** |
+| `/bio` | `/bio` | mesmo caminho |
+| `/blog`, `/blog/*` | **decidir** | não existe rota de blog aqui: a seção da home é casca marcada "Em breve". Ou 301 para `/` até o blog existir, ou 410, ou manter o Next antigo no ar só para `/blog`. Redirecionar post para home é perda de sinal — assuma isso conscientemente |
+| `/ANUGA` | **decidir** | fora do escopo desta entrega; hoje não existe destino |
+| `/rastreabilidade01201516` (ou `/rastreabilidade/01201516`) | `/rastreabilidade` | **PRECISA DE CONFIRMAÇÃO.** O arquivo de referência do institucional se chamava `app_rastreabilidade01201516_page.tsx`, com um sufixo numérico que parece código de lote — possivelmente impresso em embalagem ou num QR. Não consegui recuperar o formato original a partir do nome achatado do arquivo. **Se houver embalagem no mercado com esse endereço impresso, este redirect é obrigatório** — abra o site antigo ou um pacote e confirme o formato exato antes de desligar o Next velho |
+
+**Da loja (`loja.cafecanastra.com`) para cá.** Nenhuma URL pública mudou de
+caminho nesta entrega — `/`, `/cafes`, `/cafes/[slug]`, `/clube`, `/a-serra`,
+`/sacola`, `/checkout`, `/account`, `/pedido/[id]` são os mesmos. **Só há
+trabalho aqui se o host mudar**, e nesse caso é um 301 de host inteiro,
+preservando o caminho.
+
+**Um cuidado que vale para os dois lados:** `/pt/qualquer-coisa` já é resolvido
+pela própria aplicação com um 308 para `/qualquer-coisa`, e `/en/checkout` (e
+irmãos) com um 308 para `/checkout`. Não escreva regra de nginx para esses dois
+casos — duas camadas redirecionando o mesmo endereço produzem laço quando uma
+delas mudar.
+
+### Como conferir depois
+
+```bash
+# nenhum endereço antigo pode responder 404, e nenhum pode responder 200
+curl -sI https://cafecanastra.com/termos-uso | head -1     # 301
+curl -sI https://cafecanastra.com/blog                     # o que você decidiu
+```
+
+Depois do corte, reenvie os dois sitemaps antigos no Search Console e mantenha
+os 301 **por pelo menos um ano** — é quanto tempo o buscador leva para
+transferir sinal com segurança.
+
+---
+
+## 11. O que mudou de verdade nesta entrega
 
 Para quem vem da leitura antiga do repositório, o resumo honesto:
 
@@ -229,3 +362,10 @@ Para quem vem da leitura antiga do repositório, o resumo honesto:
   fecharam.
 - **Dá para medir.** GA4 com consentimento, JSON-LD de produto, sitemap e
   robots — a loja passa a ser encontrável e o funil, mensurável.
+- **Os dois sites viraram um, em três idiomas.** `cafecanastra.com` contava a
+  história e não vendia; esta loja vendia e não contava a história. Agora a
+  história, a serra, a rastreabilidade, a `/bio` e os textos legais moram aqui,
+  ao lado do catálogo, em português, inglês e espanhol — com `hreflang`
+  completo e um sitemap de 42 URLs que sai das mesmas funções que geram o
+  `<head>`. **As URLs em português não mudaram.** O que falta é a decisão de
+  domínio (§10).
