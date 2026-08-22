@@ -86,6 +86,45 @@ test("gravar e parcial: o que nao vem no corpo nao e apagado", async () => {
   assert.equal(atual.phone_number_id, "444");
 });
 
+test("chave fora da lista de gravaveis e ignorada — e o resto do corpo grava", async () => {
+  /**
+   * A regra: `gravar()` itera pela lista LITERAL do modulo, nunca pelas chaves
+   * do corpo recebido. Sem ela, um corpo de requisicao escolhe qual coluna
+   * escrever — e o refactor que a desfaz ("simplifica" o laco para
+   * `Object.keys(campos)`) nao quebra mais nada.
+   *
+   * A chave estranha e `atualizado_em` de proposito: coluna DE VERDADE da
+   * tabela, fora dos graveis, que e o caso perigoso. Uma chave inventada
+   * (`"nao_existe"`) provaria menos, porque morreria no SQL de qualquer jeito.
+   *
+   * O QUE ESTE TESTE NAO CONSEGUE MOSTRAR, e vale saber: hoje as duas unicas
+   * colunas nao-graveis (`id` e `atualizado_em`) tambem sao recusadas pelo
+   * proprio banco — a primeira pelo CHECK da linha unica, a segunda por
+   * atribuicao duplicada com o `now()` que todo UPDATE leva. Entao a mordida
+   * aqui aparece como ERRO, e nao como coluna escrita errada. Quem a guarda
+   * protege de verdade e a coluna que uma migracao futura acrescentar, que
+   * nasceria gravavel pelo corpo sem ninguem decidir isso.
+   */
+  const CARIMBO_FALSO = new Date("2000-01-01T00:00:00Z");
+
+  await assert.doesNotReject(
+    () => config.gravar({ atualizado_em: CARIMBO_FALSO, phone_number_id: "777" }),
+    "a chave estranha e ignorada em SILENCIO; nao vira erro na cara do gestor",
+  );
+
+  const { rows } = await bd.pool.query(
+    "SELECT phone_number_id, atualizado_em FROM canastra.whatsapp_config WHERE id = 1",
+  );
+  // Metade 1: a coluna que o corpo tentou escolher nao foi escrita.
+  assert.ok(
+    rows[0].atualizado_em > CARIMBO_FALSO,
+    "quem carimba `atualizado_em` e o now() do UPDATE, nunca o corpo",
+  );
+  // Metade 2: o que foi ignorado foi A CHAVE, e nao o objeto inteiro — recusar
+  // o corpo todo seria outro comportamento, e passaria pela metade 1 sozinha.
+  assert.equal(rows[0].phone_number_id, "777");
+});
+
 test("configurado() exige token, phone_number_id e o interruptor ligado", async () => {
   await config.gravar({ access_token: "tok", phone_number_id: "555" });
   assert.equal(config.configurado(await config.carregar()), false, "ativo false");
