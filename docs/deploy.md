@@ -387,11 +387,20 @@ sudo mkdir -p /etc/canastra
 sudo install -m 600 -o "$USER" /dev/null /etc/canastra/backup.env
 echo 'export DATABASE_URL="postgres://postgres:SENHA@localhost:5432/postgres"' \
   | sudo tee /etc/canastra/backup.env > /dev/null
+# `/`, `?` e `#` na SENHA precisam vir percent-encoded (%2F, %3F, %23) — é o
+# que a URI exige, e o backup aborta com mensagem clara se não vierem.
 
 # Destino dos dumps e log do cron, com o SEU usuário como dono — senão a
 # primeira execução agendada morre num "Permission denied" que ninguém vê:
 sudo mkdir -p /var/backups/canastra && sudo chown "$USER" /var/backups/canastra
 sudo install -m 644 -o "$USER" /dev/null /var/log/canastra-backup.log
+# Não se assuste com o modo do destino: o script força chmod 700 na PASTA e 600
+# em cada dump (mais umask 077). O dump traz catálogo, pedidos, clientes e o
+# auth do GoTrue — PII completa, hash de senha e refresh token — e com o umask
+# padrão (022) nasceria 0644 numa pasta 0755, legível por qualquer usuário da
+# VPS. Consequência prática: BACKUP_DIR tem de ser uma pasta DEDICADA aos
+# dumps. O 700 recai sobre a pasta inteira, então apontá-lo para algo
+# compartilhado (um /srv, um /home) tranca junto o que já estava lá.
 
 # O repositório é editado em Windows, que não guarda bit de execução:
 chmod +x /opt/canastra/scripts/backup-banco.sh

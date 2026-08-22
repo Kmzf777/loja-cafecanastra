@@ -270,7 +270,8 @@ test("checkout grava canastra.pedidos, baixa estoque, persiste CPF e esvazia a s
 
   // O pedido, nas colunas reais.
   const { rows } = await bd.pool.query(
-    `SELECT status, total, chave_idempotencia, metodo_pagamento, itens
+    `SELECT status, total, chave_idempotencia, metodo_pagamento, itens,
+            frete, metodo_envio
        FROM canastra.pedidos WHERE pedido_id = $1`,
     [res.corpo.orderId],
   );
@@ -278,6 +279,13 @@ test("checkout grava canastra.pedidos, baixa estoque, persiste CPF e esvazia a s
   assert.equal(Number(rows[0].total), 100);
   assert.equal(rows[0].chave_idempotencia, `${ANA}:clique-abc`);
   assert.equal(rows[0].itens[0].product_id, PRODUTO);
+
+  // Frete E método são os CONFERIDOS, não o que o corpo mandou. O corpo diz
+  // "Retirada na loja"; quem nomeia o método é o atalho de retirada do
+  // `conferirFrete`. Antes o método era gravado cru — dava para o pedido nascer
+  // com uma etiqueta que ninguém cotou.
+  assert.equal(Number(rows[0].frete), 0);
+  assert.equal(rows[0].metodo_envio, "Retirada");
 
   // Estoque reservado: 10 - 2.
   assert.equal(await estoqueDoProduto(), 8);

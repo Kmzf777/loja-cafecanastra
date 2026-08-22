@@ -250,13 +250,13 @@ test("conferirFrete aceita o frete zerado quando a recotação dá zero", async 
   // O navegador manda shippingCost: 0 porque a cotação veio zerada; o checkout
   // recota pelo MESMO caminho e o zero casa com a opção real. Sem isto, o
   // frete grátis prometido derrubaria todo pedido com 409.
-  const valor = await conferirFrete({
+  const conferido = await conferirFrete({
     address: { zip_code: CEP_LOCAL },
     itens: [itemDe(149)],
     shippingCost: 0,
     shippingMethod: "Entrega Local",
   });
-  assert.equal(valor, 0);
+  assert.equal(conferido.valor, 0);
 });
 
 test("conferirFrete recusa o zero quando o subtotal NÃO atinge o piso", async () => {
@@ -290,4 +290,104 @@ test("com o piso desligado (0), nada é zerado", async () => {
       "UPDATE canastra.config_loja SET frete_gratis_minimo_centavos = 14900, atualizado_em = now()",
     );
   }
+});
+
+/* --------------------------------------------------------------------------
+ * O PAREAMENTO método/preço
+ *
+ * POR QUE casar nome E preço, e não só o preço: o comentário no ponto do
+ * casamento, em `conferirFrete` (PaymentController.js), conta a história.
+ *
+ * O QUE ESTE ARQUIVO ALCANÇA, e o que não: com `MELHOR_ENVIO_URL` numa porta
+ * fechada, a cotação do CEP_LOCAL tem UMA opção só — `Entrega Local`. Dá para
+ * exercitar nome desconhecido, ausência de nome, retirada e o piso do frete
+ * grátis. NÃO dá para exercitar o par cruzado (o preço de uma opção com o nome
+ * de OUTRA opção realmente cotada), que precisa de duas opções na mesma
+ * cotação; esse caso — o do dinheiro — mora em pagamento.test.js, onde o dublê
+ * devolve PAC e SEDEX juntos. Os dois são complementares, não redundantes.
+ * -------------------------------------------------------------------------- */
+
+/** R$ 50,00, uma unidade: abaixo do piso e abaixo das 3 unidades da regra local. */
+const ITENS_UM = [itemDe(50, 1)];
+
+test("método e preço casados passam e devolvem os dois", async () => {
+  // O `metodo` que volta é igual ao enviado POR CONSTRUÇÃO — o casamento é
+  // igualdade exata de string, então devolver o campo cru da requisição
+  // passaria aqui byte a byte. Este teste prova que os dois campos voltam, não
+  // que o nome foi canonizado; a canonicalização quem prova é a retirada,
+  // logo abaixo, onde "Retirada na loja" entra e "Retirada" sai.
+  const conferido = await conferirFrete({
+    address: { zip_code: CEP_LOCAL },
+    itens: ITENS_UM,
+    shippingCost: 5,
+    shippingMethod: "Entrega Local",
+  });
+
+  assert.deepEqual(conferido, { valor: 5, metodo: "Entrega Local" });
+});
+
+test("nome que não está na cotação é recusado, mesmo com preço real", async () => {
+  // R$ 5,00 É o preço da única opção cotada aqui, e antes bastava isso para
+  // passar. "Correios SEDEX" não é o nome de outra opção — é um nome AUSENTE
+  // da cotação, que é o que este arquivo consegue montar (ver o cabeçalho).
+  await assert.rejects(
+    () =>
+      conferirFrete({
+        address: { zip_code: CEP_LOCAL },
+        itens: ITENS_UM,
+        shippingCost: 5,
+        shippingMethod: "Correios SEDEX",
+      }),
+    (erro) => erro.status === 409,
+    "o preço da entrega local não pode passar com um nome que ninguém cotou",
+  );
+});
+
+test("requisição sem método é recusada em vez de virar 'Retirada' com frete", async () => {
+  // O caso latente de antes: sem método, escapava do atalho de retirada, casava
+  // com um preço real e era gravado como "Retirada" com frete maior que zero.
+  await assert.rejects(
+    () =>
+      conferirFrete({
+        address: { zip_code: CEP_LOCAL },
+        itens: ITENS_UM,
+        shippingCost: 5,
+        shippingMethod: undefined,
+      }),
+    (erro) => erro.status === 409,
+  );
+});
+
+test("retirada segue devolvendo zero sem cotar", async () => {
+  const conferido = await conferirFrete({
+    address: { zip_code: CEP_LOCAL },
+    itens: ITENS_UM,
+    shippingCost: 0,
+    shippingMethod: "Retirada na loja",
+  });
+
+  assert.equal(conferido.valor, 0);
+  // AQUI a canonicalização é observável: entra "Retirada na loja", sai
+  // "Retirada". A retirada não sai de cotação nenhuma, então é o atalho quem
+  // nomeia o método — e este é o único caminho em que o nome devolvido pode
+  // diferir do enviado.
+  assert.equal(conferido.metodo, "Retirada");
+});
+
+test("com frete grátis, o casamento por nome ainda identifica a opção", async () => {
+  // Piso default de 0009: 14900 centavos. Acima dele TODA opção vira price 0
+  // (ShippingController) — e o preço sozinho deixa de distinguir qualquer coisa.
+  //
+  // QUANTIDADE 2, DE PROPÓSITO: com 3 ou mais a Entrega Local já custa 0 pela
+  // regra local (ShippingController:91), e o teste passaria sem nunca exercitar
+  // o piso. Com 2 o preço base é 5, então o zero só pode ter vindo do frete
+  // grátis. 2 × R$ 80 = R$ 160 = 16000 centavos, acima do piso de 14900.
+  const conferido = await conferirFrete({
+    address: { zip_code: CEP_LOCAL },
+    itens: [itemDe(80, 2)],
+    shippingCost: 0,
+    shippingMethod: "Entrega Local",
+  });
+
+  assert.deepEqual(conferido, { valor: 0, metodo: "Entrega Local" });
 });

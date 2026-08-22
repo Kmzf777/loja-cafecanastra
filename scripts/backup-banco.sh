@@ -38,14 +38,35 @@
 #
 # O dump cobre o BANCO (catálogo, pedidos, clientes, auth do GoTrue). O volume
 # do Storage (imagens de produto, a partir da F3) é cópia separada — ver §5.6.
+#
+# A SENHA NÃO TRAFEGA NO argv: o script exporta PGPASSWORD e entrega ao pg_dump
+# a URI já sem credencial (lib/conexao-pg.sh). O dump e a pasta nascem 600/700.
 
 set -euo pipefail
+
+# Com o umask padrão do operador (022) o dump nasceria 0644 numa pasta 0755 —
+# legível por qualquer usuário da VPS, com tudo que o cabeçalho lista.
+umask 077
+
+# As duas funções que mantêm a senha fora do argv do pg_dump. Ver o cabeçalho
+# de lib/conexao-pg.sh.
+# shellcheck source=lib/conexao-pg.sh
+. "$(dirname "$0")/lib/conexao-pg.sh"
 
 # ── 1. Ambiente ─────────────────────────────────────────────────────────────
 # O cron chama este script pelado; quem carrega a DATABASE_URL é este source.
 # `set -a` exporta tudo que o arquivo definir mesmo sem `export` na linha —
 # assim um backup.env escrito à mão sem export continua funcionando.
-AMBIENTE="/etc/canastra/backup.env"
+#
+# BACKUP_ENV EXISTE PARA O TESTE, NÃO PARA PRODUÇÃO. O teste ponta a ponta
+# (backend/test/backup_conexao.test.js) roda ESTE script de verdade, e este
+# repositório fica clonado na VPS — sem o override, um `npm test` lá dentro
+# carregaria o backup.env real com `set -a` e ele atropelaria o ambiente que o
+# teste montou: o dump sairia contra o banco de PRODUÇÃO e, se o arquivo também
+# define BACKUP_DIR, a retenção (`find … -mtime +14 -delete`) rodaria contra a
+# pasta de dumps de verdade. O teste aponta a variável para um arquivo que não
+# existe. No cron não se define nada: sem BACKUP_ENV o caminho é o de sempre.
+AMBIENTE="${BACKUP_ENV:-/etc/canastra/backup.env}"
 if [ -f "$AMBIENTE" ]; then
   set -a
   # shellcheck disable=SC1090
@@ -66,6 +87,9 @@ command -v pg_dump >/dev/null || { echo "ERRO: pg_dump não encontrado (apt inst
 command -v pg_restore >/dev/null || { echo "ERRO: pg_restore não encontrado (apt install postgresql-client)." >&2; exit 1; }
 
 mkdir -p "$BACKUP_DIR"
+# Explícito, e não só herdado do umask: a pasta pode já existir de uma execução
+# anterior, criada com outro umask.
+chmod 700 "$BACKUP_DIR"
 
 CARIMBO="$(date +%Y%m%d-%H%M%S)"
 ARQUIVO="$BACKUP_DIR/canastra-$CARIMBO.dump"
@@ -82,7 +106,39 @@ trap 'rm -f "$PARCIAL"' EXIT
 # que a verificação abaixo precisa. Escreve em .parcial e só renomeia depois de
 # verificado: um dump interrompido nunca fica com nome de backup válido.
 echo "[backup] pg_dump -> $ARQUIVO"
-pg_dump --format=custom --compress=6 --no-owner --file "$PARCIAL" "$DATABASE_URL"
+# A senha vai por PGPASSWORD (só o dono do processo e o root leem
+# /proc/<pid>/environ) e a URI segue SEM ela — /proc/<pid>/cmdline é legível
+# por qualquer usuário local, e um `ps aux` durante o dump entregaria a
+# credencial do papel postgres. É a mesma disciplina que o backup-banco.cron.exemplo
+# já aplicava ao manter a URL fora da linha do cron.
+PGPASSWORD="$(senha_da_uri "$DATABASE_URL")"
+export PGPASSWORD
+# A URI que o parser não entende passa direto — e a senha voltaria ao argv em
+# silêncio, que é exatamente o bug corrigido aqui. Melhor abortar.
+#
+# O teste é DE PROPÓSITO mais grosseiro que o parser: ele olha a URI CRUA, sem
+# cortar em / ? #. É essa diferença que pega o caso perigoso — senha com / crua
+# faz o parser cortar cedo, achar autoridade sem @ e devolver senha vazia,
+# enquanto o glob ainda enxerga o :...@ e reprova. NÃO troque este glob por
+# algo que corte em / ? # — olhar a autoridade já analisada repete o mesmo
+# engano e não pega nada.
+#
+# O preço é um falso positivo conhecido: URI SEM senha cuja query traga um @
+# cru depois do : da porta (…host:5432/db?opt=a@b) também aborta. Aborta com
+# mensagem, e não vazando — e o @ ali deveria ser %40 de qualquer forma.
+# Dá para eliminá-lo cortando no PRIMEIRO @ e olhando só o que vem antes (isso
+# não usa / ? #, então continua pegando os três casos perigosos); custa um case
+# aninhado, porque sem @ nenhum o corte devolve a URI inteira e o : da porta
+# dispararia sozinho. Trocar exige refazer os testes 12 e 13.
+case "$DATABASE_URL" in
+  *://*:*@*)
+    [ -n "$PGPASSWORD" ] || {
+      echo "ERRO: a DATABASE_URL tem senha mas não consegui extraí-la." >&2
+      echo "Percent-encode / ? # na senha (%2F %3F %23) — ver lib/conexao-pg.sh." >&2
+      exit 1; } ;;
+esac
+pg_dump --format=custom --compress=6 --no-owner --file "$PARCIAL" \
+  "$(uri_sem_senha "$DATABASE_URL")"
 
 # ── 3. Verificação ──────────────────────────────────────────────────────────
 # pg_restore --list lê o índice (TOC) do arquivo: detecta dump truncado ou
@@ -95,6 +151,7 @@ if ! pg_restore --list "$PARCIAL" > /dev/null; then
   exit 1   # o trap apaga o .parcial
 fi
 mv "$PARCIAL" "$ARQUIVO"
+chmod 600 "$ARQUIVO"
 echo "[backup] ok: $(du -h "$ARQUIVO" | cut -f1) verificado com pg_restore --list."
 
 # ── 4. Retenção ─────────────────────────────────────────────────────────────

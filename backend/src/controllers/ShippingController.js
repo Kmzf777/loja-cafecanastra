@@ -153,7 +153,9 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
    * subtotal atinge o piso, toda opcao com preco vira `price: 0` com o
    * marcador `gratis: true` (a vitrine usa o marcador para dizer "gratis" em
    * vez de "R$ 0,00"). Zerar TODAS as opcoes, e nao so as externas, e o que
-   * mantem o `conferirFrete` simples: qualquer opcao real casa com o zero.
+   * mantem o `conferirFrete` simples: a opcao que o cliente escolheu casa com
+   * o zero, seja ela qual for. Quem separa uma opcao da outra depois do zero e
+   * o NOME — e por isso que `conferirFrete` casa nome e preco, nao so o preco.
    *
    * Na cotacao publica o `price` dos itens vem do navegador e vale como
    * SUGESTAO, como o resto da cotacao; quem decide dinheiro e o checkout, que

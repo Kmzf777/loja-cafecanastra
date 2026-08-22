@@ -245,6 +245,7 @@ deploy/
 scripts/
   backup-banco.sh             pg_dump com verificação do dump e retenção
   backup-banco.cron.exemplo   agendamento de exemplo
+  lib/conexao-pg.sh           tira a senha da URI (fora do argv do pg_dump)
   reescrever-historico.sh     remove os CSVs de dado pessoal do histórico do Git
                               — pronto e NUNCA executado (docs/go-live.md §6)
 
