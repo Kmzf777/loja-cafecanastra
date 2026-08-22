@@ -51,8 +51,10 @@ const FORMATO_UUID =
  * valor NEGATIVO e abater do preco dos produtos, porque a soma nao tinha piso.
  *
  * Aqui o servidor recalcula as opcoes para o CEP do pedido, usando peso e
- * dimensoes vindos do BANCO, e so aceita um valor que corresponda a alguma
- * opcao real. Retirada na loja (frete 0) continua valendo.
+ * dimensoes vindos do BANCO, e so aceita o valor da opcao que o cliente diz
+ * ter escolhido — nome E preco, ver o casamento la embaixo. Devolve
+ * `{ valor, metodo }` COTADOS, que e o que o pedido grava. Retirada na loja
+ * (frete 0) continua valendo, sem cotar.
  *
  * O FRETE GRATIS DE SERVIDOR (0009) passa por aqui SEM mudar esta funcao: a
  * recotacao chama o mesmo `calcularOpcoesDeFrete`, que ja zera as opcoes
@@ -89,7 +91,7 @@ async function conferirFrete({
       erro.status = 400;
       throw erro;
     }
-    return 0;
+    return { valor: 0, metodo: "Retirada" };
   }
 
   const cep = address?.zip_code || address?.zipCode || address?.cep;
@@ -113,11 +115,23 @@ async function conferirFrete({
     throw erro;
   }
 
-  const combina = opcoes.some(
-    (o) => Math.abs(Number(o.price) - valor) <= TOLERANCIA_FRETE,
+  /**
+   * CASA NOME **E** PRECO, nao so o preco. Antes era `.some()` sobre o valor,
+   * contra o CONJUNTO de opcoes: o preco do PAC com o nome do SEDEX passava, e
+   * o pedido nascia com um metodo que ninguem cotou — a operacao comprava a
+   * etiqueta cara lendo uma string que o cliente escolheu.
+   *
+   * O nome sai da opcao COTADA, nunca do corpo da requisicao. E quando o frete
+   * gratis zera TODAS as opcoes (ShippingController), o nome e a unica coisa
+   * que ainda distingue uma da outra.
+   */
+  const escolhida = opcoes.find(
+    (o) =>
+      String(o.name) === String(shippingMethod) &&
+      Math.abs(Number(o.price) - valor) <= TOLERANCIA_FRETE,
   );
 
-  if (!combina) {
+  if (!escolhida) {
     const erro = new Error(
       "O frete mudou desde que você escolheu. Recalcule e tente de novo.",
     );
@@ -125,7 +139,7 @@ async function conferirFrete({
     throw erro;
   }
 
-  return valor;
+  return { valor: Number(escolhida.price), metodo: String(escolhida.name) };
 }
 
 /**
@@ -732,7 +746,7 @@ class PaymentController {
       const finalAmountToCharge = Number(
         (
           (validatedSubtotalCentavos - descontoCentavos) / 100 +
-          freteConferido
+          freteConferido.valor
         ).toFixed(2),
       );
 
@@ -836,8 +850,10 @@ class PaymentController {
           paymentIdMp: mpId.toString(),
           address_json: address,
           // O frete gravado no pedido e o CONFERIDO, nao o que o cliente mandou.
-          shippingCost: freteConferido,
-          shippingMethod: shippingMethod || "Retirada",
+          shippingCost: freteConferido.valor,
+          // O METODO tambem e o conferido: a linha acima ja dizia isso do valor,
+          // e o metodo continuava vindo cru do corpo da requisicao.
+          shippingMethod: freteConferido.metodo,
           chaveIdempotencia,
           status: "pendente",
           // A fotografia do cupom (0010): o codigo usado e o desconto em

@@ -250,13 +250,13 @@ test("conferirFrete aceita o frete zerado quando a recotação dá zero", async 
   // O navegador manda shippingCost: 0 porque a cotação veio zerada; o checkout
   // recota pelo MESMO caminho e o zero casa com a opção real. Sem isto, o
   // frete grátis prometido derrubaria todo pedido com 409.
-  const valor = await conferirFrete({
+  const conferido = await conferirFrete({
     address: { zip_code: CEP_LOCAL },
     itens: [itemDe(149)],
     shippingCost: 0,
     shippingMethod: "Entrega Local",
   });
-  assert.equal(valor, 0);
+  assert.equal(conferido.valor, 0);
 });
 
 test("conferirFrete recusa o zero quando o subtotal NÃO atinge o piso", async () => {
@@ -290,4 +290,85 @@ test("com o piso desligado (0), nada é zerado", async () => {
       "UPDATE canastra.config_loja SET frete_gratis_minimo_centavos = 14900, atualizado_em = now()",
     );
   }
+});
+
+/* --------------------------------------------------------------------------
+ * O PAREAMENTO método/preço
+ *
+ * Antes, `conferirFrete` casava só o NÚMERO contra o conjunto de opções:
+ * mandar o preço do PAC com o nome do SEDEX passava, e o pedido gravava um
+ * método que ninguém cotou.
+ * -------------------------------------------------------------------------- */
+
+/** R$ 50,00, uma unidade: abaixo do piso e abaixo das 3 unidades da regra local. */
+const ITENS_UM = [itemDe(50, 1)];
+
+test("método e preço casados passam e devolvem o nome canônico", async () => {
+  const conferido = await conferirFrete({
+    address: { zip_code: CEP_LOCAL },
+    itens: ITENS_UM,
+    shippingCost: 5,
+    shippingMethod: "Entrega Local",
+  });
+
+  assert.deepEqual(conferido, { valor: 5, metodo: "Entrega Local" });
+});
+
+test("preço de uma opção com o nome de outra é recusado", async () => {
+  await assert.rejects(
+    () =>
+      conferirFrete({
+        address: { zip_code: CEP_LOCAL },
+        itens: ITENS_UM,
+        shippingCost: 5,
+        shippingMethod: "Correios SEDEX",
+      }),
+    (erro) => erro.status === 409,
+    "o preço da entrega local não pode passar como SEDEX",
+  );
+});
+
+test("requisição sem método é recusada em vez de virar 'Retirada' com frete", async () => {
+  // O caso latente de antes: sem método, escapava do atalho de retirada, casava
+  // com um preço real e era gravado como "Retirada" com frete maior que zero.
+  await assert.rejects(
+    () =>
+      conferirFrete({
+        address: { zip_code: CEP_LOCAL },
+        itens: ITENS_UM,
+        shippingCost: 5,
+        shippingMethod: undefined,
+      }),
+    (erro) => erro.status === 409,
+  );
+});
+
+test("retirada segue devolvendo zero sem cotar", async () => {
+  const conferido = await conferirFrete({
+    address: { zip_code: CEP_LOCAL },
+    itens: ITENS_UM,
+    shippingCost: 0,
+    shippingMethod: "Retirada na loja",
+  });
+
+  assert.equal(conferido.valor, 0);
+  assert.equal(conferido.metodo, "Retirada");
+});
+
+test("com frete grátis, o casamento por nome ainda identifica a opção", async () => {
+  // Piso default de 0009: 14900 centavos. Acima dele TODA opção vira price 0
+  // (ShippingController) — e o preço sozinho deixa de distinguir qualquer coisa.
+  //
+  // QUANTIDADE 2, DE PROPÓSITO: com 3 ou mais a Entrega Local já custa 0 pela
+  // regra local (ShippingController:91), e o teste passaria sem nunca exercitar
+  // o piso. Com 2 o preço base é 5, então o zero só pode ter vindo do frete
+  // grátis. 2 × R$ 80 = R$ 160 = 16000 centavos, acima do piso de 14900.
+  const conferido = await conferirFrete({
+    address: { zip_code: CEP_LOCAL },
+    itens: [itemDe(80, 2)],
+    shippingCost: 0,
+    shippingMethod: "Entrega Local",
+  });
+
+  assert.deepEqual(conferido, { valor: 0, metodo: "Entrega Local" });
 });
