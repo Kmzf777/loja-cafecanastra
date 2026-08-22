@@ -374,10 +374,13 @@ painel; status fora do recorte (`em_processamento`, `autorizado`).
 
 ## 6. Os templates
 
-Seis templates `UTILITY`, idioma `pt_BR`, `parameter_format: "named"`, criados
-por API a partir do painel. Todos obedecem: corpo não começa nem termina em
-variável, sem variáveis adjacentes, sem uma palavra de venda, rodapé fixo sem
-variável.
+**Sete** templates `UTILITY` (este parágrafo dizia "seis" e estava errado — o
+painel permite marcar um pedido como enviado **sem** digitar o código de
+rastreio, e o aviso não pode sair prometendo um código que não existe; daí
+`pedido_enviado` e `pedido_enviado_sem_rastreio` serem dois). Idioma `pt_BR`,
+`parameter_format: "named"`, criados por API a partir do painel. Todos
+obedecem: corpo não começa nem termina em variável, sem variáveis adjacentes,
+sem uma palavra de venda, rodapé fixo sem variável.
 
 Todos levam o **mesmo quick-reply `Preciso de ajuda`** — é ele que abre a janela
 de 24h e dá entrada no menu de suporte (§7).
@@ -386,7 +389,8 @@ de 24h e dá entrada no menu de suporte (§7).
 |---|---|---|---|
 | `pedido_recebido` | status `pendente` | "Olá, {{nome}}. Recebemos seu pedido {{numero}}. Assim que o pagamento for confirmado, começamos o preparo." | quick-reply `Preciso de ajuda` |
 | `pagamento_aprovado` | status `aprovado` | "Olá, {{nome}}. O pagamento do pedido {{numero}} foi confirmado e já estamos preparando seu café." | quick-reply `Preciso de ajuda` |
-| `pedido_enviado` | status `enviado` | "Olá, {{nome}}. Seu pedido {{numero}} saiu para entrega. O código de rastreio é {{rastreio}}, e você acompanha pelo botão abaixo." | URL `Rastrear pedido` + quick-reply `Preciso de ajuda` |
+| `pedido_enviado` | status `enviado`, **com** rastreio | "Olá, {{nome}}. Seu pedido {{numero}} saiu para entrega. O código de rastreio é {{rastreio}}, e você acompanha pelo botão abaixo." | URL `Rastrear pedido` + quick-reply `Preciso de ajuda` |
+| `pedido_enviado_sem_rastreio` | status `enviado`, **sem** rastreio | "Olá, {{nome}}. Seu pedido {{numero}} saiu para entrega. Assim que o código de rastreio estiver disponível, enviamos aqui." | quick-reply `Preciso de ajuda` |
 | `pedido_entregue` | status `entregue` | "Olá, {{nome}}. Seu pedido {{numero}} foi entregue. Se algo não estiver certo, fale com a gente pelo botão abaixo." | quick-reply `Preciso de ajuda` |
 | `pedido_cancelado` | status `cancelado` ou `rejeitado` | "Olá, {{nome}}. Houve um problema com o pagamento do pedido {{numero}} e ele não seguiu adiante." | quick-reply `Preciso de ajuda` |
 | `pedido_reembolsado` | status `reembolsado` | "Olá, {{nome}}. O valor do pedido {{numero}} foi devolvido. O prazo para aparecer na fatura depende do seu banco." | quick-reply `Preciso de ajuda` |
