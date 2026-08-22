@@ -53,14 +53,19 @@ promete — reescreva-o antes de commitar.
 
 | Arquivo | Responsabilidade | Task |
 |---|---|---|
-| `backend/src/utils/emailSender.js` | Modificar: extrair `corpoDoEmailDeStatus`, escapar HTML | 1 |
-| `backend/test/email_status.test.js` | Criar: escape do e-mail de status | 1 |
+| `backend/src/utils/emailSender.js` | Modificar: extrair `corpoDoEmailDeStatus`, escapar HTML — **nos dois** senders fora da convenção (spec §1.1) | 1 |
+| `backend/test/email_status.test.js` | Criar: escape do e-mail de status **e do aviso do admin** | 1 |
 | `scripts/lib/conexao-pg.sh` | Criar: `senha_da_uri` e `uri_sem_senha`, funções puras | 2 |
-| `backend/test/backup_conexao.test.js` | Criar: contratos das duas funções acima | 2 |
-| `scripts/backup-banco.sh` | Modificar: `umask`, `chmod`, `PGPASSWORD` | 2 |
+| `backend/test/backup_conexao.test.js` | Criar: contratos das duas funções acima **e o e2e do script inteiro** (step 6) | 2 |
+| `scripts/backup-banco.sh` | Modificar: `umask`, `chmod`, `PGPASSWORD` **e o guarda que aborta** | 2 |
 | `scripts/backup-banco.cron.exemplo` | Modificar: nota sobre o `argv` | 2 |
+| `docs/deploy.md` | Modificar: a senha do `backup.env` precisa vir percent-encoded | 2 |
+| `README.md` | Modificar: `scripts/lib/conexao-pg.sh` no mapa de arquivos | 2 |
 | `backend/src/controllers/PaymentController.js` | Modificar: `conferirFrete` devolve `{valor, metodo}` | 3 |
 | `backend/test/f4_status_e_frete.test.js` | Modificar: casos do pareamento | 3 |
+| `backend/test/pagamento.test.js` | Modificar: os dublês de cotação ganham `name`; o par cruzado mora aqui | 3 |
+| `backend/test/f4_checkout_e_webhook.test.js` | Modificar: o checkout confere `metodo_envio` na coluna | 3 |
+| `backend/src/controllers/ShippingController.js` | Modificar: só o comentário do frete grátis, que agora aponta o nome | 3 |
 
 ---
 
@@ -68,6 +73,7 @@ promete — reescreva-o antes de commitar.
 
 **Files:**
 - Modify: `backend/src/utils/emailSender.js:64-111` (e o `module.exports` no fim do arquivo)
+  — mais `sendAdminNewOrderEmail`, que a revisão final do ramo trouxe junto (step 4)
 - Test: `backend/test/email_status.test.js` (criar)
 
 O corpo do e-mail hoje é montado inline dentro de `sendStatusEmail`, que consulta o banco
@@ -227,7 +233,12 @@ module.exports = {
 cd backend && node --test test/email_status.test.js
 ```
 
-Esperado: PASS, 4 testes.
+Esperado: PASS. **São 5 testes no arquivo entregue**: a revisão holística do ramo achou
+que `sendAdminNewOrderEmail`, no MESMO arquivo, seguia interpolando `order_id` e
+`payment_method` crus — e `payment_method` vem do corpo da requisição, filtrado só pelo
+Mercado Pago (spec §1.1). Os dois passaram a `escaparHtml` e o quinto teste os fixa,
+capturando a mensagem que o sender entrega ao Resend (este sender não tem corpo puro
+para chamar).
 
 - [ ] **Step 5: Commit**
 
@@ -440,7 +451,15 @@ uri_sem_senha() {
 cd backend && node --test test/backup_conexao.test.js
 ```
 
-Esperado: PASS, 10 testes.
+Esperado: PASS. **O arquivo entregue tem 14 testes**, não os 10 deste rascunho: 11 são
+das funções puras e 3 são o e2e do step 6. A revisão acrescentou "uri_sem_senha em URI
+sem caminho" (o atalho óbvio para o sufixo devolvia a senha ali) e reescreveu "a senha
+nunca sobra" para levar um segredo POR URI — procurar `segredo` numa URI que nunca o
+teve é asserção que passa sozinha.
+
+Em Windows são **13 pass + 1 skip**: o das permissões 600/700 não roda porque o Git
+Bash não aplica modo de arquivo — quem o executa de verdade é a CI (ubuntu-latest), que
+é também o sistema do alvo, a VPS.
 
 - [ ] **Step 5: Aplicar as correções no `backup-banco.sh`**
 
@@ -483,6 +502,39 @@ pg_dump --format=custom --compress=6 --no-owner --file "$PARCIAL" \
   "$(uri_sem_senha "$DATABASE_URL")"
 ```
 
+**E o guarda entre o `export` e o `pg_dump`** (não estava neste rascunho; entrou na
+revisão da task e é o que shippou, `scripts/backup-banco.sh:107-130`). Sem ele a
+correção FALHA ABERTO: senha com `/`, `?` ou `#` CRU faz `_autoridade_da_uri` cortar
+cedo, achar uma autoridade sem `@` e devolver senha vazia — e aí `uri_sem_senha`
+devolve a URI INTEIRA, com a senha, de volta para o `argv` do `pg_dump`. Exatamente o
+bug que este step remove, restaurado em silêncio e só nas senhas piores. Melhor
+abortar:
+
+```sh
+# O teste é DE PROPÓSITO mais grosseiro que o parser: ele olha a URI CRUA, sem
+# cortar em / ? #. É essa diferença que pega o caso perigoso — senha com / crua
+# faz o parser cortar cedo, achar autoridade sem @ e devolver senha vazia,
+# enquanto o glob ainda enxerga o :...@ e reprova. NÃO troque este glob por
+# algo que corte em / ? # — olhar a autoridade já analisada repete o mesmo
+# engano e não pega nada.
+#
+# O preço é um falso positivo conhecido: URI SEM senha cuja query traga um @
+# cru depois do : da porta (…host:5432/db?opt=a@b) também aborta. Aborta com
+# mensagem, e não vazando — e o @ ali deveria ser %40 de qualquer forma.
+case "$DATABASE_URL" in
+  *://*:*@*)
+    [ -n "$PGPASSWORD" ] || {
+      echo "ERRO: a DATABASE_URL tem senha mas não consegui extraí-la." >&2
+      echo "Percent-encode / ? # na senha (%2F %3F %23) — ver lib/conexao-pg.sh." >&2
+      exit 1; } ;;
+esac
+```
+
+Como o guarda reprova uma URI que o operador escreveria de boa-fé, `docs/deploy.md`
+§10 passa a dizer, junto do template da `DATABASE_URL`, que `/ ? #` na senha precisam
+vir percent-encoded (`%2F %3F %23`), e o `README.md` ganha o `lib/conexao-pg.sh` no
+mapa de arquivos.
+
 Trocar a linha 97 (`mv "$PARCIAL" "$ARQUIVO"`) por:
 
 ```sh
@@ -497,19 +549,35 @@ No cabeçalho, acrescentar ao fim do bloco de comentário do topo (depois da lin
 # a URI ja sem credencial (lib/conexao-pg.sh). O dump e a pasta nascem 600/700.
 ```
 
-- [ ] **Step 6: Verificar o script com shellcheck e um dump de mentira**
+- [ ] **Step 6: Verificar o script RODANDO o script**
 
-```bash
-bash -n scripts/backup-banco.sh
-```
+Este step pedia `bash -n` (sintaxe) mais um `bash -c` na função. Não bastava, e é por
+isso que o que shippou é outra coisa: **os 11 testes das funções puras passam inteiros
+com a linha do `pg_dump` revertida para `"$DATABASE_URL"`**. Eles provam que a
+biblioteca sabe tirar a senha; nada provava que o backup a usa — que é o motivo do
+commit. Verificação que sobrevive à mutação que ela deveria pegar não é verificação.
 
-Esperado: sem saída (sintaxe válida).
+O que entrou no lugar, em `backend/test/backup_conexao.test.js` (função `rodarBackup`,
+~1s, sem Postgres nenhum):
 
-```bash
-bash -c '. scripts/lib/conexao-pg.sh; uri_sem_senha "postgres://postgres:segredo@localhost:5432/postgres"'
-```
+- `pg_dump` e `pg_restore` **falsos** escritos num diretório temporário que entra na
+  frente do `PATH`. O de `pg_dump` anota o `argv` e o `PGPASSWORD` que recebeu e cria o
+  arquivo de `--file` — senão o `pg_restore --list` e o `mv` seguintes não teriam o que
+  abrir. Os dois nascem com `mode: 0o755`: sem o bit de execução, a busca do `PATH`
+  PULA o shim e o script acha o `pg_dump` real do runner (Git Bash não aplica modo, então
+  o defeito só apareceria na CI);
+- o script roda de verdade (`spawnSync("bash", [SCRIPT])`), com `DATABASE_URL`,
+  `BACKUP_DIR` e os caminhos dos logs pelo **ambiente** — nada interpolado no texto do
+  shim, para o teste não depender de escapar caminho de Windows;
+- `BACKUP_ENV` aponta para um arquivo que não existe, para o `set -a` do step 5 não
+  poder carregar `/etc/canastra/backup.env`. Este repositório fica clonado na VPS: sem
+  isso, um `npm test` lá dentro dumparia o banco real e a retenção do script apagaria
+  dumps reais.
 
-Esperado: `postgres://postgres@localhost:5432/postgres`
+Os três casos: (12) `PGPASSWORD` chega decodificada e a senha não aparece no `argv`,
+nem crua nem codificada, e o `.dump` verificado existe; (13) senha com `/` cru aborta —
+status 1, mensagem, e `pg_dump` nem foi chamado (é o guarda do step 5); (14) pasta 700
+e dump 600, **skip fora de Linux**.
 
 - [ ] **Step 7: Atualizar o cron de exemplo**
 
@@ -541,6 +609,16 @@ script contradizia a propria justificativa."
 - Modify: `backend/src/controllers/PaymentController.js` — `conferirFrete` (linhas 70-129),
   o consumo em 735 e em 839-840
 - Test: `backend/test/f4_status_e_frete.test.js` (existente)
+- Test: `backend/test/pagamento.test.js` (existente) — os dublês de cotação passam a ter
+  `name` nas opções falsas: sem isso os testes de PREÇO passariam pelo motivo errado
+  (409 por nome divergente, e não pelo que cada um afirma). É lá, e só lá, que o **par
+  cruzado** existe — o dublê devolve PAC e SEDEX na mesma cotação
+- Test: `backend/test/f4_checkout_e_webhook.test.js` (existente) — o checkout passa a
+  conferir `metodo_envio` na coluna. Ver a nota do self-review: sem essa asserção,
+  reverter a linha da gravação não quebrava teste nenhum
+- Modify: `backend/src/controllers/ShippingController.js` — só o comentário do frete
+  grátis, que dizia "qualquer opção real casa com o zero" e agora aponta o nome como o
+  que separa uma opção da outra depois do zero
 
 Hoje `conferirFrete` devolve um número e casa só por preço, contra o **conjunto** de
 opções. O pedido pode gravar `metodo_envio = "Correios SEDEX"` cobrando o preço do PAC.
@@ -568,7 +646,10 @@ Acrescentar ao fim de `backend/test/f4_status_e_frete.test.js`:
 
 const ITENS_UM = [{ product_id: "11111111-0000-0000-0000-000000000001", quantity: 1, price: 50 }];
 
-test("metodo e preco casados passam e devolvem o nome canonico", async () => {
+// Titulo entregue. Era "…e devolvem o nome canonico", que ali e INFALSIFICAVEL: o
+// casamento e igualdade exata de string, entao devolver o campo cru da requisicao
+// passaria byte a byte. A canonicalizacao quem prova e a retirada, mais abaixo.
+test("método e preço casados passam e devolvem os dois", async () => {
   const conferido = await conferirFrete({
     address: { zip_code: CEP_LOCAL },
     itens: ITENS_UM,
@@ -579,7 +660,11 @@ test("metodo e preco casados passam e devolvem o nome canonico", async () => {
   assert.deepEqual(conferido, { valor: 5, metodo: "Entrega Local" });
 });
 
-test("preco de uma opcao com o nome de outra e recusado", async () => {
+// Titulo entregue. Era "preco de uma opcao com o nome de outra e recusado", cenario
+// que ESTE arquivo nao consegue montar: com MELHOR_ENVIO_URL numa porta fechada a
+// cotacao tem UMA opcao, e "Correios SEDEX" nao e outra opcao — e um nome AUSENTE. O
+// par cruzado mora em pagamento.test.js, cujo duble devolve PAC e SEDEX juntos.
+test("nome que não está na cotação é recusado, mesmo com preço real", async () => {
   await assert.rejects(
     () =>
       conferirFrete({
@@ -753,10 +838,15 @@ correto; não reverta.
 
 ```bash
 git status --porcelain
-git log --oneline -4
+git log --oneline
 ```
 
-Esperado: árvore limpa e três commits de correção sobre o commit da spec.
+Esperado: árvore limpa, e sobre o commit da spec **um commit por task mais os das
+revisões**. Este passo dizia "três commits de correção" e o ramo tem mais: cada revisão
+de qualidade (o guarda que aborta, os shims executáveis, os títulos de teste que
+prometiam o que não exercitavam) virou commit próprio, de propósito — a mensagem de
+cada um é onde o motivo da correção fica registrado. Contar commits não é o critério;
+o critério é não haver nada fora das tasks.
 
 ---
 
@@ -764,13 +854,21 @@ Esperado: árvore limpa e três commits de correção sobre o commit da spec.
 
 **Cobertura da spec:**
 - §1 (escapar HTML) → Task 1, incluindo a extração de `corpoDoEmailDeStatus` que a spec
-  exige para o teste ser possível.
+  exige para o teste ser possível. §1.1 (o aviso do admin) → mesma Task 1, step 4.
 - §2 problema A (permissões) → Task 2 steps 5 (`umask 077`, `chmod 700`, `chmod 600`).
-- §2 problema B (senha no argv) → Task 2 steps 1-5.
-- §2 documentação → Task 2 steps 5 (cabeçalho) e 7 (cron).
+- §2 problema B (senha no argv) → Task 2 steps 1-5, **guarda de fail-closed incluído**:
+  sem ele a correção falha aberta justamente nas senhas com `/ ? #` cru.
+- §2 documentação → Task 2 steps 5 (cabeçalho do script, `docs/deploy.md` §10 e o
+  `README.md`) e 7 (cron).
 - §3 (pareamento) → Task 3, com os 6 casos de teste da spec cobertos pelos 5 testes novos
-  mais os existentes do arquivo (o caso "o pedido gravado recebe o método conferido" é
-  coberto pela mudança na linha 840 e verificado pela suíte inteira na Task 4).
+  mais os existentes do arquivo. **Correção deste parágrafo:** o caso "o pedido gravado
+  recebe o método conferido" NÃO era "verificado pela suíte inteira na Task 4" — reverter
+  a linha da gravação não quebrava teste nenhum, e foi a mutação que mostrou isso. Quem o
+  cobre hoje é a asserção acrescentada em `f4_checkout_e_webhook.test.js` ("checkout grava
+  canastra.pedidos…"), que lê `frete` e `metodo_envio` na coluna e exige `0` e
+  `"Retirada"` onde o corpo da requisição mandou `"Retirada na loja"`. Cobertura só
+  existe onde alguma asserção morre quando o código morre — "a suíte inteira roda" não é
+  cobertura de nada.
 - Fora de escopo (token da newsletter) → nenhuma task, como especificado.
 
 **Consistência de tipos:** `conferirFrete` devolve `{ valor: number, metodo: string }` na

@@ -19,7 +19,7 @@ Mercado Pago, recomputação do total no servidor, o portão do painel via
 
 | # | Correção | Origem |
 |---|---|---|
-| 1 | Escapar HTML no `sendStatusEmail` | Observação sub-limiar da review |
+| 1 | Escapar HTML no `sendStatusEmail` — e, na revisão final, no aviso do admin (§1.1) | Observação sub-limiar da review |
 | 2 | `backup-banco.sh`: permissões + senha fora do `argv` | Dois candidatos rejeitados (confiança 3) |
 | 3 | `conferirFrete`: parear método com preço | Candidato rejeitado (confiança 3) |
 
@@ -44,9 +44,14 @@ Isto é uma decisão registrada, não um esquecimento — e continua valendo.
 - `nome`, lido de `canastra.clientes.nome` — texto que o próprio cliente cadastrou;
 - `trackingCode`, digitado por um admin no painel.
 
-Todos os outros senders do arquivo já passam por `escaparHtml` — `conteudoDoLembreteDeCarrinho`
-(linhas 222, 230) e `sendAdminClubeSemEstoqueEmail` (linhas 178-181). Este é o único
-que não passa, e a inconsistência é com a convenção do próprio arquivo.
+`conteudoDoLembreteDeCarrinho` (linhas 222, 230) e `sendAdminClubeSemEstoqueEmail`
+(linhas 178-181) já passam por `escaparHtml`.
+
+Este parágrafo dizia que `sendStatusEmail` era "o único que não passa". **Era falso
+quando foi escrito**: `sendAdminNewOrderEmail` interpolava `order.order_id` e
+`order.payment_method` crus no HTML do aviso do admin. São dois senders fora da
+convenção, não um — e a revisão final do ramo trouxe o segundo junto (§1.1 abaixo).
+A inconsistência, nos dois casos, é com a convenção do próprio arquivo.
 
 O destinatário é sempre o dono do pedido, então não há impacto entre usuários — foi
 por isso que a review não a classificou como vulnerabilidade. Continua sendo um
@@ -94,10 +99,35 @@ Novo `backend/test/email_status.test.js`, sobre `conteudoDoStatus` e `corpoDoEma
 2. `trackingCode` = `AA<BB>CC` sai escapado;
 3. o `\n` que separa a linha do rastreio continua virando `<br/>` (não vira `&lt;br/&gt;`,
    nem some);
-4. o `subject` do `<h2>` sai escapado.
+4. o `subject` do `<h2>` sai escapado;
+5. o aviso do admin (§1.1) escapa `order_id` e `payment_method`.
 
 `conteudoDoStatus` e `corpoDoEmailDeStatus` passam a ser exportados para o teste
 alcançá-los.
+
+### 1.1 O aviso do admin, pela mesma disciplina
+
+`sendAdminNewOrderEmail` (linhas 147-149) interpola `order.order_id` e
+`order.payment_method` crus. O segundo é o `finalPaymentMethodId` de
+`PaymentController.js:782-787`, resolvido de `formData.paymentMethodId ||
+formData.payment_method_id || paymentMethodType` — corpo da requisição. O único filtro
+é o Mercado Pago aceitar o valor como `payment_method_id`, e o `payment.create` roda
+**antes** do `createOrder`: o que chega ao e-mail passou pela validação deles, nunca
+pela nossa.
+
+Os dois passam a `escaparHtml`. O `toUpperCase()` do método vem **antes** do escape —
+depois dele, `&lt;` viraria `&LT;` e a entidade sairia deformada.
+`Number(...).toLocaleString(...)` é número e fica como está, assim como `NOME_LOJA` e
+`URL_LOJA`, que são configuração do operador (é o tratamento que o arquivo inteiro já
+lhes dá).
+
+O teste 5 não chama função pura: este sender monta o HTML inline, e extrair um corpo
+puro só para alcançá-lo mexeria mais em produção do que a correção. Ele captura a
+mensagem que o sender entrega ao Resend, o que prova o caminho de produção inteiro.
+
+O destinatário é o admin, então também aqui não há caminho entre usuários. É a mesma
+classe de consistência do §1 — achada na revisão holística do ramo, depois de três
+revisões que a deixaram passar —, não uma falha explorável.
 
 ---
 
@@ -188,8 +218,10 @@ Dependência: `bash` no PATH. Existe no Git Bash local e no `ubuntu-latest` do C
 ### Documentação
 
 O cabeçalho do script e o `backup-banco.cron.exemplo` ganham a nota de que a senha não
-trafega mais no `argv`, fechando a contradição apontada acima. `docs/deploy.md` §5.6
-menciona as permissões 700/600 do destino.
+trafega mais no `argv`, fechando a contradição apontada acima. `docs/deploy.md` §10 (a
+preparação do destino, não §5.6 como esta linha dizia — §5.6 é de `producao.md`)
+menciona as permissões 700/600, com a consequência que o operador precisa saber:
+`BACKUP_DIR` tem de ser pasta DEDICADA, porque o `chmod 700` recai sobre ela inteira.
 
 ---
 
