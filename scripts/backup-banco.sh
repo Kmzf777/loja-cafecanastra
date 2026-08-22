@@ -38,8 +38,21 @@
 #
 # O dump cobre o BANCO (catálogo, pedidos, clientes, auth do GoTrue). O volume
 # do Storage (imagens de produto, a partir da F3) é cópia separada — ver §5.6.
+#
+# A SENHA NÃO TRAFEGA NO argv: o script exporta PGPASSWORD e entrega ao pg_dump
+# a URI já sem credencial (lib/conexao-pg.sh). O dump e a pasta nascem 600/700.
 
 set -euo pipefail
+
+# O dump cobre catálogo, pedidos, clientes e o auth do GoTrue — PII completa
+# mais hash de senha e refresh token. Com o umask padrão do operador (022) ele
+# nasceria 0644 numa pasta 0755, legível por qualquer usuário da VPS.
+umask 077
+
+# As duas funções que mantêm a senha fora do argv do pg_dump. Ver o cabeçalho
+# de lib/conexao-pg.sh.
+# shellcheck source=lib/conexao-pg.sh
+. "$(dirname "$0")/lib/conexao-pg.sh"
 
 # ── 1. Ambiente ─────────────────────────────────────────────────────────────
 # O cron chama este script pelado; quem carrega a DATABASE_URL é este source.
@@ -66,6 +79,9 @@ command -v pg_dump >/dev/null || { echo "ERRO: pg_dump não encontrado (apt inst
 command -v pg_restore >/dev/null || { echo "ERRO: pg_restore não encontrado (apt install postgresql-client)." >&2; exit 1; }
 
 mkdir -p "$BACKUP_DIR"
+# Explícito, e não só herdado do umask: a pasta pode já existir de uma execução
+# anterior, criada com outro umask.
+chmod 700 "$BACKUP_DIR"
 
 CARIMBO="$(date +%Y%m%d-%H%M%S)"
 ARQUIVO="$BACKUP_DIR/canastra-$CARIMBO.dump"
@@ -82,7 +98,15 @@ trap 'rm -f "$PARCIAL"' EXIT
 # que a verificação abaixo precisa. Escreve em .parcial e só renomeia depois de
 # verificado: um dump interrompido nunca fica com nome de backup válido.
 echo "[backup] pg_dump -> $ARQUIVO"
-pg_dump --format=custom --compress=6 --no-owner --file "$PARCIAL" "$DATABASE_URL"
+# A senha vai por PGPASSWORD (só o dono do processo e o root leem
+# /proc/<pid>/environ) e a URI segue SEM ela — /proc/<pid>/cmdline é legível
+# por qualquer usuário local, e um `ps aux` durante o dump entregaria a
+# credencial do papel postgres. É a mesma disciplina que o backup-banco.cron.exemplo
+# já aplicava ao manter a URL fora da linha do cron.
+PGPASSWORD="$(senha_da_uri "$DATABASE_URL")"
+export PGPASSWORD
+pg_dump --format=custom --compress=6 --no-owner --file "$PARCIAL" \
+  "$(uri_sem_senha "$DATABASE_URL")"
 
 # ── 3. Verificação ──────────────────────────────────────────────────────────
 # pg_restore --list lê o índice (TOC) do arquivo: detecta dump truncado ou
@@ -95,6 +119,7 @@ if ! pg_restore --list "$PARCIAL" > /dev/null; then
   exit 1   # o trap apaga o .parcial
 fi
 mv "$PARCIAL" "$ARQUIVO"
+chmod 600 "$ARQUIVO"
 echo "[backup] ok: $(du -h "$ARQUIVO" | cut -f1) verificado com pg_restore --list."
 
 # ── 4. Retenção ─────────────────────────────────────────────────────────────

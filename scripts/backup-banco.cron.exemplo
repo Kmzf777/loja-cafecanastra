@@ -13,6 +13,9 @@
 #   echo 'export DATABASE_URL="postgres://postgres:SENHA@localhost:5432/postgres"' \
 #     | sudo tee /etc/canastra/backup.env > /dev/null
 #
+# O script fecha o outro lado dessa mesma disciplina: a senha não vai no argv do
+# pg_dump (vai por PGPASSWORD), então `ps aux` durante o backup também não a mostra.
+#
 # (Opcional, no mesmo arquivo: BACKUP_DIR=... e RETENCAO_DIAS=...)
 #
 # O log importa: o modo clássico de backup falhar é em silêncio, meses antes de
