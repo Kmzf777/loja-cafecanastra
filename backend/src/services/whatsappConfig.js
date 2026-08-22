@@ -82,6 +82,29 @@ const INTERRUPTORES = Object.freeze([
 const SEGREDOS = Object.freeze(["access_token", "app_secret", "verify_token"]);
 
 /**
+ * O diagnóstico do desligamento automático (0020). Lista PRÓPRIA, e não duas
+ * linhas a mais em `CAMPOS_DE_TEXTO`, porque as duas listas respondem a
+ * perguntas diferentes:
+ *
+ *   `CAMPOS_DE_TEXTO` é "o que o GESTOR digita" — é por ela que
+ *   `WhatsappController.peneirarConfig` decide o que aceitar no corpo do PUT.
+ *   Estas duas colunas não são digitadas por ninguém: quem as escreve é o
+ *   próprio bot, ao desistir (`notificacoes.js`). Postas naquela lista, elas
+ *   virariam campo de texto livre do painel — e um painel capaz de "explicar"
+ *   um desligamento que nunca houve.
+ *
+ * Elas ENTRAM em `GRAVAVEIS` porque `gravar()` é o caminho pelo qual o bot as
+ * escreve, e em `paraOPainel()` porque são o diagnóstico — inteiras, sem
+ * máscara: são a única resposta à pergunta "fui eu quem desligou, ou a
+ * credencial morreu?".
+ *
+ * SEM SEMENTE NA `.env`, e a ausência é deliberada: são o registro de um evento
+ * que aconteceu NESTA instalação, e um valor de env aqui seria a loja anunciando
+ * um desligamento que nunca houve.
+ */
+const CAMPOS_DE_DIAGNOSTICO = Object.freeze(["ultimo_erro", "desligado_em"]);
+
+/**
  * A semente de cada campo na `.env`. `numero_suporte` reaproveita
  * `LOJA_WHATSAPP` — é o mesmo número humano que `db/seed.js` põe em
  * `config_loja.whatsapp` —, mas a coluna é própria de propósito (0017): lá o
@@ -107,13 +130,25 @@ const SEMENTE_NA_ENV = Object.freeze({
  * requisição não escolhe qual coluna escrever — e o nome da coluna que entra
  * no SQL é sempre uma constante deste arquivo.
  */
-const GRAVAVEIS = Object.freeze(["ativo", ...CAMPOS_DE_TEXTO, ...INTERRUPTORES]);
+const GRAVAVEIS = Object.freeze([
+  "ativo",
+  ...CAMPOS_DE_TEXTO,
+  ...INTERRUPTORES,
+  ...CAMPOS_DE_DIAGNOSTICO,
+]);
 
 /**
  * Lista literal de colunas: nunca `SELECT *`, como `configRepository.js:12-21`.
  * Coluna nova na tabela não entra aqui sozinha — e é isso que se quer.
  */
-const COLUNAS = ["id", "ativo", ...CAMPOS_DE_TEXTO, ...INTERRUPTORES, "atualizado_em"].join(", ");
+const COLUNAS = [
+  "id",
+  "ativo",
+  ...CAMPOS_DE_TEXTO,
+  ...INTERRUPTORES,
+  ...CAMPOS_DE_DIAGNOSTICO,
+  "atualizado_em",
+].join(", ");
 
 /**
  * Qual interruptor responde por qual status.
@@ -180,6 +215,11 @@ function comSemente(linha) {
   }
   for (const campo of INTERRUPTORES) {
     cfg[campo] = linha ? linha[campo] : true;
+  }
+  // Sem `?? semente(...)`: o diagnóstico não tem semente na `.env` (ver
+  // `CAMPOS_DE_DIAGNOSTICO`). Sem linha, ninguém desistiu de nada ainda.
+  for (const campo of CAMPOS_DE_DIAGNOSTICO) {
+    cfg[campo] = (linha ? linha[campo] : null) ?? null;
   }
 
   // Congelado porque ESTE objeto é o cache: quem recebesse uma referência
@@ -335,6 +375,9 @@ async function paraOPainel() {
     atualizado_em: cfg.atualizado_em,
   };
   for (const campo of INTERRUPTORES) visivel[campo] = cfg[campo];
+  // INTEIROS, sem máscara: não são segredo, são o diagnóstico. Escondê-los
+  // seria fechar a única tela que responde por que o bot parou.
+  for (const campo of CAMPOS_DE_DIAGNOSTICO) visivel[campo] = cfg[campo];
   for (const campo of SEGREDOS) visivel[`${campo}_mascara`] = mascarar(cfg[campo]);
 
   return visivel;
@@ -360,4 +403,10 @@ module.exports = {
   INTERRUPTORES,
   SEGREDOS,
   CAMPOS_MINIMOS,
+  /**
+   * Sai daqui para o handler do painel APAGAR as duas de uma vez quando o
+   * gestor religa a integração — e não para ele aceitá-las no corpo do PUT.
+   * Ver o comentário da constante.
+   */
+  CAMPOS_DE_DIAGNOSTICO,
 };

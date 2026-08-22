@@ -289,6 +289,36 @@ async function eventosNovos(corpo) {
   return eventos.filter((evento) => novas.has(evento.chave));
 }
 
+/**
+ * Apaga os eventos fora da janela de reentrega da Meta. Devolve quantos saíram.
+ *
+ * SETE DIAS porque é o prazo documentado de reentrega ("for up to 7 days"), o
+ * mesmo que o comentário do índice `whatsapp_eventos_recebido_idx` (0017) já
+ * anotou. A tabela só existe para responder "já processei este?", e depois desse
+ * prazo a pergunta não pode mais ser feita — guardar mais é só custo de disco.
+ * Cortar ANTES é o erro caro: deixaria passar justamente a duplicata do fim da
+ * janela, que é a que ninguém está olhando.
+ *
+ * `now() - interval '7 days'` calculado PELO POSTGRES, e não um `Date` do Node:
+ * o relógio que gravou `recebido_em` (o `DEFAULT now()` da tabela) tem de ser o
+ * mesmo que decide o corte. Com o processo num fuso e o banco em outro, uma
+ * conta feita aqui apagaria horas a mais ou a menos, em silêncio.
+ *
+ * A LINHA NÃO GUARDA NADA ALÉM DA CHAVE: `dedupe_key` é `wamid` ou
+ * `id:status:timestamp`, e o miolo do wamid em base64 é o telefone do cliente.
+ * Por isso esta função DEVOLVE UM NÚMERO e não as linhas apagadas, e por isso o
+ * log de quem a chama conta quantas — nunca quais.
+ *
+ * `conexao = pool` para o dia em que a limpeza precisar rodar dentro de uma
+ * transação de outro job; hoje ninguém passa nada.
+ */
+async function limparEventosVelhos(conexao = pool) {
+  const { rowCount } = await conexao.query(
+    "DELETE FROM canastra.whatsapp_eventos WHERE recebido_em < now() - interval '7 days'",
+  );
+  return rowCount;
+}
+
 /* ------------------------------------------------------------------------- *
  * O menu de suporte
  * ------------------------------------------------------------------------- */
@@ -1124,6 +1154,25 @@ async function gravarConfig(req, res) {
     });
   }
 
+  // RELIGAR APAGA O MOTIVO DO DESLIGAMENTO ANTERIOR (0020).
+  //
+  // O modo de falha que isto impede: a credencial morre, o bot se desliga
+  // sozinho e grava "código 190"; o gestor troca o token e religa; meses depois
+  // ele desliga a integração A MÃO para uma manutenção, abre a tela e lê aquele
+  // mesmo motivo velho — e conclui que a credencial morreu de novo. Um
+  // `ultimo_erro` que sobrevive ao religamento não é um diagnóstico
+  // desatualizado: é um diagnóstico ERRADO, que é pior do que não ter nenhum.
+  //
+  // SÓ NO `true`, e nunca no `false`: um desligamento humano deixa as duas
+  // colunas em branco de propósito, e o branco É a resposta ("fui eu quem
+  // desligou"). As chaves entram AQUI, e não em `peneirarConfig`, porque o
+  // painel não as digita — quem as escreve é o bot ao desistir. Aceitá-las no
+  // corpo do PUT faria da tela um lugar de "explicar" desligamento que nunca
+  // houve.
+  if (campos.ativo === true) {
+    for (const campo of whatsappConfig.CAMPOS_DE_DIAGNOSTICO) campos[campo] = null;
+  }
+
   try {
     // `campos` pode estar vazio com `conhecidos > 0`: é o salvamento que só
     // trazia segredos em branco. Nada a escrever, e nada de errado — a
@@ -1401,6 +1450,8 @@ module.exports = {
   // A deduplicação, e o que `receber` faz com o que ela devolve.
   eventosNovos,
   rotearMensagem,
+  // A faxina da tabela de deduplicação. Pendurada no cron por `index.js`.
+  limparEventosVelhos,
   // As quatro funções puras: é onde a decisão de segurança acontece, e é o que
   // permite testá-las sem servidor e sem banco.
   validarAssinatura,

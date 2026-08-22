@@ -263,6 +263,50 @@ if (process.env.BLING_ATIVO === "true" && process.env.BLING_RASTREIO_CRON === "t
   require("./services/blingPedidos").iniciarCronBling();
 }
 
+/**
+ * WhatsApp: faxina diaria de `whatsapp_eventos`, DESLIGADA por padrao.
+ *
+ * O QUE ELA APAGA E POR QUE ELA PRECISA EXISTIR: aquela tabela so existe para
+ * responder "ja processei este evento?". A Meta reentrega por ate SETE DIAS;
+ * depois disso a pergunta nao pode mais ser feita, e cada linha guardada e so
+ * custo de disco numa tabela que cresce com o movimento da loja e nunca
+ * encolhe sozinha.
+ *
+ * O GATE E `META_ATIVO`, a mesma env booleana LITERAL de ABANDONO_ATIVO e
+ * BLING_ATIVO (o "true" escrito, nunca "1" nem "sim"). Numa instalacao que
+ * nunca ligou o WhatsApp a tabela e permanentemente vazia: agendar ali seria
+ * carregar o node-cron e rodar um DELETE por dia para apagar nada. E o gate e a
+ * ENV, e nao a coluna `ativo` do banco, de proposito — `ativo` oscila (o bot se
+ * desliga sozinho quando a credencial morre) e a faxina nao pode parar junto:
+ * os eventos ja recebidos continuam vencendo enquanto ninguem religa.
+ *
+ * `node-cron` E NAO `setInterval`, e a diferenca e um modo de falha real: um
+ * `setInterval` de 24h so dispara 24h DEPOIS DA SUBIDA, entao um processo que
+ * reinicia todo dia (deploy, watchdog, VPS apertada) nunca chega a limpar nada.
+ * Um horario fixo dispara no horario, tenha o processo subido quando tiver. A
+ * madrugada porque e quando a loja esta parada.
+ *
+ * O `catch` e a rede: uma faxina que falha loga e espera amanha — nenhuma
+ * limpeza de tabela auxiliar derruba a loja. E o log conta QUANTAS linhas
+ * sairam, nunca quais: `dedupe_key` e o wamid, e o miolo dele em base64 e o
+ * telefone do cliente.
+ */
+if (process.env.META_ATIVO === "true") {
+  require("node-cron").schedule("17 4 * * *", () => {
+    require("./controllers/WhatsappController")
+      .limparEventosVelhos()
+      .then((apagados) => {
+        if (apagados > 0) {
+          console.log(`WhatsApp: ${apagados} evento(s) fora da janela de 7 dias apagados.`);
+        }
+      })
+      .catch((erro) => {
+        console.error("Faxina de eventos do WhatsApp falhou:", erro.message);
+      });
+  });
+  console.log("WhatsApp: faxina de eventos LIGADA (diaria, 04:17, retencao de 7 dias).");
+}
+
 // Tratamento de erros gerais
 app.use((err, req, res, next) => {
   console.error(err);

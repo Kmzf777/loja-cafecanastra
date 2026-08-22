@@ -127,8 +127,17 @@ beforeEach(async () => {
   // O `wa_id` volta a NULL junto com o opt-out: quem o grava e um teste so, e
   // sem esta linha ele sobreviveria para os seguintes — que passariam a medir o
   // caminho do wa_id achando que medem o do telefone digitado.
+  //
+  // `whatsapp_optin_em` volta pelo MESMO motivo, e pela mesma regra do
+  // `before()`: o carimbo acompanha o telefone (quem nao tem numero nao tem o
+  // que carimbar). O teste do carimbo ausente apaga o de Ana; sem esta linha
+  // ele apagaria para todos os testes seguintes, e os que medem envio ficariam
+  // verdes ou vermelhos pelo motivo errado.
   await bd.pool.query(
-    "UPDATE canastra.clientes SET whatsapp_optout_em = NULL, whatsapp_wa_id = NULL",
+    `UPDATE canastra.clientes
+        SET whatsapp_optout_em = NULL,
+            whatsapp_wa_id = NULL,
+            whatsapp_optin_em = CASE WHEN telefone IS NULL THEN NULL ELSE now() END`,
   );
   config.esquecer();
   await config.gravar({
@@ -230,6 +239,50 @@ test("quem pediu para parar nao recebe mais", async () => {
   await notificacoes.avisarCliente(pedidoDe(ANA), "enviado", "AA123BR");
 
   assert.equal(emails.length, 1, "o e-mail continua: o opt-out e do WhatsApp");
+  assert.equal(zaps.length, 0);
+});
+
+test("quem tem telefone mas nao tem carimbo de consentimento nao recebe", async () => {
+  // O modo de falha que isto impede: `authenticated` tem UPDATE em
+  // `clientes.telefone` (0018) e NAO tem em `whatsapp_optin_em`. Um numero
+  // gravado por fora do fluxo de cadastro chega sem prova de consentimento —
+  // e o cabecalho de 0017 promete, com todas as letras, que sem carimbo o bot
+  // nao manda. Ate 0020 aquilo era so uma frase: a consulta do destinatario
+  // nunca leu a coluna.
+  await bd.pool.query(
+    "UPDATE canastra.clientes SET whatsapp_optin_em = NULL WHERE user_id = $1::uuid",
+    [ANA],
+  );
+
+  await notificacoes.avisarCliente(pedidoDe(ANA), "enviado", "AA123BR");
+
+  assert.equal(emails.length, 1, "o e-mail continua: o carimbo e do WhatsApp");
+  assert.equal(zaps.length, 0);
+
+  // Sem linha nenhuma de rastro: o silencio acontece ANTES do INSERT, como
+  // todos os outros silencios legitimos. Uma linha 'pendente' aqui seria a
+  // loja registrando que tentou escrever para quem nao consentiu.
+  const { rows } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.whatsapp_mensagens",
+  );
+  assert.equal(rows[0].n, 0);
+});
+
+test("o carimbo de consentimento nao vale pelo wa_id ja conhecido", async () => {
+  // O caminho lateral: o cliente ja respondeu ao bot alguma vez, entao ha
+  // `whatsapp_wa_id` gravado e o destino existe SEM depender do telefone. Se a
+  // guarda do carimbo ficasse presa ao ramo do telefone, este cliente
+  // continuaria recebendo — e e justamente quem a loja tem como alcancar.
+  await bd.pool.query(
+    `UPDATE canastra.clientes
+        SET whatsapp_optin_em = NULL, whatsapp_wa_id = '553199990000'
+      WHERE user_id = $1::uuid`,
+    [ANA],
+  );
+
+  await notificacoes.avisarCliente(pedidoDe(ANA), "enviado", "AA123BR");
+
+  assert.equal(emails.length, 1);
   assert.equal(zaps.length, 0);
 });
 

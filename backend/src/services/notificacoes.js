@@ -42,7 +42,7 @@ const pool = require("../pgPool");
 const { sendStatusEmail } = require("../utils/emailSender");
 const { conteudoDoStatusWhats } = require("../utils/whatsappMensagens");
 const { paraE164, ultimosQuatro } = require("../utils/telefone");
-const { carregar, configurado, avisoLigado } = require("./whatsappConfig");
+const { carregar, gravar, configurado, avisoLigado } = require("./whatsappConfig");
 const { enviarTemplate } = require("./whatsappClient");
 
 /** Teto do que se guarda em `erro_texto`. A coluna é `text`, o log não é. */
@@ -64,7 +64,7 @@ const LIMITE_DO_ERRO = 500;
 async function destinatario(userId) {
   const { rows } = await pool.query(
     `SELECT COALESCE(c.nome, 'Cliente') AS nome,
-            c.telefone, c.whatsapp_wa_id, c.whatsapp_optout_em
+            c.telefone, c.whatsapp_wa_id, c.whatsapp_optin_em, c.whatsapp_optout_em
        FROM canastra.clientes c
       WHERE c.user_id = $1::uuid`,
     [userId],
@@ -122,6 +122,72 @@ function semDadoPessoal(texto) {
 }
 
 /**
+ * Os erros que são da INTEGRAÇÃO, e não de uma mensagem.
+ *
+ * 190    = OAuth inválido (token revogado, expirado, ou app removido)
+ * 200    = permissão faltando no token
+ * 10     = a app não tem permissão para esta ação
+ * 131031 = a conta foi bloqueada pela política da Meta
+ *
+ * Os quatro dizem a mesma coisa: NENHUMA mensagem vai sair até um humano
+ * trocar a credencial. Continuar tentando queima cota da API, enche o log, e a
+ * loja só descobre quando um cliente reclama.
+ *
+ * O QUE NÃO ESTÁ AQUI, E POR QUÊ: 131026 ("aquele número não recebe"), 131047
+ * ("fora da janela"), 131000 ("algo deu errado") e 132001 ("template não
+ * encontrado") são problemas de UMA mensagem, de UM destinatário ou de UM
+ * template. Desligar a loja inteira por causa de um número errado seria a cura
+ * pior que a doença: um cadastro com o telefone trocado silenciaria os avisos
+ * de TODOS os outros clientes.
+ *
+ * A LISTA É FECHADA de propósito, e não "qualquer erro 4xx": erro novo da Meta
+ * que ninguém mapeou tem de manter a loja funcionando, porque o custo de errar
+ * para o lado de desligar é maior que o de tentar uma vez a mais.
+ */
+const ERROS_QUE_DESLIGAM = Object.freeze([190, 200, 10, 131031]);
+
+/**
+ * Desliga a integração e deixa escrito por quê.
+ *
+ * NUNCA LANÇA, e o `try` é o ponto: gravar a configuração é uma SEGUNDA ida ao
+ * banco, e ela pode falhar sozinha (banco reiniciando, constraint). Se essa
+ * falha subisse, ela derrubaria junto o `catch` que acabou de registrar a falha
+ * da MENSAGEM — a loja perderia as duas coisas, e o log ficaria com o erro do
+ * Postgres no lugar do erro da Meta, que é o diagnóstico de verdade.
+ *
+ * `gravar()` INVALIDA O CACHE, e é isso que faz o desligamento valer já para o
+ * próximo pedido, sem restart. Falhando a gravação, o cache também não é
+ * mexido: o processo continua achando que está ligado, que é a verdade sobre o
+ * que está no banco. Um cache "desligado" com o banco dizendo "ligado" faria o
+ * painel discordar de si mesmo até o restart.
+ */
+async function desligarPorCredencialMorta(codigo, motivo) {
+  try {
+    await gravar({ ativo: false, ultimo_erro: motivo, desligado_em: new Date() });
+  } catch (erro) {
+    console.error(
+      `⚠️  WHATSAPP: a Meta recusou a credencial (código ${codigo}) e NÃO foi ` +
+        `possível desligar a integração no banco (código ${erro.code || "?"}). ` +
+        "O bot vai continuar tentando e falhando a cada pedido — desligue a " +
+        "integração no painel até trocar a credencial.",
+    );
+    return;
+  }
+
+  // GRITA A CONSEQUÊNCIA, e não o código: quem lê este log precisa saber o que
+  // parou de acontecer na loja, no espírito de `blingClient.js:157-166`. Um
+  // "erro 190" sozinho não diz a ninguém que os clientes pararam de ser
+  // avisados.
+  console.error(
+    `⚠️  WHATSAPP DESLIGADO AUTOMATICAMENTE: a Meta recusou a credencial ` +
+      `(código ${codigo}). O bot PAROU — nenhum cliente receberá aviso de ` +
+      "pedido por WhatsApp até alguém trocar a credencial e religar a " +
+      "integração no painel (Dashboard → WhatsApp). O e-mail continua saindo " +
+      `normalmente. Motivo registrado: ${motivo}`,
+  );
+}
+
+/**
  * O aviso de status no WhatsApp, com todos os silêncios legítimos na frente.
  *
  * SILÊNCIO É SILÊNCIO: nenhum dos `return` abaixo loga erro. Cliente sem
@@ -146,6 +212,34 @@ async function enviarWhatsappDeStatus(order, novoStatus, rastreio) {
 
   const cliente = await destinatario(order.user_id);
   if (!cliente) return;
+
+  // A PROVA DE CONSENTIMENTO, E ELA VEM ANTES DO DESTINO.
+  //
+  // O cabeçalho de 0017 promete, com todas as letras, que "sem carimbo o bot
+  // nao manda, que e a falha para o lado seguro". Até a 0020 aquilo era só uma
+  // frase: esta consulta lia `telefone`, `whatsapp_wa_id` e
+  // `whatsapp_optout_em`, e o carimbo nunca. A promessa não mordia por acidente
+  // — todo escritor de `telefone` carimbava junto —, mas `authenticated`
+  // CONTINUA com `UPDATE (…, telefone, …)` em `clientes` pela lista de 0018 e
+  // NÃO tem `UPDATE` em `whatsapp_optin_em`. Um `PATCH` do PostgREST, ou a tela
+  // de perfil que ainda vai existir, grava um número SEM carimbo nenhum — e o
+  // bot escrevia para ele.
+  //
+  // O ônus de provar que o consentimento existiu é do controlador (LGPD, Art. 8
+  // § 2º). Um envio que não confere o carimbo não tem o que apresentar.
+  //
+  // A GUARDA VEM ANTES DE RESOLVER O DESTINO, e não dentro do ramo do telefone,
+  // porque `whatsapp_wa_id` é um segundo caminho até o mesmo aparelho: presa ao
+  // ramo do telefone, ela deixaria passar quem já respondeu ao bot uma vez — e
+  // é exatamente quem a loja tem como alcançar.
+  //
+  // A SEGUNDA TRANCA DEFENSÁVEL, e por que ela não está aqui: tirar `telefone`
+  // da lista de `GRANT UPDATE` de 0018 fecharia o buraco na origem, e não só na
+  // saída. Fica de fora porque quebraria a tela de perfil que ainda não existe
+  // (hoje o número só entra por `registrar_optin_whatsapp`, que carimba junto),
+  // e essa é decisão do dono da loja, não deste arquivo.
+  if (!cliente.whatsapp_optin_em) return;
+
   // Não existe STOP nativo no WhatsApp: a Meta não intercepta texto nenhum.
   // Parar de mandar é inteiramente responsabilidade da loja, e é esta coluna.
   if (cliente.whatsapp_optout_em) return;
@@ -205,11 +299,12 @@ async function enviarWhatsappDeStatus(order, novoStatus, rastreio) {
     // devolvesse como string faria o UPDATE morrer em 22P02 e trocaria o
     // registro da falha por uma segunda falha, mais obscura.
     const codigo = Number.isInteger(erro?.codigo) ? erro.codigo : null;
+    const motivo = semDadoPessoal(erro?.message);
     await pool.query(
       `UPDATE canastra.whatsapp_mensagens
           SET status = 'falhou', erro_codigo = $2, erro_texto = $3, atualizado_em = now()
         WHERE id = $1::uuid`,
-      [id, codigo, semDadoPessoal(erro?.message)],
+      [id, codigo, motivo],
     );
     // O rastro fica no banco, mas o log é o que alguém está olhando quando
     // reclamam de aviso que não chegou. Código e pedido, nunca telefone.
@@ -217,6 +312,19 @@ async function enviarWhatsappDeStatus(order, novoStatus, rastreio) {
       `WhatsApp: aviso de '${novoStatus}' não saiu para o pedido ` +
         `${String(order.order_id).slice(0, 8)} (código ${codigo ?? "?"}).`,
     );
+
+    // POR ÚLTIMO, e depois de a falha da mensagem já estar gravada: o
+    // desligamento é política POR CIMA do rastro, nunca no lugar dele. Se a
+    // ordem se invertesse, um erro na gravação da configuração deixaria a
+    // mensagem eternamente 'pendente' — e 'pendente' significa "pode ter
+    // saído", que é a resposta errada para um envio que sabidamente falhou.
+    //
+    // O MESMO `motivo` da coluna `erro_texto`, e não `erro.message` cru: as
+    // duas colunas guardam a mesma frase da Meta, e é `semDadoPessoal()` que
+    // garante que nenhuma das duas carregue número de telefone.
+    if (ERROS_QUE_DESLIGAM.includes(codigo)) {
+      await desligarPorCredencialMorta(codigo, motivo);
+    }
   }
 }
 
