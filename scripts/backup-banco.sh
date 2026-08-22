@@ -110,13 +110,17 @@ export PGPASSWORD
 # O teste é DE PROPÓSITO mais grosseiro que o parser: ele olha a URI CRUA, sem
 # cortar em / ? #. É essa diferença que pega o caso perigoso — senha com / crua
 # faz o parser cortar cedo, achar autoridade sem @ e devolver senha vazia,
-# enquanto o glob ainda enxerga o :...@ e reprova. Olhar a autoridade já
-# analisada repetiria o mesmo engano e não pegaria nada; por isso NÃO troque
-# este glob por algo que corte nos mesmos delimitadores.
+# enquanto o glob ainda enxerga o :...@ e reprova. NÃO troque este glob por
+# algo que corte em / ? # — olhar a autoridade já analisada repete o mesmo
+# engano e não pega nada.
 #
 # O preço é um falso positivo conhecido: URI SEM senha cuja query traga um @
 # cru depois do : da porta (…host:5432/db?opt=a@b) também aborta. Aborta com
 # mensagem, e não vazando — e o @ ali deveria ser %40 de qualquer forma.
+# Dá para eliminá-lo cortando no PRIMEIRO @ e olhando só o que vem antes (isso
+# não usa / ? #, então continua pegando os três casos perigosos); custa um case
+# aninhado, porque sem @ nenhum o corte devolve a URI inteira e o : da porta
+# dispararia sozinho. Trocar exige refazer os testes 12 e 13.
 case "$DATABASE_URL" in
   *://*:*@*)
     [ -n "$PGPASSWORD" ] || {

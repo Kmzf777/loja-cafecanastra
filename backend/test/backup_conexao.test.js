@@ -134,6 +134,13 @@ function rodarBackup(databaseUrl) {
 
   // Os caminhos vão por AMBIENTE, e não interpolados no texto do shim: assim o
   // teste não depende de escapar caminho de Windows dentro de aspas do shell.
+  //
+  // mode 0o755 é OBRIGATÓRIO: sem ele o Node cria 0o666 & ~umask, que na CI
+  // (umask 022) dá 0644 — e tanto o `command -v` quanto o execve PULAM arquivo
+  // sem bit de execução na busca do PATH. O script então ou aborta no próprio
+  // `command -v pg_dump`, ou acha o pg_dump REAL do runner e tenta conectar em
+  // localhost:5432. Passa no Git Bash de qualquer jeito (Windows não aplica
+  // modo), então o defeito só apareceria na CI.
   fs.writeFileSync(
     path.join(bin, "pg_dump"),
     `#!/usr/bin/env bash
@@ -147,10 +154,15 @@ done
 [ -n "$alvo" ] && printf 'dump falso' > "$alvo"
 exit 0
 `,
+    { mode: 0o755 },
   );
+  // Sai 0: o script roda `pg_restore --list` dentro de um `if !`, então este
+  // 0 faz a condição ser falsa e o backup segue. (Comando em condição de `if`
+  // fica fora do errexit de qualquer forma — o `set -e` não morde aqui.)
   fs.writeFileSync(
     path.join(bin, "pg_restore"),
     "#!/usr/bin/env bash\nexit 0\n",
+    { mode: 0o755 },
   );
 
   const r = spawnSync("bash", [SCRIPT], {
@@ -208,8 +220,16 @@ test("senha com / cru aborta em vez de devolver a senha ao argv", (t) => {
   assert.equal(r.dumps.length, 0);
 });
 
-// Git Bash não aplica modo de arquivo, então o umask/chmod só é verificável em
-// Linux — que é onde o script roda (VPS) e onde o CI executa esta suíte.
+// Git Bash não aplica modo de arquivo, então este é o único teste da suíte que
+// NUNCA roda em Windows — quem o executa é a CI (ubuntu-latest, ci.yml), que é
+// também o sistema do alvo real, a VPS. Consequência honesta: em máquina de
+// desenvolvimento Windows ele aparece como SKIP, e a primeira execução de
+// verdade é a da CI.
+//
+// As duas asserções não dependem do umask do runner: o script faz `chmod 700`
+// na pasta e `chmod 600` no dump DEPOIS de criá-los, então o umask 077 é
+// cinto-e-suspensório e o modo final é o do chmod. O & 0o777 tira os bits de
+// tipo de arquivo que o st_mode carrega junto.
 test("o dump e a pasta nascem 600/700", { skip: process.platform !== "linux" }, (t) => {
   const r = rodarBackup("postgres://postgres:segredo@localhost:5432/postgres");
   t.after(r.limpar);
