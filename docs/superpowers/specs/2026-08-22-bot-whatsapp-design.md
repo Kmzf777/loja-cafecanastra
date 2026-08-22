@@ -478,9 +478,11 @@ Seis blocos na tela:
    gravação, nunca o valor. Botão "Testar conexão" chama o perfil do número na
    Meta e mostra o que voltou.
 3. **Avisos** — seis interruptores, um por status.
-4. **Templates** — a lista dos seis, com o estado de cada um na Meta
+4. **Templates** — a lista dos sete, com o estado de cada um na Meta
    (`APPROVED` / `PENDING` / `REJECTED` + motivo / ausente) e o botão "Criar na
-   Meta". Divergência entre o texto do código e o aprovado aparece aqui.
+   Meta". Divergência entre o texto do código e o aprovado aparece aqui, e
+   `category` ao lado de `correct_category` é o que denuncia reclassificação
+   pendente antes de ela virar fatura.
 5. **Enviar teste** — número + template, para validar contra o número de teste da
    Meta antes de o número real existir.
 6. **Histórico** — as últimas mensagens: pedido, template, para onde foi (4
