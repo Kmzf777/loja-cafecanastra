@@ -4,8 +4,9 @@ import { listarKits, listarLotes } from "@/lib/catalogo/repositorio";
 import { traduzirLote } from "@/lib/catalogo/produtos";
 import { filtrarPorTexto } from "@/lib/busca";
 import { CardKit } from "@/components/catalogo/CardKit";
-import { FORMATOS, LINHAS, ORDENACOES } from "@/lib/catalogo/tipos";
+import { DESTAQUES, FORMATOS, LINHAS, ORDENACOES } from "@/lib/catalogo/tipos";
 import type {
+  Destaque,
   Filtros,
   Formato,
   Linha,
@@ -116,6 +117,8 @@ function lerFiltros(sp: Busca): { filtros: Filtros; ordenacao: Ordenacao } {
   const formato = texto(sp.formato) as Formato | undefined;
   const peso = numero(sp.peso) as PesoGramas | undefined;
   const ordem = texto(sp.ordem) as Ordenacao | undefined;
+  const destaque = texto(sp.destaque) as Destaque | undefined;
+  const tipo = texto(sp.tipo);
 
   return {
     filtros: {
@@ -125,6 +128,13 @@ function lerFiltros(sp: Busca): { filtros: Filtros; ordenacao: Ordenacao } {
       pontoTorraMin: numero(sp.torraMin),
       pontoTorraMax: numero(sp.torraMax),
       soDisponiveis: texto(sp.disponivel) === "1",
+      /**
+       * VALIDADO CONTRA A LISTA, como todo filtro desta página: a URL é
+       * pública e editável, e `?destaque=qualquer-coisa` tem de virar
+       * "sem filtro" em vez de listagem vazia sem explicação.
+       */
+      destaque: destaque && DESTAQUES.includes(destaque) ? destaque : undefined,
+      tipo: tipo === "kit" ? "kit" : undefined,
     },
     ordenacao: ordem && ORDENACOES.includes(ordem) ? ordem : "relevancia",
   };
@@ -157,6 +167,15 @@ function ativos(f: Filtros, ordenacao: Ordenacao, locale: Locale, q?: string) {
     });
   if (f.soDisponiveis)
     out.push({ chave: "disponivel", rotulo: t.soDisponiveisChip });
+  if (f.destaque)
+    out.push({
+      chave: "destaque",
+      rotulo:
+        f.destaque === "mais-vendidos"
+          ? d.comum.maisVendidos
+          : d.comum.escolhaDoProdutor,
+    });
+  if (f.tipo === "kit") out.push({ chave: "tipo", rotulo: d.comum.nossosKits });
   if (ordenacao !== "relevancia")
     out.push({ chave: "ordem", rotulo: d.catalogo.ordenacao[ordenacao] });
   return out;

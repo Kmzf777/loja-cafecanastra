@@ -6,7 +6,12 @@ import {
   imagemDoProduto,
   type ProdutoDoCatalogo,
 } from "./produtos";
-import { maisVendidos, kitsECaixas, escolhaDoProdutor } from "./curadoria";
+import {
+  maisVendidos,
+  kitsECaixas,
+  escolhaDoProdutor,
+  ehCaixaOuKit,
+} from "./curadoria";
 import type {
   Filtros,
   Kit,
@@ -165,6 +170,32 @@ export async function listarLotes(
     // AND deliberado — ver o comentario sobre `notas` em tipos.ts.
     if (filtros.notas?.length && !filtros.notas.every((n) => lote.notas.includes(n)))
       return false;
+
+    /**
+     * OS DOIS FILTROS DA HOME, E ELES FILTRAM LINHA A PARTIR DE SKU.
+     *
+     * A curadoria vive por SKU ("Clássico em Grãos 250 g") e esta listagem é
+     * por LINHA ("Canastra Clássico"). O recorte então é: a linha entra se ao
+     * menos um SKU dela satisfaz. Não é aproximação — é o que mantém uma PLP
+     * só, com os mesmos filtros, a mesma busca e o mesmo SEO, em vez de uma
+     * segunda listagem por SKU que teria de repetir tudo isso.
+     */
+    if (filtros.destaque) {
+      const campo =
+        filtros.destaque === "mais-vendidos" ? "maisVendido" : "escolhaDoProdutor";
+      const temCurado = PRODUTOS.some(
+        (p) => p.linha === lote.linha && p[campo] !== undefined,
+      );
+      if (!temCurado) return false;
+    }
+
+    if (filtros.tipo === "kit") {
+      const temCaixa = PRODUTOS.some(
+        (p) => p.linha === lote.linha && ehCaixaOuKit(p),
+      );
+      if (!temCaixa) return false;
+    }
+
     return true;
   });
 

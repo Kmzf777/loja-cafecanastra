@@ -296,6 +296,18 @@ export type Lote = {
 };
 
 /**
+ * As duas seções curadas da home, quando elas viram filtro de PLP.
+ *
+ * O "Ver mais" de cada carrossel abre a listagem inteira daquele recorte, e é
+ * por isso que o destaque precisa existir como filtro: sem ele, o sétimo card
+ * levaria a `/cafes` sem recorte nenhum e a pessoa perderia o contexto em que
+ * clicou.
+ */
+export type Destaque = "mais-vendidos" | "escolha-do-produtor";
+
+export const DESTAQUES: Destaque[] = ["mais-vendidos", "escolha-do-produtor"];
+
+/**
  * NÃO HÁ FILTRO DE MOAGEM AQUI, e a ausência é a decisão. O filtro "Formato"
  * logo abaixo já recorta o mesmo eixo — grãos, moído, drip, cápsula — e é o
  * eixo de variação verdadeiro deste catálogo. Dois filtros para um eixo é
@@ -312,6 +324,14 @@ export type Filtros = {
   pesoGramas?: PesoGramas;
   /** Esconde o que está esgotado em todas as combinações. */
   soDisponiveis?: boolean;
+  /** O recorte curado da home — ver `Destaque`. */
+  destaque?: Destaque;
+  /**
+   * "kit" traz só caixas e kits. É o mesmo recorte da seção "Kits e caixas"
+   * que a PLP já desenha, agora alcançável por URL — que é o que a trilha de
+   * categorias da home precisa.
+   */
+  tipo?: "kit";
 };
 
 /**

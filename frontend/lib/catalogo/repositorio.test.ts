@@ -320,3 +320,32 @@ describe("produtosDaHome", () => {
     }
   });
 });
+
+describe("filtros da home", () => {
+  it("?destaque=mais-vendidos devolve só linhas com SKU curado", async () => {
+    const lotes = await listarLotes({ destaque: "mais-vendidos" });
+    expect(lotes.length).toBeGreaterThan(0);
+    for (const l of lotes) {
+      expect(["classico", "suave"], l.slug).toContain(l.slug);
+    }
+  });
+
+  it("?destaque=escolha-do-produtor traz um recorte diferente", async () => {
+    const a = (await listarLotes({ destaque: "mais-vendidos" })).map((l) => l.slug);
+    const b = (await listarLotes({ destaque: "escolha-do-produtor" })).map((l) => l.slug);
+    expect(b.some((s) => !a.includes(s))).toBe(true);
+  });
+
+  it("?tipo=kit devolve só linhas que têm caixa ou kit", async () => {
+    const lotes = await listarLotes({ tipo: "kit" });
+    expect(lotes.length).toBeGreaterThan(0);
+    for (const l of lotes) {
+      expect(["classico", "suave", "canela"], l.slug).toContain(l.slug);
+    }
+  });
+
+  it("sem os filtros novos, nada muda", async () => {
+    // A garantia de que esta task não mexeu na listagem de sempre.
+    expect((await listarLotes()).length).toBe(5);
+  });
+});
