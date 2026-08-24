@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import type { Kit } from "@/lib/catalogo/tipos";
 import {
@@ -10,8 +9,7 @@ import {
 import { COR_DA_LINHA, rotuloDaEmbalagem } from "@/lib/catalogo/rotulos";
 import { nomeDoKitNaSacola, traduzirKit } from "@/lib/catalogo/produtos";
 import { Botao } from "@/components/ui/Botao";
-import { useSacola } from "@/lib/sacola/sacola";
-import { eventoAddToCart } from "@/lib/analytics";
+import { useAdicionarNaSacola } from "@/lib/sacola/usar-adicionar";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
 
@@ -62,31 +60,6 @@ export function CardKit({
    * do JSON a quem trocasse de idioma.
    */
   const kit = traduzirKit(kitCru, locale);
-  const { adicionar, itens } = useSacola();
-  const [adicionado, setAdicionado] = useState(false);
-  const [erroDaSacola, setErroDaSacola] = useState<string | null>(null);
-  const [noTeto, setNoTeto] = useState(false);
-
-  /**
-   * Teto por estoque — a versão sem stepper da regra do PainelCompra: o card
-   * adiciona 1 por clique, então o teto vale para o ACUMULADO na sacola.
-   * `min(20, estoque)` quando o estoque ao vivo é conhecido (`produtoId`
-   * presente = o banco respondeu); sem API, os 20 de sempre — o servidor
-   * reconfere na cobrança.
-   */
-  const jaNaSacola = Number(
-    itens.find((i) => i.product_id === kit.produtoId)?.quantity ?? 0,
-  );
-  const teto =
-    kit.produtoId && kit.estoque > 0 ? Math.min(20, kit.estoque) : 20;
-
-  // O timeout do "Na sacola" vive numa ref para ser cancelável: sem o clear no
-  // unmount, sair da PLP dentro dos 2,5 s faria o setAdicionado disparar num
-  // componente morto; e cliques seguidos empilhariam timeouts concorrentes.
-  const timeoutDaConfirmacao = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    return () => window.clearTimeout(timeoutDaConfirmacao.current);
-  }, []);
 
   // "Café Especial Canastra X - Caixa com..." → título e complemento. O nome
   // capturado da loja embute o conteúdo depois do hífen; quebrado em dois, o
@@ -110,49 +83,28 @@ export function CardKit({
   const indisponivel = kit.estoque === 0 || kit.preco <= 0;
   const fita = COR_DA_LINHA[kit.linha];
 
-  async function aoAdicionar() {
-    setErroDaSacola(null);
-
-    if (jaNaSacola >= teto) {
-      setNoTeto(true);
-      return;
-    }
-    setNoTeto(false);
-
-    if (!kit.produtoId) {
-      setErroDaSacola(d.venda.semLoja);
-      return;
-    }
-
-    try {
-      await adicionar({
-        product_id: kit.produtoId,
-        // Em português, sempre — ver `nomeNaSacola`.
-        name: nomeNaSacola,
-        price: kit.preco / 100,
-        quantity: 1,
-        image: kit.imagem,
-        size: kitCru.rotuloEmbalagem, // gravado, e portanto em português
-        // Identidade estável do funil GA4 — o begin_checkout da sacola reporta
-        // este mesmo id. Ver o comentário de `sku` em lib/sacola/sacola.tsx.
-        sku: kit.skuLoja,
-      });
-      eventoAddToCart({
-        id: kit.skuLoja,
-        nome: nomeNaSacola,
-        precoCentavos: kit.preco,
-        quantidade: 1,
-      });
-      setAdicionado(true);
-      window.clearTimeout(timeoutDaConfirmacao.current);
-      timeoutDaConfirmacao.current = window.setTimeout(
-        () => setAdicionado(false),
-        2500,
-      );
-    } catch {
-      setErroDaSacola(d.venda.naoDeuParaAdicionar);
-    }
-  }
+  /**
+   * A regra de compra vive em `lib/sacola/usar-adicionar.ts` desde que a home
+   * passou a vender SKU avulso e o `CardProduto` precisou da mesma coisa. O
+   * que era corpo deste componente virou função provável; o teste ao lado não
+   * mudou uma linha, e é ele que prova que a mudança não mexeu no que a
+   * pessoa vê.
+   */
+  const {
+    adicionado,
+    erro: erroDaSacola,
+    noTeto,
+    aoAdicionar,
+  } = useAdicionarNaSacola({
+    produtoId: kit.produtoId,
+    skuLoja: kit.skuLoja,
+    nomeNaSacola,
+    // Gravado, e portanto em português — ver `nomeDoKitNaSacola`.
+    rotuloGravado: kitCru.rotuloEmbalagem,
+    precoCentavos: kit.preco,
+    estoque: kit.estoque,
+    imagem: kit.imagem,
+  });
 
   return (
     <article className="flex h-full flex-col border border-fuligem-20 bg-cal-puro">
@@ -205,7 +157,12 @@ export function CardKit({
             <Botao
               variante="primario"
               disabled={indisponivel}
-              onClick={aoAdicionar}
+              onClick={() =>
+                aoAdicionar({
+                  semLoja: d.venda.semLoja,
+                  falhou: d.venda.naoDeuParaAdicionar,
+                })
+              }
               className="disabled:cursor-not-allowed disabled:bg-fuligem-20 disabled:text-fuligem-55"
             >
               {indisponivel
