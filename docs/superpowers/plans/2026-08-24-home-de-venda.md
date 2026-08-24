@@ -1721,7 +1721,7 @@ git commit -m "feat: um card que mostra o preco que se paga, e o botao que cobra
 - Create: `frontend/components/catalogo/CardVerMais.tsx`
 - Create: `frontend/components/catalogo/CardVerMais.test.tsx`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `frontend/components/catalogo/CardVerMais.test.tsx`:
 
@@ -1762,7 +1762,7 @@ describe("CardVerMais", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 ```bash
 npm test -- CardVerMais
@@ -1770,7 +1770,7 @@ npm test -- CardVerMais
 
 Esperado: FAIL.
 
-- [ ] **Step 3: Escrever `CardVerMais.tsx`**
+- [x] **Step 3: Escrever `CardVerMais.tsx`**
 
 Crie `frontend/components/catalogo/CardVerMais.tsx`:
 
@@ -1824,7 +1824,7 @@ export function CardVerMais({
 }
 ```
 
-- [ ] **Step 4: Rodar até passar**
+- [x] **Step 4: Rodar até passar**
 
 ```bash
 npm test -- CardVerMais
@@ -1832,7 +1832,7 @@ npm test -- CardVerMais
 
 Esperado: PASS, 3 testes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/components/catalogo/CardVerMais.tsx frontend/components/catalogo/CardVerMais.test.tsx
