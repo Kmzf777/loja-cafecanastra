@@ -160,7 +160,8 @@
       "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "maisVendido": 1
     },
     {
       "sku": "classico-graos-500",
@@ -175,7 +176,8 @@
       "rotuloChave": "pacote-500g",
       "precoCentavos": 6570,
       "estoque": 20,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "maisVendido": 5
     },
     {
       "sku": "classico-graos-1000",
@@ -190,7 +192,8 @@
       "rotuloChave": "pacote-1kg",
       "precoCentavos": 10990,
       "estoque": 20,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "escolhaDoProdutor": 3
     },
     {
       "sku": "classico-graos-caixa-4x500",
@@ -205,7 +208,8 @@
       "rotuloChave": "caixa-4x500g",
       "precoCentavos": 23670,
       "estoque": 10,
-      "fonte": "pesquisa-web"
+      "fonte": "pesquisa-web",
+      "escolhaDoProdutor": 5
     },
     {
       "sku": "classico-moido-250",
@@ -220,7 +224,8 @@
       "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
-      "fonte": "pesquisa-web"
+      "fonte": "pesquisa-web",
+      "maisVendido": 3
     },
     {
       "sku": "classico-moido-500",
@@ -265,7 +270,8 @@
       "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "maisVendido": 2
     },
     {
       "sku": "suave-graos-500",
@@ -280,7 +286,8 @@
       "rotuloChave": "pacote-500g",
       "precoCentavos": 6570,
       "estoque": 20,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "maisVendido": 6
     },
     {
       "sku": "suave-graos-1000",
@@ -295,7 +302,8 @@
       "rotuloChave": "pacote-1kg",
       "precoCentavos": 10990,
       "estoque": 20,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "escolhaDoProdutor": 4
     },
     {
       "sku": "suave-moido-250",
@@ -310,7 +318,8 @@
       "rotuloChave": "pacote-250g",
       "precoCentavos": 3970,
       "estoque": 20,
-      "fonte": "pesquisa-web"
+      "fonte": "pesquisa-web",
+      "maisVendido": 4
     },
     {
       "sku": "suave-moido-500",
@@ -355,7 +364,8 @@
       "rotuloChave": "pacote-250g",
       "precoCentavos": 4370,
       "estoque": 8,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "escolhaDoProdutor": 1
     },
     {
       "sku": "nectar-de-minas-graos-1000",
@@ -370,7 +380,8 @@
       "rotuloChave": "pacote-1kg",
       "precoCentavos": 10570,
       "estoque": 12,
-      "fonte": "captura-loja"
+      "fonte": "captura-loja",
+      "escolhaDoProdutor": 2
     },
     {
       "sku": "kit-canela-classico-suave-moido-3x250",
