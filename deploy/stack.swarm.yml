@@ -1,0 +1,105 @@
+# Stack Swarm da loja — o caminho REAL desta VPS.
+#
+# POR QUE NAO deploy/docker-compose.prod.yml: aquele arquivo sobe um nginx
+# proprio nas portas 80/443. Nesta VPS quem ocupa 80/443 e o Traefik (stack
+# `traefik`), que ja atende crm., api., supabase. e agentebling. do mesmo
+# dominio e emite TLS pelo Let's Encrypt sozinho. Subir um segundo nginx ali
+# derrubaria o ingress de todo mundo.
+#
+# O QUE O nginx DAQUELE ARQUIVO FAZIA, e como e reproduzido aqui:
+#   /        -> web:3000              ... router `loja`
+#   /api/*   -> api:3333 SEM o /api   ... router `loja-api` + middleware stripprefix
+# A regra do router da API e mais longa (Host && PathPrefix), entao o Traefik
+# ja a ordenaria antes; a `priority` explicita torna isso independente dessa
+# heuristica.
+#
+# Deploy:
+#   docker stack deploy -c deploy/stack.swarm.yml loja
+# As imagens sao construidas ANTES, no proprio no (nao ha registry):
+#   docker build -f frontend/Dockerfile -t loja-web:latest .   (contexto = raiz)
+#
+# BANCO: Supabase CLOUD (hmxbdpmgwmbygwmngusy.supabase.co). O schema canastra
+# ja existe e esta exposto la — nao ha migracao a rodar no deploy.
+#   docker build -t loja-api:latest ./backend
+
+version: "3.8"
+
+services:
+  web:
+    image: loja-web:latest
+    networks:
+      - canastrainteligencia
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        # start-first: a versao nova fica saudavel antes de a velha sair — a
+        # vitrine nao pisca durante o deploy.
+        order: start-first
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=canastrainteligencia"
+        - "traefik.http.routers.loja.rule=Host(`loja.canastrainteligencia.com`)"
+        - "traefik.http.routers.loja.entrypoints=websecure"
+        - "traefik.http.routers.loja.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.loja.priority=1"
+        - "traefik.http.services.loja.loadbalancer.server.port=3000"
+
+  api:
+    image: loja-api:latest
+    # O .env fica FORA do git (modo 600). O `docker stack deploy` resolve
+    # env_file no cliente e injeta como environment no servico.
+    env_file:
+      - ../backend/src/.env
+    environment:
+      NODE_ENV: production
+      PORT: "3333"
+    volumes:
+      # Fallback local de upload de imagem enquanto o Cloudinary nao entra.
+      - uploads:/app/uploads
+    networks:
+      # So esta: o banco e o GoTrue da loja ficam no Supabase CLOUD (projeto
+      # hmxbdpmgwmbygwmngusy), alcancados pela internet. A instancia
+      # self-hosted desta VPS e de outro dono (CRM e Bling) e a API da loja
+      # nao entra na rede interna dela.
+      - canastrainteligencia
+    deploy:
+      # ZERO REPLICAS DE PROPOSITO — nao e defeito.
+      # backend/src/config/ambiente.js RECUSA subir em producao sem
+      # MP_ACCESS_TOKEN e MP_WEBHOOK_SECRET (>= 32 chars). Sem elas o servico
+      # entraria em crash-loop. Quando as credenciais do Mercado Pago
+      # chegarem: preencha backend/src/.env e rode
+      #   docker stack deploy -c deploy/stack.swarm.yml loja
+      #   docker service scale loja_api=1
+      replicas: 0
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=canastrainteligencia"
+        # Mesma origem da vitrine, sob /api/*. O stripprefix remove o prefixo
+        # antes de repassar: /api/health -> GET /health no Express, que nao
+        # conhece "/api" (quem o inventa e o remove e esta camada).
+        - "traefik.http.routers.loja-api.rule=Host(`loja.canastrainteligencia.com`) && PathPrefix(`/api`)"
+        - "traefik.http.routers.loja-api.entrypoints=websecure"
+        - "traefik.http.routers.loja-api.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.loja-api.priority=10"
+        - "traefik.http.routers.loja-api.middlewares=loja-api-strip"
+        - "traefik.http.middlewares.loja-api-strip.stripprefix.prefixes=/api"
+        - "traefik.http.services.loja-api.loadbalancer.server.port=3333"
+
+volumes:
+  uploads:
+
+networks:
+  canastrainteligencia:
+    external: true
