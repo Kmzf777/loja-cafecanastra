@@ -1847,7 +1847,7 @@ git commit -m "feat: o fim do trilho vira porta para a listagem"
 - Create: `frontend/components/catalogo/TrilhaDeCategorias.tsx`
 - Create: `frontend/components/catalogo/TrilhaDeCategorias.test.tsx`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `frontend/components/catalogo/TrilhaDeCategorias.test.tsx`:
 
@@ -1911,7 +1911,7 @@ describe("TrilhaDeCategorias", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 ```bash
 npm test -- TrilhaDeCategorias
@@ -1919,7 +1919,7 @@ npm test -- TrilhaDeCategorias
 
 Esperado: FAIL.
 
-- [ ] **Step 3: Escrever `TrilhaDeCategorias.tsx`**
+- [x] **Step 3: Escrever `TrilhaDeCategorias.tsx`**
 
 Crie `frontend/components/catalogo/TrilhaDeCategorias.tsx`:
 
@@ -2003,7 +2003,7 @@ export function TrilhaDeCategorias({
 }
 ```
 
-- [ ] **Step 4: Rodar até passar**
+- [x] **Step 4: Rodar até passar**
 
 ```bash
 npm test -- TrilhaDeCategorias
@@ -2015,7 +2015,7 @@ Se o teste dos rótulos falhar porque `d.catalogo.formato.capsula` devolve outra
 
 O `<Carrossel>` é `"use client"` e este componente é server. Isso é composição válida no App Router: o servidor passa `children` já renderizados para a ilha client.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/components/catalogo/TrilhaDeCategorias.tsx frontend/components/catalogo/TrilhaDeCategorias.test.tsx
