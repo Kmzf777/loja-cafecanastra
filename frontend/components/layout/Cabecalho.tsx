@@ -29,6 +29,14 @@ import { SeletorDeIdiomaDaPagina } from "./SeletorDeIdiomaDaPagina";
  * alvos de toque abaixo dos 44px do §10. O estetica.md ja dizia que desktop
  * comeca em 1200px; o corte em `md` e que era otimista.
  *
+ * A PARCELA DE "ATALHOS" ENCOLHEU DEPOIS DESSA MEDICAO e o corte nao muda. A
+ * sacola deixou de escrever a palavra e virou o mesmo quadrado de 44px do
+ * telefone, entao os 142px viraram 123 (75 da conta + 4 de vao + 44) — e, o
+ * que importa mais, deixaram de variar com o idioma. Sao ~19px a menos numa
+ * barra que ja sobrava 95px no corte de 1280 e faltaria 142 no de 1024: nao e
+ * folga que compre um breakpoint, e sim margem contra o proximo item que
+ * alguem quiser pendurar aqui.
+ *
  * Entre 768px e 1280px o acordeao e a navegacao — e ele nao e um consolo: cabe
  * tudo (busca, quatro links, idioma), com linha de 64px e alvo de sobra. De
  * quebra, some um defeito antigo: a altura do painel e `100dvh - 72px`, e o
@@ -238,10 +246,12 @@ export function Cabecalho({ locale }: { locale: Locale }) {
 
           {/* Em mobile a sacola fica FORA do acordeao: é o atalho que a pessoa
               mais procura e não pode depender de abrir o menu antes. Ela vem
-              em GLIFO, com a contagem pendurada no canto — `variante="telefone"`
-              —, e é isso que devolve a barra de 360px para dentro da tela em
-              todos os estados de sacola. A medição está no <AtalhosDoCliente>.
-              A conta não entra aqui; ela vive no acordeão, logo abaixo.
+              em GLIFO, com a contagem pendurada no canto, e é isso que devolve
+              a barra de 360px para dentro da tela em todos os estados de
+              sacola. A medição está no <AtalhosDoCliente>. Hoje o desenho da
+              sacola é o mesmo nas duas barras; `variante="telefone"` decide
+              só uma coisa — a conta não entra aqui, ela vive no acordeão,
+              logo abaixo.
 
               `gap-3` E NÃO `gap-2`: a contagem é `absolute` e transborda uns
               3px à direita do quadrado da sacola. Com 8px de vão sobrariam 5px

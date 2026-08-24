@@ -229,6 +229,45 @@
       letter-spacing: 0;
     }
   }
+
+  /* -------------------------------------------------------------------------
+     Selo de contagem da sacola — <AtalhosDoCliente>.
+
+     O pulo que todo e-commerce dá quando um item entra na sacola. Mora aqui, e
+     nao em utilitario do Tailwind, por dois motivos: o `both` precisa fixar o
+     estado final (senao o selo volta a `scale(.4)` ao terminar) e a curva e a
+     `--ease-canastra` do §4.3, que ja e o tempo de todo o resto do site.
+
+     QUEM DISPARA E A `key` DO <span>, no componente: elemento remontado
+     recomeca a keyframe. O CSS aqui nao sabe contar — ele so descreve o pulo.
+
+     O passo em 1.12 e o que faz o carimbo parecer PRENSADO e nao inflado: ele
+     passa do tamanho final e volta, como carimbo que bate e assenta. Sem o
+     overshoot o mesmo movimento le como fade, e ninguem percebe o item entrar.
+
+     260ms porque abaixo de ~200ms o overshoot vira tremida e acima de ~300ms a
+     pessoa espera o selo terminar antes de seguir clicando. O bloco de
+     `prefers-reduced-motion` no fim deste arquivo anula tudo isto — e por isso
+     que ele nao precisa de guarda propria.
+  ------------------------------------------------------------------------- */
+  .vitrine .selo-sacola {
+    animation: selo-da-sacola 260ms var(--ease-canastra) both;
+  }
+}
+
+@keyframes selo-da-sacola {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 :root {

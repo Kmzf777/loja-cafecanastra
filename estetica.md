@@ -434,6 +434,26 @@ Altura 48px (44px mínimo de toque), padding lateral 24px, Archivo 600 caixa alt
 > O seletor de idioma tem duas variantes pelo mesmo motivo: `painel` (célula de
 > 56px, dentro do acordeão) e `barra` (célula de 44×44, só a partir de 1280px).
 
+> **Atualizado em 23/08/2026 — a sacola de desktop virou o `🛒2` do desenho.**
+> Até aqui, o `⌕ ⊙ 🛒2` acima só existia em 360px: a barra de desktop escrevia
+> **SACOLA** por extenso, com a contagem colada ao rótulo. Agora as duas barras
+> usam o mesmo quadrado de 44×44 — glifo de traço 1,5px (o mesmo da lupa) e a
+> contagem em selo `--c-vermelho` pendurado na quina superior direita, em
+> Martian Mono 10px, com contorno de 2px em Cal para o selo passar POR CIMA do
+> filete em vez de se misturar a ele. Sem raio: é carimbo de lote, não pílula.
+>
+> O selo é `position: absolute` e ancorado só pela borda direita, então cresce
+> para dentro do glifo: **a caixa da sacola mede 44px em qualquer estado e nos
+> três idiomas** — antes ela media 106px em português, 102 em espanhol e 90 em
+> inglês, mais 28px quando havia item. Acima de 99 o selo escreve `99+`; o
+> `aria-label` continua dizendo o número real, e é ele que carrega o nome do
+> link agora que não há mais rótulo visível ("Sacola · 3 itens").
+>
+> **Movimento:** o selo entra com `scale(.4) → 1.12 → 1` em 260ms na
+> `--e-canastra`, disparado por uma `key` que muda junto com a quantidade. É o
+> único movimento do cabeçalho e ele existe para que somar um item seja visível
+> sem tirar a pessoa da página. O bloco `prefers-reduced-motion` do §9 o anula.
+
 ### 5.9 Gaveta da sacola
 
 Desliza da direita, 420px. Contém: itens com miniatura + moagem + peso, stepper de quantidade, **barra de progresso para frete grátis** (`Faltam R$ 27 para frete grátis` — Martian Mono + trilho Juta preenchendo em Vermelho), subtotal, CTA de checkout, e um upsell discreto: *"Vai bem com"* — 2 produtos.

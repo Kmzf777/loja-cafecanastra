@@ -41,28 +41,28 @@ describe("Cabecalho", () => {
     }
   });
 
-  it("pede a sacola em glifo na barra de telefone e por extenso na de desktop", () => {
+  it("pede a sacola em glifo nas duas barras, telefone e desktop", () => {
     // As duas instâncias convivem na mesma marcação: a de desktop mora num
-    // `hidden xl:flex`, a de telefone num `xl:hidden`. É a variante que decide
-    // qual desenho cada uma recebe — e o desenho do telefone é o que devolveu
-    // a barra de 360px para dentro da tela.
+    // `hidden xl:flex`, a de telefone num `xl:hidden`. Elas recebem o MESMO
+    // desenho — quadrado de 44px com o glifo, que é o `⌕ ⊙ 🛒2` do §5.8. Até
+    // aqui só o telefone o usava; foi ele que devolveu a barra de 360px para
+    // dentro da tela, e a de desktop era a única cuja largura ainda dependia
+    // do idioma e do que a pessoa tivesse colocado na sacola.
     const caixas = sacolas(html("pt", 12));
 
     expect(caixas).toHaveLength(2);
-    expect(caixas.filter((c) => c.includes("size-11"))).toHaveLength(1);
+    expect(caixas.filter((c) => c.includes("size-11"))).toHaveLength(2);
   });
 
-  it("não deixa a contagem mexer na largura da barra de telefone", () => {
+  it("não deixa a contagem mexer na largura de nenhuma das duas barras", () => {
     // O defeito: com 12 itens o documento ganhava 2px de rolagem horizontal em
     // 360px, porque a contagem entrava no fluxo da linha. O `aria-label` muda
     // com a quantidade — é o que o leitor de tela precisa ouvir —, mas a
     // CLASSE, que é quem decide a caixa, não pode mudar.
-    const classe = (saida: string) =>
-      sacolas(saida)
-        .find((c) => c.includes("size-11"))
-        ?.match(/class="([^"]*)"/)?.[1];
+    const classes = (saida: string) =>
+      sacolas(saida).map((c) => c.match(/class="([^"]*)"/)?.[1]);
 
-    expect(classe(html("pt", 0))).toBe(classe(html("pt", 12)));
+    expect(classes(html("pt", 0))).toEqual(classes(html("pt", 12)));
   });
 
   it("leva o idioma para toda a navegação, inclusive a busca", () => {
