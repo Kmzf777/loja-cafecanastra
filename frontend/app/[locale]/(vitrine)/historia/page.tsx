@@ -28,9 +28,10 @@ import { HISTORIA } from "./conteudo";
  *      linha do tempo, sem um pixel de trilho desenhado.
  *
  * SEM FOTO, E ISSO É DECISÃO. O único ativo de arquivo em `public/` é
- * `nossa-historia.png`, que já carrega o bloco de 1985 da home E o de
- * `/a-serra`. Uma terceira aparição transformaria a única foto do site em
- * papel de parede. O estetica.md §8 diz que a fotografia responde por ~60% da
+ * `nossa-historia.png`, e ele já carrega o bloco de 1985 de `/a-serra` — na
+ * home ele também aparecia, até ela virar loja e o resumo desta página sair de
+ * lá. Repeti-lo aqui transformaria a única foto do site em papel de parede. O
+ * estetica.md §8 diz que a fotografia responde por ~60% da
  * percepção de qualidade e é o caminho crítico do projeto; até ela existir,
  * esta página roda tipográfica — que é, aliás, o que a fonte também é.
  *
