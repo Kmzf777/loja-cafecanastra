@@ -45,133 +45,14 @@ jobs:
           script_stop: true
           # O next build sozinho passa de 10 min nesta VPS (3 vCPU).
           command_timeout: 35m
-          script: |
-            set -euo pipefail
-            REPO=/srv/loja-cafecanastra
-            cd "$REPO"
-
-            ANTES=$(git rev-parse HEAD)
-            git fetch --prune origin main
-            git reset --hard origin/main
-            # Sem -x: arquivos ignorados (deploy/.env.build, .env.migracao,
-            # backend/src/.env) sao os SEGREDOS do deploy e precisam sobreviver.
-            git clean -fd
-            DEPOIS=$(git rev-parse HEAD)
-            echo "revisao: $ANTES -> $DEPOIS"
-
-            mudou() {
-              [ "$ANTES" = "$DEPOIS" ] && return 1
-              git diff --name-only "$ANTES" "$DEPOIS" | grep -qE "$1"
-            }
-            FORCADO=false
-            [ "${{ github.event_name }}" = "workflow_dispatch" ] && FORCADO=true
-            CONSTRUIU_WEB=false
-            CONSTRUIU_API=false
-
-            # ── Migracoes ──────────────────────────────────────────────────
-            # O banco e o Supabase CLOUD (hmxbdpmgwmbygwmngusy), e o schema
-            # canastra ja esta migrado la. Este passo so roda se alguem tiver
-            # criado deploy/.env.migracao na VPS com a DATABASE_URL do pooler
-            # do projeto cloud — sem o arquivo, ele avisa e segue, em vez de
-            # falhar o deploy inteiro por uma migracao que ninguem pediu.
-            if mudou '^backend/db/migrations/'; then
-              if [ -f deploy/.env.migracao ]; then
-                echo "== migracoes =="
-                npm --prefix backend ci --omit=dev
-                set -a; . deploy/.env.migracao; set +a
-                npm run db:migrar
-              else
-                echo "== ATENCAO: ha migracao nova em backend/db/migrations/,"
-                echo "   mas deploy/.env.migracao nao existe nesta VPS."
-                echo "   Rode 'npm run db:migrar' a mao contra o projeto cloud."
-              fi
-            else
-              echo "== migracoes: nada mudou em backend/db/migrations/, pulando =="
-            fi
-
-            # ── Vitrine (Next) ─────────────────────────────────────────────
-            # data/ entra na lista: o catalogo JSON e importado pelo bundle no
-            # build (ver cabecalho de frontend/Dockerfile), entao mexer nele
-            # exige imagem nova.
-            if $FORCADO || mudou '^(frontend/|data/|package(-lock)?\.json)'; then
-              echo "== build da vitrine =="
-              set -a; . deploy/.env.build; set +a
-              docker build \
-                --build-arg NEXT_PUBLIC_SUPABASE_URL="$NEXT_PUBLIC_SUPABASE_URL" \
-                --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" \
-                --build-arg NEXT_PUBLIC_SITE_URL="$NEXT_PUBLIC_SITE_URL" \
-                --build-arg NEXT_PUBLIC_API_URL="$NEXT_PUBLIC_API_URL" \
-                -f frontend/Dockerfile -t loja-web:latest .
-              CONSTRUIU_WEB=true
-            else
-              echo "== vitrine: nada mudou, pulando build =="
-            fi
-
-            # ── API (Express) ──────────────────────────────────────────────
-            # Construida mesmo com replicas=0: quando as credenciais do Mercado
-            # Pago chegarem, subir e so mudar o replicas no stack file — a
-            # imagem ja estara pronta e testada.
-            if $FORCADO || mudou '^backend/'; then
-              echo "== build da API =="
-              docker build -t loja-api:latest ./backend
-              CONSTRUIU_API=true
-            else
-              echo "== API: nada mudou, pulando build =="
-            fi
-
-            # ── Publicar ───────────────────────────────────────────────────
-            echo "== docker stack deploy =="
-            docker stack deploy -c deploy/stack.swarm.yml loja
-
-            # SEM REGISTRY, `stack deploy` SOZINHO NAO TROCA O CONTAINER — e a
-            # falha e MUDA: o comando responde "Updating service loja_web", o
-            # servico segue 1/1, e o container velho continua rodando o bundle
-            # antigo. O swarm identifica a imagem pelo digest e, sem registry
-            # para consultar, a spec continua sendo a string "loja-web:latest",
-            # identica a anterior — logo, nada a fazer, na visao dele.
-            # O --force recria a tarefa, e ai a imagem nova (ja no disco deste
-            # no) entra. E a mesma razao do --force no deploy do CRM.
-            # Conferido na pratica em 2026-08-24: sem isto, um rebuild apontando
-            # para outro Supabase continuou servindo o bundle do anterior.
-            if $CONSTRUIU_WEB; then
-              echo "== forcando recriacao de loja_web =="
-              docker service update --force --quiet loja_web
-            fi
-            # loja_api so e forcado se estiver de fato rodando: com replicas=0
-            # (o estado de hoje) um --force nao teria tarefa para recriar.
-            if $CONSTRUIU_API && \
-               [ "$(docker service ls --filter name=loja_api --format '{{.Replicas}}')" != "0/0" ]; then
-              echo "== forcando recriacao de loja_api =="
-              docker service update --force --quiet loja_api
-            fi
-
-            # ── Conferir ───────────────────────────────────────────────────
-            # Sem isto o job ficaria verde com a vitrine fora do ar: o
-            # `stack deploy` retorna assim que o swarm ACEITA a tarefa, nao
-            # quando ela fica saudavel.
-            echo "== aguardando loja_web ficar saudavel =="
-            for i in $(seq 1 30); do
-              ESTADO=$(docker service ls --filter name=loja_web --format '{{.Replicas}}')
-              echo "  tentativa $i: $ESTADO"
-              [ "$ESTADO" = "1/1" ] && break
-              [ "$i" = "30" ] && { docker service ps loja_web --no-trunc; exit 1; }
-              sleep 10
-            done
-
-            CODIGO=$(curl -s -o /dev/null -w '%{http_code}' \
-              --resolve loja.canastrainteligencia.com:443:127.0.0.1 \
-              https://loja.canastrainteligencia.com/ --max-time 30)
-            echo "vitrine respondeu HTTP $CODIGO"
-            [ "$CODIGO" = "200" ] || exit 1
-
-            # HTTP 200 nao prova que a versao NOVA subiu (o container velho
-            # tambem responde 200). Confere o projeto Supabase assado no bundle:
-            # se o container fosse o antigo, esta contagem daria zero.
-            if $CONSTRUIU_WEB; then
-              CID=$(docker ps -qf name=loja_web)
-              ACHOU=$(docker exec "$CID" sh -c \
-                "grep -rl hmxbdpmgwmbygwmngusy .next/static 2>/dev/null | wc -l")
-              echo "arquivos do bundle apontando para o projeto cloud: $ACHOU"
-              [ "$ACHOU" -gt 0 ] || { echo "ERRO: container servindo bundle antigo"; exit 1; }
-            fi
-            echo "deploy concluido: $DEPOIS"
+          # UMA LINHA, E ISSO E O PONTO. O drone-ssh, com script_stop:true,
+          # quebra o `script` por \n e injeta depois de CADA linha uma
+          # conferencia cega de `$?` que encerra o deploy a qualquer status
+          # != 0 (drone-ssh plugin.go, funcao commands()). Isso derruba
+          # construcoes corretas de shell — `[ a = b ] && x=1`, `if [ -f x ]`,
+          # `grep -q` — e foi o que manteve TODA execucao deste workflow
+          # vermelha entre d6a0b8f e 2026-08-25. Com uma linha so, ha uma
+          # unica conferencia: a do script inteiro, que e a que se quer.
+          # A logica vive em deploy/deploy.sh, versionada e testavel com
+          # `bash -n`. NAO volte a colocar um script multilinha aqui.
+          script: bash /srv/loja-cafecanastra/deploy/deploy.sh "${{ github.event_name }}"

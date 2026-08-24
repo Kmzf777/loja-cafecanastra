@@ -447,3 +447,109 @@ aplicar na VPS, confira à mão"), que valem inteiros. Depois, o que é da loja:
 
 Deu algo errado que não está aqui: a tabela sintoma → causa do
 `docs/producao.md` §6 é o lugar.
+
+---
+
+## 12. Caminho C — a VPS de produção real (Swarm + Traefik + GitHub Actions)
+
+Os caminhos A (§7) e B (§8) descrevem uma VPS onde a loja é o único inquilino.
+**Não é o caso da produção.** `loja.canastrainteligencia.com` roda numa VPS
+compartilhada com o CRM, o agente Bling e uma instância Supabase self-hosted,
+sob **Docker Swarm com Traefik** ocupando as portas 80/443.
+
+Consequência direta: `deploy/docker-compose.prod.yml` **não serve lá** — ele
+sobe um nginx próprio em 80/443 e derrubaria o ingress dos vizinhos. Quem
+descreve a produção é `deploy/stack.swarm.yml`, que reproduz a mesma topologia
+com labels do Traefik (`/` → `web:3000`; `/api/*` → `api:3333` com o prefixo
+removido por middleware `stripprefix`, exatamente o que o `location /api/` do
+nginx fazia).
+
+O banco de produção é o **Supabase Cloud** (projeto `hmxbdpmgwmbygwmngusy`),
+não a instância self-hosted que roda na mesma máquina — aquela é do CRM.
+
+### 12.1 Duas armadilhas desta VPS, ambas com sintoma mudo
+
+Ambas custaram um deploy silenciosamente errado. Estão registradas aqui porque
+nenhuma das duas dá erro: as duas *parecem* ter funcionado.
+
+**(a) `docker stack deploy` sozinho NÃO troca o container.**
+
+Não há registry de container na VPS. O Swarm identifica imagem por digest e,
+sem registry para consultar, a spec do serviço continua sendo a string
+`loja-web:latest` — idêntica à anterior. Ele conclui que nada mudou. O comando
+responde `Updating service loja_web`, o serviço segue `1/1`, e o container
+**velho** continua servindo o bundle antigo, respondendo HTTP 200 o tempo todo.
+
+Por isso todo deploy termina em:
+
+```bash
+docker service update --force loja_web
+```
+
+E por isso a conferência final não pode ser só `curl -o /dev/null -w %{http_code}`:
+o container velho também devolve 200. Tem de provar que o **bundle servido é o
+novo** — `deploy/deploy.sh` faz isso procurando o id do projeto Supabase dentro
+de `.next/static` do container em execução.
+
+**(b) `docker stack deploy` reaplica o `replicas` do arquivo.**
+
+Um `docker service scale loja_api=1` feito à mão é desfeito no deploy seguinte.
+A decisão tem de ser mudada **no `deploy/stack.swarm.yml`** para persistir.
+(`loja_api` está hoje em `replicas: 0` de propósito: `ambiente.js` recusa subir
+em produção sem `MP_ACCESS_TOKEN` e `MP_WEBHOOK_SECRET`.)
+
+### 12.2 Por que o deploy vive em `deploy/deploy.sh`, e não no workflow
+
+**Isto não é preferência de estilo. É a causa de toda execução vermelha do
+workflow entre `d6a0b8f` e 2026-08-25 — nenhuma passou.**
+
+O `appleboy/ssh-action` usa o drone-ssh. Com `script_stop: true` — que é o
+comportamento desejado, parar no primeiro erro — ele **não** entrega o script
+ao shell para o shell cuidar disso. Ele quebra o script por `\n` e injeta,
+depois de **cada linha** (drone-ssh `plugin.go`, função `commands()`):
+
+```sh
+DRONE_SSH_PREV_COMMAND_EXIT_CODE=$? ; \
+if [ $DRONE_SSH_PREV_COMMAND_EXIT_CODE -ne 0 ]; then exit $DRONE_SSH_PREV_COMMAND_EXIT_CODE; fi;
+```
+
+O `$?` de toda linha é conferido cegamente. Isso derruba construções
+perfeitamente corretas em shell, que devolvem status != 0 sem serem erro:
+
+| Construção | Quando devolve 1 |
+|---|---|
+| `[ "$X" = "y" ] && FOO=true` | sempre que `X != y` |
+| `if [ -f arquivo ]; then` | quando o arquivo não existe |
+| `grep -q padrao` | quando não casa |
+
+O que derrubava o deploy era a primeira: `[ "$EVENTO" = workflow_dispatch ] &&
+FORCADO=true` devolvia 1 num disparo por `workflow_run`, e o deploy morria ali
+— logo depois de imprimir `revisao: ...`, sem chegar à mensagem seguinte.
+
+**O `set -e` do bash não tem culpa**, e vale insistir nisso porque é onde a
+investigação se perde: o bash ignora corretamente o status de uma lista AND-OR
+que fez curto-circuito, e o script sobrevive quando rodado com `bash script.sh`
+— inclusive por SSH. Só falha sob o drone-ssh. Quem mata é o teste dele, que
+não conhece essa regra do shell.
+
+A saída é mandar **uma linha só** por SSH:
+
+```yaml
+script: bash /srv/loja-cafecanastra/deploy/deploy.sh "${{ github.event_name }}"
+```
+
+Uma linha, uma conferência de `$?` — a do script inteiro, que é a que se quer.
+De quebra o script vira versionado e testável: `bash -n deploy/deploy.sh`.
+
+**Não volte a colocar um `script:` multilinha no workflow.** Se precisar mexer
+na lógica do deploy, o arquivo é `deploy/deploy.sh`.
+
+### 12.3 Por que tudo dentro de `main()` em `deploy.sh`
+
+O script roda `git reset --hard`, que **reescreve o próprio arquivo** enquanto
+o bash o executa. O bash lê o script em pedaços, guardando um deslocamento em
+bytes; trocar o arquivo debaixo dele faz a execução retomar no byte errado, e o
+sintoma é um erro de sintaxe absurdo, difícil de ligar à causa. Com o corpo
+todo dentro de uma função e a chamada `main "$@"` na última linha, o bash
+precisa ter lido e analisado o arquivo inteiro antes de executar qualquer
+coisa.
