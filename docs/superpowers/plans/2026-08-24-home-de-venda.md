@@ -1076,7 +1076,7 @@ git commit -m "fix: a home passa a vender pelo preco do banco, e com id de produ
 - Create: `frontend/components/ui/Carrossel.tsx`
 - Create: `frontend/components/ui/Carrossel.test.tsx`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `frontend/components/ui/Carrossel.test.tsx`:
 
@@ -1156,7 +1156,7 @@ describe("Carrossel", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 ```bash
 npm test -- Carrossel
@@ -1164,7 +1164,7 @@ npm test -- Carrossel
 
 Esperado: FAIL — `Cannot find module './Carrossel'`.
 
-- [ ] **Step 3: Escrever `Carrossel.tsx`**
+- [x] **Step 3: Escrever `Carrossel.tsx`**
 
 Crie `frontend/components/ui/Carrossel.tsx`:
 
@@ -1369,7 +1369,7 @@ export function SlideDoCarrossel({ children }: { children: ReactNode }) {
 }
 ```
 
-- [ ] **Step 4: Rodar até passar**
+- [x] **Step 4: Rodar até passar**
 
 ```bash
 npm test -- Carrossel
@@ -1377,7 +1377,7 @@ npm test -- Carrossel
 
 Esperado: PASS, 5 testes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/components/ui/Carrossel.tsx frontend/components/ui/Carrossel.test.tsx
