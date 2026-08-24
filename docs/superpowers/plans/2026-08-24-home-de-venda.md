@@ -2031,7 +2031,7 @@ git commit -m "feat: seis palavras abrem o catalogo logo abaixo da prova"
 - Modify: `frontend/lib/catalogo/repositorio.ts`
 - Modify: `frontend/app/[locale]/(vitrine)/cafes/page.tsx`
 
-- [ ] **Step 1: Estender o contrato**
+- [x] **Step 1: Estender o contrato**
 
 Em `frontend/lib/catalogo/tipos.ts`, acima do `export type Filtros`, acrescente:
 
@@ -2062,7 +2062,7 @@ E dentro de `Filtros`, junto dos outros campos:
   tipo?: "kit";
 ```
 
-- [ ] **Step 2: Escrever o teste que falha**
+- [x] **Step 2: Escrever o teste que falha**
 
 Acrescente ao fim de `frontend/lib/catalogo/repositorio.test.ts`. O arquivo já importa `describe`, `it`, `expect` e `listarLotes` no topo — **confira antes de colar** e acrescente só o que faltar, em vez de duplicar import.
 
@@ -2097,7 +2097,7 @@ describe("filtros da home", () => {
 });
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [x] **Step 3: Rodar e ver falhar**
 
 ```bash
 npm test -- repositorio
@@ -2105,7 +2105,7 @@ npm test -- repositorio
 
 Esperado: FAIL — os filtros ainda não existem, então `listarLotes({ destaque: ... })` devolve as 5 linhas.
 
-- [ ] **Step 4: Implementar no repositório**
+- [x] **Step 4: Implementar no repositório**
 
 Em `frontend/lib/catalogo/repositorio.ts`, acrescente o import:
 
@@ -2143,7 +2143,7 @@ E, dentro do `catalogo.filter((lote) => {` de `listarLotes`, antes do `return tr
     }
 ```
 
-- [ ] **Step 5: Rodar até passar**
+- [x] **Step 5: Rodar até passar**
 
 ```bash
 npm test -- repositorio
@@ -2151,7 +2151,7 @@ npm test -- repositorio
 
 Esperado: PASS.
 
-- [ ] **Step 6: Ler os filtros na URL**
+- [x] **Step 6: Ler os filtros na URL**
 
 Em `frontend/app/[locale]/(vitrine)/cafes/page.tsx`, no import de tipos, acrescente `DESTAQUES` e `type Destaque`. Depois, dentro de `lerFiltros`, acrescente as duas leituras:
 
@@ -2172,7 +2172,7 @@ E dentro do objeto `filtros` devolvido:
       tipo: tipo === "kit" ? "kit" : undefined,
 ```
 
-- [ ] **Step 7: Mostrar os chips**
+- [x] **Step 7: Mostrar os chips**
 
 Na função `ativos`, antes do `if (ordenacao !== "relevancia")`, acrescente:
 
@@ -2188,7 +2188,7 @@ Na função `ativos`, antes do `if (ordenacao !== "relevancia")`, acrescente:
   if (f.tipo === "kit") out.push({ chave: "tipo", rotulo: d.comum.nossosKits });
 ```
 
-- [ ] **Step 8: Rodar tudo e checar tipos**
+- [x] **Step 8: Rodar tudo e checar tipos**
 
 ```bash
 npm test && cd frontend && npx tsc --noEmit && cd ..
@@ -2196,7 +2196,7 @@ npm test && cd frontend && npx tsc --noEmit && cd ..
 
 Esperado: PASS, zero erro.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add frontend/lib/catalogo/tipos.ts frontend/lib/catalogo/repositorio.ts "frontend/app/[locale]/(vitrine)/cafes/page.tsx"
@@ -2210,9 +2210,23 @@ git commit -m "feat: a listagem entende os recortes que a home anuncia"
 **Files:**
 - Modify: `frontend/app/[locale]/(vitrine)/page.tsx`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
-Crie `frontend/app/[locale]/(vitrine)/home.test.ts`:
+Crie `frontend/app/[locale]/(vitrine)/home.test.ts`. ⚠️ **O bloco abaixo é o
+desenho, não o texto final — como está, ele não passa com home nenhuma**, e as
+duas correções foram feitas na execução:
+
+1. **As marcas de posição têm de ser as do JSX**, não o nome nu da coisa:
+   `<SecaoDoBlog` e não `SecaoDoBlog`, `t.clubeTitulo` e não `clubeTitulo`.
+   `SecaoDoBlog` casa primeiro na linha do IMPORT (posição 252 do arquivo) e
+   `clubeTitulo` casa primeiro na TABELA DE TEXTOS (posição 9361), as duas bem
+   acima do JSX — de modo que `indexOf` media a ordem dos imports, e as
+   asserções de ordem falhavam qualquer que fosse a página.
+2. **A checagem de estática precisa tirar os comentários antes de procurar**,
+   como `paginas-estaticas.test.ts` ao lado já faz e documenta. A home explica,
+   por extenso, que NÃO lê `cookies()` nem a query da URL; uma busca por texto
+   cru acusa justamente a frase que promete o contrário do defeito, e o único
+   "conserto" seria mutilar um comentário verdadeiro.
 
 ```ts
 import { describe, it, expect } from "vitest";
@@ -2281,7 +2295,7 @@ describe("ordem da home", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 ```bash
 npm test -- home
@@ -2289,7 +2303,7 @@ npm test -- home
 
 Esperado: FAIL — `TrilhaDeCategorias` não está no arquivo e `historiaTitulo` ainda está.
 
-- [ ] **Step 3: Trocar os imports da home**
+- [x] **Step 3: Trocar os imports da home**
 
 Em `frontend/app/[locale]/(vitrine)/page.tsx`, remova o import de `MARCO_DE_ORIGEM` e acrescente:
 
@@ -2306,11 +2320,11 @@ import type { ProdutoVendavel } from "@/lib/catalogo/tipos";
 
 `CardCafe`, `listarLotes` e `traduzirLote` podem sair se a seção "Torra da semana" for removida — e ela é: os três carrosséis a substituem. Remova também o `Image` se ele ficar sem uso fora do herói (ele continua sendo usado no herói, então **mantenha**).
 
-- [ ] **Step 4: Atualizar a tabela de textos**
+- [x] **Step 4: Atualizar a tabela de textos**
 
 Nos três objetos `pt`, `en` e `es`, **remova** `historiaTitulo`, `historiaTexto`, `historiaImagemAlt` e `torraTitulo`. Não remova `etapasTitulo`, `etapas`, `clubeRotulo`, `clubeTitulo`, `clubeTexto`, nem nada do herói ou da prova.
 
-- [ ] **Step 5: Escrever o componente de seção**
+- [x] **Step 5: Escrever o componente de seção**
 
 Acrescente, antes de `export default async function Home`:
 
@@ -2374,7 +2388,7 @@ function SecaoDeProdutos({
 }
 ```
 
-- [ ] **Step 6: Trocar o corpo do `Home`**
+- [x] **Step 6: Trocar o corpo do `Home`**
 
 Dentro de `export default async function Home`, substitua o cálculo dos lotes. Onde hoje está:
 
@@ -2413,7 +2427,7 @@ Ponha:
 
 E acrescente o import `import { lotesDoLocale } from "@/lib/catalogo/produtos";`.
 
-- [ ] **Step 7: Trocar o JSX**
+- [x] **Step 7: Trocar o JSX**
 
 Depois do `</section>` da faixa de prova, **remova a seção inteira "TORRA DA SEMANA"** e ponha:
 
@@ -2486,15 +2500,15 @@ Isto é um RECORTE E COLE do bloco que já existe. Nada dentro dele muda: nem o 
       </section>
 ```
 
-- [ ] **Step 8: Rodar até passar**
+- [x] **Step 8: Rodar até passar**
 
 ```bash
 npm test -- home
 ```
 
-Esperado: PASS, 6 testes.
+Esperado: PASS, **5 testes** — o `describe` tem cinco `it`, não seis.
 
-- [ ] **Step 9: Rodar tudo e checar tipos**
+- [x] **Step 9: Rodar tudo e checar tipos**
 
 ```bash
 npm test && cd frontend && npx tsc --noEmit && cd ..
@@ -2502,7 +2516,7 @@ npm test && cd frontend && npx tsc --noEmit && cd ..
 
 Esperado: PASS, zero erro. Se `paginas-estaticas.test.ts` falhar, **pare** — significa que a home saiu do build, e é o risco nº 1 do spec.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add "frontend/app/[locale]/(vitrine)/page.tsx" "frontend/app/[locale]/(vitrine)/home.test.ts"
@@ -2515,7 +2529,7 @@ git commit -m "feat: a home para de se apresentar e comeca a vender"
 
 **Files:** nenhum — esta task só prova.
 
-- [ ] **Step 1: Suíte inteira**
+- [x] **Step 1: Suíte inteira**
 
 ```bash
 npm test
@@ -2523,7 +2537,7 @@ npm test
 
 Esperado: PASS. Zero falha.
 
-- [ ] **Step 2: Tipos**
+- [x] **Step 2: Tipos**
 
 ```bash
 cd frontend && npx tsc --noEmit && cd ..
@@ -2531,7 +2545,7 @@ cd frontend && npx tsc --noEmit && cd ..
 
 Esperado: zero erro.
 
-- [ ] **Step 3: Lint**
+- [x] **Step 3: Lint**
 
 ```bash
 cd frontend && npm run lint && cd ..
@@ -2539,7 +2553,7 @@ cd frontend && npm run lint && cd ..
 
 Esperado: zero erro. Aviso de `img` do Next é aceitável se já existia antes.
 
-- [ ] **Step 4: Build**
+- [x] **Step 4: Build**
 
 ```bash
 npm run build
@@ -2549,24 +2563,39 @@ Esperado: sucesso.
 
 ⚠️ **Se o build morrer por falta de memória ou espaço, isso é ambiente e não código** — anote o erro exato no relatório e siga para o Step 5. Não tente "consertar" o build. (Medido na execução das Tasks 1–5: ~30 GB livres, suíte em ~7 s. O aviso fica como rede, não como expectativa.)
 
-- [ ] **Step 5: Provar que as três homes continuam saindo do build**
+- [x] **Step 5: Provar que as três homes continuam saindo do build**
+
+**As rotas são `/pt`, `/en` e `/es` — nunca `/`.** O plano pedia `/` aqui e
+essa rota não existe no manifesto, nem antes nem depois desta mudança: não há
+`app/page.tsx` na raiz, a home mora em `app/[locale]/`, e `generateStaticParams`
+devolve os três valores de `LOCALES`. Quem serve `/` é o rewrite do
+`middleware.ts`, que o traduz para `/pt` antes de chegar à rota. Pedir `/` faria
+a prova falhar com a home perfeitamente estática — que é o pior defeito possível
+numa trava: ela ensinaria a próxima pessoa a ignorá-la.
 
 ```bash
 node -e "
 const m=require('./frontend/.next/prerender-manifest.json');
 const rotas=Object.keys(m.routes);
-for (const r of ['/', '/en', '/es']) {
+for (const r of ['/pt', '/en', '/es']) {
   if (!rotas.includes(r)) throw new Error('A home '+r+' NAO saiu do build');
   console.log('estatica:', r);
 }
 "
 ```
 
-Esperado: as três linhas. Se falhar, a home perdeu a geração estática — é o risco nº 1 do spec e precisa voltar à Task 11.
+E o HTML em disco, que é o que o §"lição" do spec de 22/08 manda contar — build
+verde já deixou a estática cair duas vezes sem ninguém ver:
+
+```bash
+ls -la frontend/.next/server/app/pt.html frontend/.next/server/app/en.html frontend/.next/server/app/es.html
+```
+
+Esperado: as três linhas de cada comando. Se falhar, a home perdeu a geração estática — é o risco nº 1 do spec e precisa voltar à Task 11.
 
 Se o Step 4 não completou por falta de recurso, pule este e diga isso no relatório.
 
-- [ ] **Step 6: Commit final, se sobrou algo**
+- [x] **Step 6: Commit final, se sobrou algo**
 
 ```bash
 git status
