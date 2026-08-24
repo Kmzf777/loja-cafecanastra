@@ -1375,7 +1375,7 @@ export function SlideDoCarrossel({ children }: { children: ReactNode }) {
 npm test -- Carrossel
 ```
 
-Esperado: PASS, 5 testes.
+Esperado: PASS, 6 testes.
 
 - [x] **Step 5: Commit**
 
@@ -2009,7 +2009,7 @@ export function TrilhaDeCategorias({
 npm test -- TrilhaDeCategorias
 ```
 
-Esperado: PASS, 5 testes.
+Esperado: PASS, 6 testes.
 
 Se o teste dos rótulos falhar porque `d.catalogo.formato.capsula` devolve outra palavra (ex.: "Cápsula" no singular), **ajuste o TESTE ao dicionário**, não o dicionário ao teste — aquele vocabulário já é usado pela PLP e pela PDP.
 
@@ -2492,7 +2492,7 @@ Isto é um RECORTE E COLE do bloco que já existe. Nada dentro dele muda: nem o 
 npm test -- home
 ```
 
-Esperado: PASS, 5 testes.
+Esperado: PASS, 6 testes.
 
 - [ ] **Step 9: Rodar tudo e checar tipos**
 
