@@ -1392,7 +1392,7 @@ git commit -m "feat: um trilho que arrasta com o dedo, e tambem sem javascript"
 - Create: `frontend/components/catalogo/CardProduto.tsx`
 - Create: `frontend/components/catalogo/CardProduto.test.tsx`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `frontend/components/catalogo/CardProduto.test.tsx`:
 
@@ -1488,7 +1488,7 @@ describe("CardProduto", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 ```bash
 npm test -- CardProduto
@@ -1496,7 +1496,7 @@ npm test -- CardProduto
 
 Esperado: FAIL — `Cannot find module './CardProduto'`.
 
-- [ ] **Step 3: Escrever `CardProduto.tsx`**
+- [x] **Step 3: Escrever `CardProduto.tsx`**
 
 Crie `frontend/components/catalogo/CardProduto.tsx`:
 
@@ -1688,7 +1688,7 @@ export function CardProduto({
 }
 ```
 
-- [ ] **Step 4: Rodar até passar**
+- [x] **Step 4: Rodar até passar**
 
 ```bash
 npm test -- CardProduto
@@ -1698,7 +1698,7 @@ Esperado: PASS, 7 testes.
 
 Se `R$&nbsp;39,70` falhar, rode `node -e "console.log(JSON.stringify((3970/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})))"` e ajuste a asserção ao separador real que o Node emite — **ajuste o teste ao valor verdadeiro, nunca o contrário.**
 
-- [ ] **Step 5: Checar tipos**
+- [x] **Step 5: Checar tipos**
 
 ```bash
 cd frontend && npx tsc --noEmit && cd ..
@@ -1706,7 +1706,7 @@ cd frontend && npx tsc --noEmit && cd ..
 
 Não deve acusar nada: `produtoId` é campo declarado de `ProdutoVendavel`, criado na Task 5B. **Se você sentir vontade de acrescentá-lo ao `ProdutoDoCatalogo` do JSON, pare** — aquele tipo descreve o arquivo versionado, e o arquivo não tem nem pode ter um id de banco. Foi exatamente esse atalho que a Task 5B existe para evitar.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/components/catalogo/CardProduto.tsx frontend/components/catalogo/CardProduto.test.tsx
