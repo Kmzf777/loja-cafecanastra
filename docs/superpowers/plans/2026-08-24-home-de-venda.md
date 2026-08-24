@@ -746,7 +746,7 @@ export function useAdicionarNaSacola(item: ItemParaSacola) {
 npm test -- usar-adicionar
 ```
 
-Esperado: PASS, 10 testes.
+Esperado: PASS, 9 testes (4 em `tetoDeAdicao` + 5 em `decidirAdicao`).
 
 - [x] **Step 5: Commit**
 
@@ -837,6 +837,235 @@ Esperado: PASS e zero erro de tipo.
 ```bash
 git add frontend/components/catalogo/CardKit.tsx
 git commit -m "refactor: o card de kit passa a dividir a regra em vez de guarda-la"
+```
+
+---
+
+## Task 5B: Os produtos da home com preço e estoque do banco
+
+**Files:**
+- Modify: `frontend/lib/catalogo/tipos.ts`
+- Modify: `frontend/lib/catalogo/repositorio.ts`
+- Modify: `frontend/lib/catalogo/repositorio.test.ts`
+
+**Esta task não estava no plano original. Ela entrou porque a execução das Tasks 1–5 revelou um furo que quebraria a venda.**
+
+O problema: `curadoria.ts` lê `PRODUTOS`, que é o JSON versionado. **Nenhum dos 29 produtos do JSON tem `produtoId`** — aquele campo só existe depois que `buscarDadosAoVivo()` casa o SKU com o banco. Sem ele, `useAdicionarNaSacola` devolve `"sem-loja"` em todo clique, e cada botão da home nova responderia "não deu para falar com a loja". A home pareceria uma loja e não venderia nada.
+
+O mesmo caminho conserta a segunda metade: sem a sobreposição, a home mostraria o preço do JSON enquanto o painel mostra outro. `repositorio.ts` existe justamente para isso — leia o comentário no topo dele antes de começar.
+
+**A fronteira a respeitar:** `curadoria.ts` continua PURA e não aprende o que é uma API — ela decide QUAIS SKUs, e só. Quem sobrepõe o comercial é o repositório, que já é dono desse assunto e já tem `sobreporAoVivo`, cache de 60 s e teto de espera de 3 s prontos.
+
+- [ ] **Step 1: Declarar o tipo do que a home vende**
+
+Em `frontend/lib/catalogo/tipos.ts`, depois de `export type Kit = {...}`, acrescente:
+
+```ts
+/**
+ * UM SKU COMPRÁVEL, no vocabulário comercial do resto da casa.
+ *
+ * É o que os carrosséis da home vendem. Existe porque o produto CRU do JSON
+ * fala outra língua — `precoCentavos`, `sku`, e nenhum `produtoId`, que aquele
+ * arquivo não tem como saber. Este tipo usa os mesmos nomes de `Variante` e
+ * `Kit` (`preco`, `estoque`, `skuLoja`, `produtoId`) de propósito: é o que o
+ * deixa passar pelo mesmo `sobreporAoVivo` do repositório, sem contrato
+ * paralelo, e o que permite ao card falar uma língua só.
+ */
+export type ProdutoVendavel = {
+  /** A chave no catálogo E na loja — para o SKU avulso são a mesma. */
+  sku: string;
+  skuLoja: string;
+  /**
+   * `product_id` da linha no banco. Chega com preço e estoque quando a API
+   * responde; fica indefinido no modo de contingência. É o que o carrinho
+   * precisa para falar com o backend — sem ele dá para navegar, não comprar.
+   */
+  produtoId?: string;
+  linha: Linha;
+  formato: Formato;
+  /** Ausente em drip e cápsula, que não se vendem por peso. */
+  gramas?: number;
+  pacotes: number;
+  /** Em português e sempre — fica gravado na sacola. Ver `Variante`. */
+  rotuloEmbalagem: string;
+  rotuloChave?: string;
+  /** O nome capturado da loja — a rastreabilidade até o catálogo real. */
+  nome: string;
+  /** Arte da linha: os SKUs não têm foto própria no acervo (§8). */
+  imagem: string;
+  /** Em centavos. */
+  preco: number;
+  estoque: number;
+};
+```
+
+- [ ] **Step 2: Escrever o teste que falha**
+
+Acrescente ao fim de `frontend/lib/catalogo/repositorio.test.ts` (confira os imports do topo antes de colar; acrescente só o que faltar):
+
+```ts
+import { produtosDaHome } from "./repositorio";
+
+describe("produtosDaHome", () => {
+  it("entrega as três seções", async () => {
+    const { maisVendidos, kits, escolhaDoProdutor } = await produtosDaHome();
+    expect(maisVendidos.length).toBeGreaterThan(0);
+    expect(kits.length).toBeGreaterThan(0);
+    expect(escolhaDoProdutor.length).toBeGreaterThan(0);
+  });
+
+  it("fala o vocabulário comercial da casa, não o do JSON cru", () => {
+    // `preco`/`estoque`/`skuLoja` são os mesmos nomes de Variante e Kit. É o
+    // que deixa o SKU passar pelo mesmo sobreporAoVivo sem contrato paralelo.
+    return produtosDaHome().then(({ maisVendidos }) => {
+      const p = maisVendidos[0];
+      expect(p).toHaveProperty("preco");
+      expect(p).toHaveProperty("estoque");
+      expect(p).toHaveProperty("skuLoja");
+      expect(p).not.toHaveProperty("precoCentavos");
+    });
+  });
+
+  it("continua de pé quando a API não responde", async () => {
+    // A contingência que repositorio.ts documenta: loja com preço de ontem é
+    // melhor que loja que não abre, e o checkout reconfere antes de cobrar.
+    const { maisVendidos } = await produtosDaHome();
+    for (const p of maisVendidos) {
+      expect(p.preco, p.sku).toBeGreaterThan(0);
+      expect(p.imagem, p.sku).toBeTruthy();
+    }
+  });
+
+  it("nunca oferece o que não dá para comprar", async () => {
+    const { maisVendidos, kits, escolhaDoProdutor } = await produtosDaHome();
+    for (const p of [...maisVendidos, ...kits, ...escolhaDoProdutor]) {
+      expect(p.estoque, p.sku).toBeGreaterThan(0);
+      expect(p.preco, p.sku).toBeGreaterThan(0);
+    }
+  });
+
+  it("faz UMA leitura da API para as três seções", async () => {
+    // Três chamadas separadas custariam três fetch por render da home. O
+    // cache de 60 s do Next abafaria isso, mas depender de cache para não
+    // fazer trabalho triplicado é depender de sorte.
+    const chamadas: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      chamadas.push(String(url));
+      return { ok: false } as Response;
+    }) as typeof fetch;
+    try {
+      await produtosDaHome();
+      expect(chamadas.length).toBeLessThanOrEqual(1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+```
+
+- [ ] **Step 3: Rodar e ver falhar**
+
+```bash
+npm test -- repositorio
+```
+
+Esperado: FAIL — `produtosDaHome` não existe.
+
+- [ ] **Step 4: Implementar no repositório**
+
+Em `frontend/lib/catalogo/repositorio.ts`, acrescente os imports:
+
+```ts
+import { PRODUTOS, imagemDoProduto, type ProdutoDoCatalogo } from "./produtos";
+import { maisVendidos, kitsECaixas, escolhaDoProdutor } from "./curadoria";
+import type { ProdutoVendavel } from "./tipos";
+```
+
+E, no fim do arquivo:
+
+```ts
+/**
+ * O produto cru do JSON no vocabulário comercial da casa.
+ *
+ * `precoCentavos` vira `preco` e o `sku` vira também `skuLoja` — para o SKU
+ * avulso os dois são o mesmo, porque a chave do catálogo É a chave da loja. É
+ * essa tradução que deixa o produto passar por `sobreporAoVivo` junto com as
+ * variantes e os kits, em vez de ganhar um caminho próprio que divergiria.
+ */
+function comoVendavel(p: ProdutoDoCatalogo): ProdutoVendavel {
+  return {
+    sku: p.sku,
+    skuLoja: p.sku,
+    linha: p.linha as ProdutoVendavel["linha"],
+    formato: p.formato as ProdutoVendavel["formato"],
+    ...("gramas" in p ? { gramas: p.gramas as number } : {}),
+    pacotes: p.pacotes,
+    rotuloEmbalagem: p.rotuloEmbalagem,
+    rotuloChave: p.rotuloChave,
+    nome: p.nome,
+    imagem: imagemDoProduto(p),
+    preco: p.precoCentavos,
+    estoque: p.estoque,
+  };
+}
+
+/**
+ * AS TRÊS SEÇÕES DA HOME, COM PREÇO E ESTOQUE DO BANCO.
+ *
+ * A curadoria (`lib/catalogo/curadoria.ts`) decide QUAIS SKUs; ela é pura e
+ * não sabe o que é uma API. Esta função é quem põe o comercial por cima, pelo
+ * mesmo mecanismo que `listarLotes` e `listarKits` já usam.
+ *
+ * SEM ELA A HOME NÃO VENDERIA. `produtoId` não existe em produto nenhum do
+ * JSON — ele nasce aqui, do casamento por SKU com o banco —, e é ele que o
+ * carrinho envia ao backend. Um card sem `produtoId` responde "não deu para
+ * falar com a loja" em todo clique: a home pareceria uma loja e não cobraria
+ * ninguém. O preço tem a mesma história: sem a sobreposição, a vitrine
+ * anunciaria o valor do JSON enquanto o painel mostra outro.
+ *
+ * UMA LEITURA SÓ PARA AS TRÊS SEÇÕES. `buscarDadosAoVivo` é chamada uma vez e
+ * o mapa é reusado — três chamadas custariam três `fetch` por render, e o
+ * cache de 60 s do Next abafaria isso sem tornar certo depender dele.
+ *
+ * A CONTINGÊNCIA É A MESMA DAS IRMÃS: API fora, o mapa volta vazio, e a home
+ * vende pelo JSON versionado. Loja com preço de ontem é melhor que loja que
+ * não abre, e o checkout reconfere preço e estoque no servidor antes de
+ * cobrar.
+ */
+export async function produtosDaHome(): Promise<{
+  maisVendidos: ProdutoVendavel[];
+  kits: ProdutoVendavel[];
+  escolhaDoProdutor: ProdutoVendavel[];
+}> {
+  const aoVivo = await buscarDadosAoVivo();
+  const comercial = (lista: ProdutoDoCatalogo[]) =>
+    lista.map((p) => sobreporAoVivo(comoVendavel(p), aoVivo));
+
+  return {
+    maisVendidos: comercial(maisVendidos(PRODUTOS)),
+    kits: comercial(kitsECaixas(PRODUTOS)),
+    escolhaDoProdutor: comercial(escolhaDoProdutor(PRODUTOS)),
+  };
+}
+```
+
+- [ ] **Step 5: Rodar até passar**
+
+```bash
+npm test -- repositorio
+```
+
+Esperado: PASS, 5 testes novos.
+
+⚠️ **A curadoria filtra por estoque ANTES de o banco falar.** Isso significa que um SKU que o JSON diz esgotado, mas que o banco tem em estoque, não aparece na home. É o comportamento aceito por ora — o JSON é a fonte editorial e o banco corrige o número, não a lista. Se o teste "nunca oferece o que não dá para comprar" falhar porque o banco zerou um estoque que o JSON tem, é este o motivo, e a correção é filtrar de novo DEPOIS da sobreposição. Registre no relatório se acontecer.
+
+- [ ] **Step 6: Checar tipos e commitar**
+
+```bash
+npm test && cd frontend && npx tsc --noEmit && cd ..
+git add frontend/lib/catalogo/tipos.ts frontend/lib/catalogo/repositorio.ts frontend/lib/catalogo/repositorio.test.ts
+git commit -m "fix: a home passa a vender pelo preco do banco, e com id de produto"
 ```
 
 ---
@@ -1179,14 +1408,34 @@ vi.mock("@/lib/sacola/sacola", () => ({
 }));
 
 import { CardProduto } from "./CardProduto";
-import { PRODUTOS } from "@/lib/catalogo/produtos";
+import type { ProdutoVendavel } from "@/lib/catalogo/tipos";
 
 function html(no: ReactElement) {
   return renderToStaticMarkup(no);
 }
 
-const CLASSICO_250 = PRODUTOS.find((p) => p.sku === "classico-graos-250")!;
-const ESGOTADO = { ...CLASSICO_250, estoque: 0 };
+/**
+ * Fixture no formato que a Task 5B produz — `preco`/`estoque`/`produtoId`, o
+ * vocabulário comercial da casa. NÃO é o produto cru do JSON: aquele não tem
+ * `produtoId`, e um card montado a partir dele nunca conseguiria vender.
+ */
+const CLASSICO_250: ProdutoVendavel = {
+  sku: "classico-graos-250",
+  skuLoja: "classico-graos-250",
+  produtoId: "prod-teste-1",
+  linha: "classico",
+  formato: "graos",
+  gramas: 250,
+  pacotes: 1,
+  rotuloEmbalagem: "Pacote com 250 g",
+  rotuloChave: "pacote-250g",
+  nome: "Café Especial Canastra Clássico em Grãos - Pacote com 250 gramas",
+  imagem: "/canastra-classico.png",
+  preco: 3970,
+  estoque: 20,
+};
+
+const ESGOTADO: ProdutoVendavel = { ...CLASSICO_250, estoque: 0 };
 
 describe("CardProduto", () => {
   it("mostra o preço EXATO, não 'a partir de'", () => {
@@ -1256,10 +1505,6 @@ Crie `frontend/components/catalogo/CardProduto.tsx`:
 
 import Image from "next/image";
 import Link from "next/link";
-import {
-  imagemDoProduto,
-  type ProdutoDoCatalogo,
-} from "@/lib/catalogo/produtos";
 import { formatarPreco, precoParaLeitor } from "@/lib/catalogo/repositorio";
 import { COR_DA_LINHA } from "@/lib/catalogo/rotulos";
 import { Botao } from "@/components/ui/Botao";
@@ -1267,7 +1512,7 @@ import { useAdicionarNaSacola } from "@/lib/sacola/usar-adicionar";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { href } from "@/lib/i18n/rotas";
 import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
-import type { Linha } from "@/lib/catalogo/tipos";
+import type { ProdutoVendavel } from "@/lib/catalogo/tipos";
 
 /**
  * O CARD DE UM SKU — a unidade de venda da home nova.
@@ -1291,13 +1536,18 @@ export function CardProduto({
   produto,
   locale = LOCALE_PADRAO,
 }: {
-  produto: ProdutoDoCatalogo;
+  /**
+   * Já com preço, estoque e `produtoId` do banco — é o que `produtosDaHome()`
+   * devolve. NÃO aceita o produto cru do JSON de propósito: aquele não tem
+   * `produtoId`, e um card montado a partir dele responderia "não deu para
+   * falar com a loja" em todo clique. O tipo é a trava disso.
+   */
+  produto: ProdutoVendavel;
   locale?: Locale;
 }) {
   const d = dicionario(locale);
-  const corDaLinha = COR_DA_LINHA[produto.linha as Linha];
-  const indisponivel = produto.estoque <= 0 || produto.precoCentavos <= 0;
-  const imagem = imagemDoProduto(produto);
+  const corDaLinha = COR_DA_LINHA[produto.linha];
+  const indisponivel = produto.estoque <= 0 || produto.preco <= 0;
 
   /**
    * O NOME NA SACOLA É EM PORTUGUÊS, SEMPRE — mesma decisão de
@@ -1316,9 +1566,9 @@ export function CardProduto({
     skuLoja: produto.sku,
     nomeNaSacola,
     rotuloGravado: produto.rotuloEmbalagem,
-    precoCentavos: produto.precoCentavos,
+    precoCentavos: produto.preco,
     estoque: produto.estoque,
-    imagem,
+    imagem: produto.imagem,
   });
 
   /**
@@ -1327,9 +1577,20 @@ export function CardProduto({
    * escolhendo é a LINHA e o FORMATO — o resto vive no rótulo de embalagem
    * logo abaixo.
    */
-  const nomeDaLinha = d.catalogo.linha[produto.linha as Linha];
-  const formato = d.catalogo.formato[produto.formato as keyof typeof d.catalogo.formato];
-  const peso = produto.gramas === 1000 ? "1 kg" : `${produto.gramas} g`;
+  const nomeDaLinha = d.catalogo.linha[produto.linha];
+  const formato = d.catalogo.formato[produto.formato];
+
+  /**
+   * `gramas` é OPCIONAL, e a ausência não é descuido: drip e cápsula não se
+   * vendem por peso, e escrever "undefined g" num card é pior que não dizer o
+   * peso. Quando falta, o card se cala sobre a gramatura e o
+   * `rotuloEmbalagem` logo abaixo já diz do que se trata.
+   */
+  const peso = produto.gramas
+    ? produto.gramas === 1000
+      ? "1 kg"
+      : `${produto.gramas} g`
+    : null;
 
   return (
     <article className="group flex h-full flex-col border border-fuligem-20 bg-cal-puro transition-[box-shadow,border-color,transform] duration-[320ms] ease-canastra hover:-translate-x-1 hover:-translate-y-1 hover:border-vermelho hover:shadow-[4px_4px_0_var(--color-fuligem)]">
@@ -1345,7 +1606,7 @@ export function CardProduto({
       >
         <div className="relative aspect-square overflow-hidden">
           <Image
-            src={imagem}
+            src={produto.imagem}
             alt=""
             aria-hidden
             width={500}
@@ -1361,8 +1622,12 @@ export function CardProduto({
           </h3>
           <p className="mt-1 text-[13px] text-fuligem-55">
             {formato}
-            <span aria-hidden> · </span>
-            <span className="font-dado">{peso}</span>
+            {peso ? (
+              <>
+                <span aria-hidden> · </span>
+                <span className="font-dado">{peso}</span>
+              </>
+            ) : null}
           </p>
         </div>
       </Link>
@@ -1375,9 +1640,9 @@ export function CardProduto({
         ) : (
           <span
             className="font-dado text-[18px]"
-            aria-label={precoParaLeitor(produto.precoCentavos)}
+            aria-label={precoParaLeitor(produto.preco)}
           >
-            {formatarPreco(produto.precoCentavos)}
+            {formatarPreco(produto.preco)}
           </span>
         )}
 
@@ -1439,7 +1704,7 @@ Se `R$&nbsp;39,70` falhar, rode `node -e "console.log(JSON.stringify((3970/100).
 cd frontend && npx tsc --noEmit && cd ..
 ```
 
-Se `produto.produtoId` acusar erro, acrescente `produtoId?: string;` ao tipo `ProdutoDoCatalogo` em `produtos.ts`.
+Não deve acusar nada: `produtoId` é campo declarado de `ProdutoVendavel`, criado na Task 5B. **Se você sentir vontade de acrescentá-lo ao `ProdutoDoCatalogo` do JSON, pare** — aquele tipo descreve o arquivo versionado, e o arquivo não tem nem pode ter um id de banco. Foi exatamente esse atalho que a Task 5B existe para evitar.
 
 - [ ] **Step 6: Commit**
 
@@ -1975,10 +2240,10 @@ function posicao(marca: string): number {
 
 describe("ordem da home", () => {
   it("põe produto acima de conteúdo", () => {
-    expect(posicao("TrilhaDeCategorias")).toBeLessThan(posicao("maisVendidos"));
-    expect(posicao("maisVendidos")).toBeLessThan(posicao("kitsECaixas"));
-    expect(posicao("kitsECaixas")).toBeLessThan(posicao("escolhaDoProdutor"));
-    expect(posicao("escolhaDoProdutor")).toBeLessThan(posicao("clubeTitulo"));
+    expect(posicao("TrilhaDeCategorias")).toBeLessThan(posicao("seccoes.maisVendidos"));
+    expect(posicao("seccoes.maisVendidos")).toBeLessThan(posicao("seccoes.kits"));
+    expect(posicao("seccoes.kits")).toBeLessThan(posicao("seccoes.escolhaDoProdutor"));
+    expect(posicao("seccoes.escolhaDoProdutor")).toBeLessThan(posicao("clubeTitulo"));
     expect(posicao("clubeTitulo")).toBeLessThan(posicao("SecaoDoBlog"));
     expect(posicao("SecaoDoBlog")).toBeLessThan(posicao("etapasTitulo"));
   });
@@ -2033,13 +2298,11 @@ import { Carrossel, SlideDoCarrossel } from "@/components/ui/Carrossel";
 import { CardProduto } from "@/components/catalogo/CardProduto";
 import { CardVerMais } from "@/components/catalogo/CardVerMais";
 import { TrilhaDeCategorias } from "@/components/catalogo/TrilhaDeCategorias";
-import {
-  maisVendidos,
-  kitsECaixas,
-  escolhaDoProdutor,
-} from "@/lib/catalogo/curadoria";
-import type { ProdutoDoCatalogo } from "@/lib/catalogo/produtos";
+import { produtosDaHome } from "@/lib/catalogo/repositorio";
+import type { ProdutoVendavel } from "@/lib/catalogo/tipos";
 ```
+
+**Não importe de `curadoria.ts` aqui.** A curadoria escolhe QUAIS SKUs e não sabe preço de banco; quem entrega os três grupos prontos, com `produtoId` e preço ao vivo, é `produtosDaHome()` (Task 5B). Importar a curadoria direto na home é justamente o furo que a Task 5B conserta — a página venderia pelo preço de ontem e nenhum botão funcionaria.
 
 `CardCafe`, `listarLotes` e `traduzirLote` podem sair se a seção "Torra da semana" for removida — e ela é: os três carrosséis a substituem. Remova também o `Image` se ele ficar sem uso fora do herói (ele continua sendo usado no herói, então **mantenha**).
 
@@ -2069,7 +2332,7 @@ function SecaoDeProdutos({
   superficie,
 }: {
   titulo: string;
-  produtos: ProdutoDoCatalogo[];
+  produtos: ProdutoVendavel[];
   /** Caminho canônico em português — `href()` cuida do idioma. */
   verMais: string;
   locale: Locale;
@@ -2134,6 +2397,18 @@ Ponha:
    */
   const notasSca = lotesDoLocale(locale).map((l) => l.sca);
   const faixaSca = `SCA ${Math.min(...notasSca)}–${Math.max(...notasSca)}`;
+
+  /**
+   * UMA LEITURA DA API PARA AS TRÊS SEÇÕES — ver `produtosDaHome()`. É aqui
+   * que o preço do painel e o `produtoId` do banco entram na página; sem este
+   * `await`, os carrosséis anunciariam o preço do JSON e nenhum botão
+   * conseguiria pôr nada na sacola.
+   *
+   * Isto NÃO tira a home da geração estática: `buscarDadosAoVivo` é `fetch`
+   * com `next: { revalidate }`, que é justamente a leitura que sobrevive ao
+   * prerender — a mesma que `listarLotes` já fazia nesta página antes.
+   */
+  const seccoes = await produtosDaHome();
 ```
 
 E acrescente o import `import { lotesDoLocale } from "@/lib/catalogo/produtos";`.
@@ -2149,7 +2424,7 @@ Depois do `</section>` da faixa de prova, **remova a seção inteira "TORRA DA S
       {/* ── MAIS VENDIDOS ─────────────────────────────────────── superfície cal */}
       <SecaoDeProdutos
         titulo={d.comum.maisVendidos}
-        produtos={maisVendidos()}
+        produtos={seccoes.maisVendidos}
         verMais="/cafes?destaque=mais-vendidos"
         locale={locale}
         superficie="cal"
@@ -2160,7 +2435,7 @@ Depois do `</section>` da faixa de prova, **remova a seção inteira "TORRA DA S
           alternância, e sem ela a página perde o ritmo antes do Clube. */}
       <SecaoDeProdutos
         titulo={d.comum.nossosKits}
-        produtos={kitsECaixas()}
+        produtos={seccoes.kits}
         verMais="/cafes?tipo=kit"
         locale={locale}
         superficie="juta-claro"
@@ -2169,7 +2444,7 @@ Depois do `</section>` da faixa de prova, **remova a seção inteira "TORRA DA S
       {/* ── ESCOLHA DO PRODUTOR ───────────────────────────────── superfície cal */}
       <SecaoDeProdutos
         titulo={d.comum.escolhaDoProdutor}
-        produtos={escolhaDoProdutor()}
+        produtos={seccoes.escolhaDoProdutor}
         verMais="/cafes?destaque=escolha-do-produtor"
         locale={locale}
         superficie="cal"
@@ -2272,7 +2547,7 @@ npm run build
 
 Esperado: sucesso.
 
-⚠️ **A máquina onde isto roda tem ~0,5% de disco livre e ~866 MB de RAM.** Se o build morrer por falta de memória ou espaço, isso é ambiente e não código — anote o erro exato no relatório e siga para o Step 5. Não tente "consertar" o build.
+⚠️ **Se o build morrer por falta de memória ou espaço, isso é ambiente e não código** — anote o erro exato no relatório e siga para o Step 5. Não tente "consertar" o build. (Medido na execução das Tasks 1–5: ~30 GB livres, suíte em ~7 s. O aviso fica como rede, não como expectativa.)
 
 - [ ] **Step 5: Provar que as três homes continuam saindo do build**
 
@@ -2322,6 +2597,7 @@ Se houver mudança não commitada, commite; senão, esta task acaba aqui.
 | §7.3 `CardVerMais` | 8 |
 | §7.4 `TrilhaDeCategorias` | 9 |
 | §7.5 Extração do hook | 4, 5 |
+| Preço ao vivo + produtoId na home | **5B** (não estava no plano original) |
 | §8 Filtros da PLP | 10 |
 | §9 i18n | 2 |
 | §10 Testes | todas |
