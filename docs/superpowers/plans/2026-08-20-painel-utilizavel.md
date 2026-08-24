@@ -8,7 +8,7 @@
 inteira pelo painel legado: ver erro quando há erro, mudar status em
 português, informar rastreio sem `window.prompt`, exportar CSV para o Excel,
 cadastrar SKU, gerenciar cupons e configurar o frete grátis — sem nenhum
-resquício visível de camiseta/Shopnaw.
+resquício visível da loja antiga.
 
 **Território:** `backend/src/routes/orders.routes.js`,
 `backend/src/controllers/OrderController.js`,

@@ -117,7 +117,7 @@ commits finais e relatório de aceitação com o que ficou dependendo de credenc
 
 - `npm --prefix backend test` e `npm --prefix frontend run test` verdes.
 - Nenhuma rota respondendo 200 com erro engolido.
-- Nenhum texto de camiseta/Shopnaw visível a cliente ou gestor.
+- Nenhum texto da loja antiga visível a cliente ou gestor.
 - Toda promessa visível na vitrine (frete grátis, cartão, cookies, CPF) tem
   implementação correspondente.
 - Pendências que dependem de credencial/VPS listadas em um runbook único de

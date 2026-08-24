@@ -8,7 +8,7 @@ estrutura.sql
 # Artefato criado por engano ao rodar next fora de frontend/
 .next
 
-# Dumps CSV do banco da loja antiga (Shopnaw). Contem dado pessoal real —
+# Dumps CSV do banco da loja antiga. Contem dado pessoal real —
 # nome, e-mail, telefone, endereco, hash de senha e refresh token de terceiros.
 # Nao versionar. Ver docs/seguranca-dados-pessoais.md.
 *.csv

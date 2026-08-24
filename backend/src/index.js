@@ -43,7 +43,7 @@ const isProd = process.env.NODE_ENV === "production";
 /**
  * Origens liberadas.
  *
- * Antes a lista misturava os dominios da loja ANTERIOR (shopnaw) com localhost,
+ * Antes a lista misturava dominios de outra loja com localhost,
  * e valia igual em producao. Manter localhost liberado em producao significa
  * que uma pagina rodando na maquina de um atacante (ou um app local malicioso)
  * fala com esta API a partir do navegador de quem esta logado.

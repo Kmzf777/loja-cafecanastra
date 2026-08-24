@@ -177,7 +177,7 @@ imprimir_encerramento() {
 ────────────────────────────────────────────────────────────────────────────
 CHECKLIST DE INVALIDAÇÃO (fazer AGORA, na ordem):
 
- [ ] 1. Trocar o JWT_SECRET_REFRESH da loja ANTIGA (Shopnaw), se aquele
+ [ ] 1. Trocar o JWT_SECRET_REFRESH da loja ANTIGA, se aquele
         backend ainda roda em algum ambiente — os 34 refresh tokens de
         refresh_tokens.csv foram assinados com ele e valem até o segredo
         mudar.

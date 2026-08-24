@@ -946,7 +946,7 @@ o runbook `docs/deploy.md`.
 
 - "pagamento com cartão: o checkout aceita só Pix" — o cartão é tokenizado no
   navegador pelo SDK do MP, atrás de `NEXT_PUBLIC_MP_PUBLIC_KEY`;
-- "Política de Privacidade e Termos de Uso ainda atribuem a loja à Shopnaw";
+- "Política de Privacidade e Termos de Uso ainda atribuem a loja à marca antiga";
 - "sem `sitemap.ts`/`robots.ts`; `/account` e `/dashboard` são indexáveis" — os
   dois existem, e o `robots.ts` barra `/dashboard`, `/account`, `/checkout` e
   `/sacola`;

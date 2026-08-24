@@ -36,7 +36,7 @@ Sequência real, para qualquer visitante — logado ou não:
 | Sintoma relatado | Causa |
 |---|---|
 | "demora muito para carregar" | um aplicativo inteiro + 3 requisições inúteis + 1 ida ao GoTrue + 1 ida ao PostgREST, tudo antes de a decisão existir; depois, uma navegação dura que carrega um **segundo** aplicativo |
-| "aparece um loading do antigo Shopnaw" | `legacy/components/Loading/Loading.jsx` tem `alt="Shop NAW Logo"`, importa `novalogo.jpeg` e escreve **"Carregando produtos para você"** — a tela da loja de camisetas, exibida no painel. Nenhuma onda anterior era dona do arquivo |
+| "aparece um loading de outra marca" | `legacy/components/Loading/Loading.jsx` traz a logo antiga e escreve **"Carregando produtos para você"** — a tela de espera da loja anterior, exibida no painel. Nenhuma onda anterior era dona do arquivo |
 | "sou redirecionado para /account/login" | `AdminRoutes.jsx:36` manda para o login **do cliente**, por desenho |
 
 ### O problema de segurança embutido
@@ -87,8 +87,8 @@ casa.
 
 ### 3. A tela de carregamento
 
-`legacy/components/Loading/Loading.jsx` deixa de dizer "Shop NAW" e "Carregando
-produtos para você", e deixa de carregar a logo antiga. Vira o carregamento do
+`legacy/components/Loading/Loading.jsx` deixa de mostrar a marca antiga e de
+dizer "Carregando produtos para você", e deixa de carregar a logo antiga. Vira o carregamento do
 painel, com a identidade do Café Canastra.
 
 ### 4. Segunda camada preservada
@@ -135,7 +135,7 @@ testar módulos puros. Então:
 ## Critério de pronto
 
 - Visitante anônimo em `/dashboard` **não recebe** o pacote do painel.
-- Nenhuma tela diz "Shop NAW" ou "Carregando produtos para você".
+- Nenhuma tela mostra a marca antiga ou diz "Carregando produtos para você".
 - Gestor entra por `/dashboard/entrar` e cai na rota que pediu.
 - Cliente logado que abre `/dashboard` entende por que não entrou.
 - `npm --prefix frontend run test` e `npx tsc --noEmit` verdes.

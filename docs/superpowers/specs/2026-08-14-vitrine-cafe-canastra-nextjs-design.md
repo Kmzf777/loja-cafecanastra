@@ -8,9 +8,9 @@
 
 ## 1. Contexto e objetivo
 
-O projeto partiu de um clone do **Shopnaw Store**, um e-commerce de roupas em Vite + React + Express + PostgreSQL. Ele foi adotado como base por já trazer integrações prontas: Mercado Pago (checkout transparente e webhook), Melhor Envio (frete), Cloudinary (imagens), Resend (e-mail) e autenticação com JWT + refresh em cookie httpOnly.
+O projeto partiu de uma base de e-commerce em Vite + React + Express + PostgreSQL, adotada por já trazer integrações prontas: Mercado Pago (checkout transparente e webhook), Melhor Envio (frete), Cloudinary (imagens), Resend (e-mail) e autenticação com JWT + refresh em cookie httpOnly.
 
-A loja de roupas será substituída pela vitrine do **Café Canastra**, seguindo o `estetica.md`. A estética atual é descartada por completo.
+Essa base será substituída pela vitrine do **Café Canastra**, seguindo o `estetica.md`. A estética atual é descartada por completo.
 
 ### Por que Next.js, e não Vite
 
@@ -121,7 +121,7 @@ A razão é o contrato de §4: ele é o centro do desenho, e um contrato sem ver
 
 ### 3.6 Esquema de URLs
 
-As URLs são novas, não herdadas do Shopnaw (`/site`, `/site/product/:name/:id`). Como o domínio da Canastra ainda não serve essas páginas, não há link antigo a preservar e nenhum redirect 301 é necessário. O slug do lote é a chave canônica: `/cafes/casca-danta`.
+As URLs são novas, não herdadas da base antiga (`/site`, `/site/product/:name/:id`). Como o domínio da Canastra ainda não serve essas páginas, não há link antigo a preservar e nenhum redirect 301 é necessário. O slug do lote é a chave canônica: `/cafes/casca-danta`.
 
 ### 3.7 Renderização por rota
 

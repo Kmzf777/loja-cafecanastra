@@ -28,8 +28,7 @@ function Dashboard() {
   return (
     <DashboardContainer>
       <HeaderComponent>
-        {/* Marca do painel: era o logo da Shopnaw, a loja de camisetas de onde
-            este codigo veio. Servido de /public pelo mesmo Next que serve a
+        {/* Marca do painel. Servido de /public pelo mesmo Next que serve a
             ilha, entao caminho absoluto basta — sem import estatico. */}
         <div className="logoContent" onClick={() => navigate("/dashboard")}>
           <img src="/logo-canastra.png" alt="Café Canastra" />

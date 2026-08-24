@@ -4,12 +4,10 @@ import { motion } from "framer-motion";
 /**
  * A tela de carregamento DO PAINEL.
  *
- * O QUE ELA DIZIA ANTES. Este arquivo veio inteiro da Shopnaw, a loja de
- * camisetas de onde o painel foi herdado: `alt="Shop NAW Logo"`, a logo
- * `assets/novalogo.jpeg` e a frase "Carregando produtos para você" — a tela de
- * espera de uma LOJA, exibida para o gestor do Café Canastra toda vez que o
- * `AdminRoutes` conferia a sessão. Era a marca errada, na hora em que a pessoa
- * só olha para a tela.
+ * O QUE ELA DIZIA ANTES: uma logo de outra marca e a frase "Carregando
+ * produtos para você" — tela de espera de LOJA, exibida ao gestor do Café
+ * Canastra toda vez que o `AdminRoutes` conferia a sessão. Era a marca errada,
+ * na hora em que a pessoa só olha para a tela.
  *
  * A logo vem de `/logo-canastra.png`, servida de `public/` pelo mesmo Next que
  * serve esta ilha — mesmo caminho que `pages/dashboard/Dashboard.jsx` já usa

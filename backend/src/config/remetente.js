@@ -1,9 +1,9 @@
 /**
  * Identidade da loja nos e-mails.
  *
- * Todo remetente estava escrito no codigo como `...@shopnaw.com.br` — dominio
- * da loja de camisetas de onde este projeto veio, que o Cafe Canastra nao
- * controla. Em producao o Resend so entrega de dominio verificado na conta:
+ * Todo remetente estava escrito no codigo com um dominio fixo que o Cafe
+ * Canastra nao controla. Em producao o Resend so entrega de dominio
+ * verificado na conta:
  * com esses remetentes, TODOS os e-mails (confirmacao de cadastro, recuperacao
  * de senha, status de pedido) seriam recusados. E o erro era engolido num
  * try/catch que so faz console.error — o cliente nunca receberia o e-mail e

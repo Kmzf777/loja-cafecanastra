@@ -171,7 +171,7 @@ reembolsado}; ativo = os outros seis.
     registrado ANTES de `/users/:id`. Funções exportadas com injeção
     (`conexao`, `buscar`, `ambiente`) para teste.
 16. **Limpezas** — `app.use("/uploads"...)` fora do `index.js`; pasta
-    Cloudinary `shopnaw_products` → `canastra_produtos`; `.env.example`
+    Cloudinary da loja antiga → `canastra_produtos`; `.env.example`
     documenta `PG_POOL_MAX` e perde `EMAIL_SEGURANCA` (ficou sem uso);
     `node-cron`/`nodemailer` FICAM no package.json (2F usa node-cron).
 17. **Front (única exceção permitida)** — `frontend/app/(vitrine)/account/page.tsx`:

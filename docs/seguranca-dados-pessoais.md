@@ -5,8 +5,7 @@ Data: 2026-08-16
 ## O que havia
 
 Onze arquivos `.csv` estavam versionados na raiz do repositório. Eram um dump
-do banco de produção da loja anterior (**Shopnaw**, de camisetas), de onde este
-projeto foi bifurcado. Não eram dados de exemplo:
+do banco de produção de uma loja anterior. Não eram dados de exemplo:
 
 | Arquivo | Continha |
 |---|---|

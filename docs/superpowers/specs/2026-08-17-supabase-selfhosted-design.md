@@ -404,6 +404,6 @@ Declarado explicitamente para não voltar como surpresa:
 - **Produção fotográfica** (`estetica.md` §8) e conferência dos preços marcados
   como `pesquisa-web`/`inferido` em `data/catalogo-canastra.json`.
 - **Política de Privacidade e Termos de Uso**, que ainda atribuem a loja à
-  Shopnaw.
+  marca antiga.
 - **Segundo stack Supabase para isolamento real.** Avaliado e recusado; o risco
   está registrado na §2.2.

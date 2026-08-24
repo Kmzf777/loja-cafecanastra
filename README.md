@@ -54,12 +54,6 @@ descobrir no meio do pagamento. Essas rotas vivem fora do `[locale]`, em
 `app/(transacional)/`, e por isso `/en/checkout` nem existe (é 308 para
 `/checkout`).
 
-> Este repositório nasceu de um fork do **Shopnaw Store** (loja de camisetas) e
-> foi convertido. O painel já não fala de camiseta em tela nenhuma; o que sobrou
-> daquele projeto são componentes da vitrine antiga dentro de `frontend/legacy/`
-> que ninguém mais renderiza, mais comentários que registram a herança de
-> propósito. A conversão está documentada em `docs/`.
-
 > **A loja vende de ponta a ponta.** O catálogo da vitrine lê preço e estoque do
 > banco, a sacola sobrevive ao login, o checkout fecha por Pix ou cartão, o
 > pedido nasce em `canastra.pedidos` com chave de idempotência, o webhook do

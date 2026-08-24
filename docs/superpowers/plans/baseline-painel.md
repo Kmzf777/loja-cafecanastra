@@ -229,7 +229,7 @@ mudança de estilo ou refatoração em volta):
 
 | arquivo | antes | depois |
 |---|---|---|
-| `legacy/pages/dashboard/Dashboard.jsx` | `<img src={LogoShopnaw} ...>` | `<img src={LogoShopnaw.src} ...>` |
+| `legacy/pages/dashboard/Dashboard.jsx` | `<img src={LogoPainel} ...>` | `<img src={LogoPainel.src} ...>` |
 | `legacy/components/Loading/Loading.jsx` | `<LogoImage src={logo} ...>` | `<LogoImage src={logo.src} ...>` |
 
 **São exatamente estes dois no grafo do painel**, confirmado por três vias: (a)

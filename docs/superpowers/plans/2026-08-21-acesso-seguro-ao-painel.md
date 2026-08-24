@@ -121,9 +121,9 @@ Lido do `location` no efeito de montagem (a página é client-only e não usa
 `useSearchParams`, para não exigir Suspense) — mesmo padrão do
 `?assinatura=confirmada` que já existe ali.
 
-### 7. `legacy/components/Loading/Loading.jsx` — fim do Shopnaw
+### 7. `legacy/components/Loading/Loading.jsx` — fim da marca antiga
 `/logo-canastra.png`, "Carregando o painel", ícone que não seja sacola de loja.
-Sem `import logo from "../../assets/novalogo.jpeg"`.
+Sem importar a logo antiga de `assets/`.
 
 ### 8. `legacy/routes/AdminRoutes.jsx` — segundo anel
 Destino vira `/dashboard/entrar?de=…`; comentário do topo registra que agora
@@ -260,7 +260,7 @@ página, não handler. Registrado no comentário do layout e travado por teste
 ## Critério de pronto
 
 - Anônimo em `/dashboard` não recebe o pacote do painel (guard de servidor).
-- Nenhuma tela diz "Shop NAW" nem "Carregando produtos para você".
+- Nenhuma tela mostra a marca antiga nem diz "Carregando produtos para você".
 - Gestor entra por `/dashboard/entrar` e cai na rota que pediu.
 - Cliente logado que abre `/dashboard` entende por que não entrou.
 - Falha de banco não abre o painel — e diz que foi falha, não senha errada.

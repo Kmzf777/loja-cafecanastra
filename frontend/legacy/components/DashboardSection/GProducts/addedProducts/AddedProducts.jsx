@@ -26,7 +26,7 @@ import {
 import authContext from "../../../../contexts/loginContext/createAuthContext";
 import Loading from "../../../Loading/Loading";
 
-// Era "AddedShirts": o painel veio de uma loja de camisetas (Shopnaw) e este
+// Era "AddedShirts", nome de um catálogo que não é o desta loja — e este
 // arquivo era o último a dizer isso na cara do gestor.
 function AddedProducts() {
   const { authFetch } = useContext(authContext);
