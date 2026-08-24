@@ -470,3 +470,31 @@ export const KITS_DA_LOJA: Kit[] = KITS.map((p) => ({
   pacotes: p.pacotes,
   ...("unidades" in p ? { unidades: p.unidades as number } : {}),
 }));
+
+/**
+ * O array cru de produtos do catálogo, com os campos de curadoria.
+ *
+ * `LOTES` e `KITS_DA_LOJA` já derivam daqui, mas os dois PERDEM O SKU
+ * INDIVIDUAL no caminho: o lote agrupa as variantes de uma linha, e o kit só
+ * enxerga o que tem `kit: true`. A home vende SKU — "Clássico em Grãos 250 g",
+ * com preço exato e botão — e por isso precisa da lista antes do agrupamento.
+ *
+ * `lib/catalogo/curadoria.ts` é o único consumidor, e ele não deveria conhecer
+ * a forma do JSON: por isso a exportação é daqui, que é onde o JSON já é lido.
+ */
+export type ProdutoDoCatalogo = ProdutoBruto & {
+  maisVendido?: number;
+  escolhaDoProdutor?: number;
+  kit?: boolean;
+  unidades?: number;
+};
+
+export const PRODUTOS: ProdutoDoCatalogo[] =
+  bruto.produtos as ProdutoDoCatalogo[];
+
+/** A arte da linha a que um SKU pertence — os SKUs não têm foto própria. */
+export function imagemDoProduto(p: ProdutoDoCatalogo): string {
+  return (
+    bruto.linhas.find((l) => l.slug === p.linha)?.imagem ?? "/logo-canastra.png"
+  );
+}

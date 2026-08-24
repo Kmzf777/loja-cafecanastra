@@ -1,6 +1,25 @@
 import { API_BASE } from "../api-base";
-import { KITS_DA_LOJA, LOTES } from "./produtos";
-import type { Filtros, Kit, Lote, Ordenacao, Variante } from "./tipos";
+import {
+  KITS_DA_LOJA,
+  LOTES,
+  PRODUTOS,
+  imagemDoProduto,
+  type ProdutoDoCatalogo,
+} from "./produtos";
+import {
+  maisVendidos,
+  kitsECaixas,
+  escolhaDoProdutor,
+  ehCaixaOuKit,
+} from "./curadoria";
+import type {
+  Filtros,
+  Kit,
+  Lote,
+  Ordenacao,
+  ProdutoVendavel,
+  Variante,
+} from "./tipos";
 
 /**
  * Unica porta de entrada do catalogo. Nenhuma pagina conhece a origem do dado.
@@ -151,6 +170,32 @@ export async function listarLotes(
     // AND deliberado — ver o comentario sobre `notas` em tipos.ts.
     if (filtros.notas?.length && !filtros.notas.every((n) => lote.notas.includes(n)))
       return false;
+
+    /**
+     * OS DOIS FILTROS DA HOME, E ELES FILTRAM LINHA A PARTIR DE SKU.
+     *
+     * A curadoria vive por SKU ("Clássico em Grãos 250 g") e esta listagem é
+     * por LINHA ("Canastra Clássico"). O recorte então é: a linha entra se ao
+     * menos um SKU dela satisfaz. Não é aproximação — é o que mantém uma PLP
+     * só, com os mesmos filtros, a mesma busca e o mesmo SEO, em vez de uma
+     * segunda listagem por SKU que teria de repetir tudo isso.
+     */
+    if (filtros.destaque) {
+      const campo =
+        filtros.destaque === "mais-vendidos" ? "maisVendido" : "escolhaDoProdutor";
+      const temCurado = PRODUTOS.some(
+        (p) => p.linha === lote.linha && p[campo] !== undefined,
+      );
+      if (!temCurado) return false;
+    }
+
+    if (filtros.tipo === "kit") {
+      const temCaixa = PRODUTOS.some(
+        (p) => p.linha === lote.linha && ehCaixaOuKit(p),
+      );
+      if (!temCaixa) return false;
+    }
+
     return true;
   });
 
@@ -271,4 +316,68 @@ export function precoParaLeitor(centavos: number): string {
   const reais = Math.floor(centavos / 100);
   const cents = centavos % 100;
   return cents === 0 ? `${reais} reais` : `${reais} reais e ${cents} centavos`;
+}
+
+/**
+ * O produto cru do JSON no vocabulário comercial da casa.
+ *
+ * `precoCentavos` vira `preco` e o `sku` vira também `skuLoja` — para o SKU
+ * avulso os dois são o mesmo, porque a chave do catálogo É a chave da loja. É
+ * essa tradução que deixa o produto passar por `sobreporAoVivo` junto com as
+ * variantes e os kits, em vez de ganhar um caminho próprio que divergiria.
+ */
+function comoVendavel(p: ProdutoDoCatalogo): ProdutoVendavel {
+  return {
+    sku: p.sku,
+    skuLoja: p.sku,
+    linha: p.linha as ProdutoVendavel["linha"],
+    formato: p.formato as ProdutoVendavel["formato"],
+    ...("gramas" in p ? { gramas: p.gramas as number } : {}),
+    pacotes: p.pacotes,
+    rotuloEmbalagem: p.rotuloEmbalagem,
+    rotuloChave: p.rotuloChave,
+    nome: p.nome,
+    imagem: imagemDoProduto(p),
+    preco: p.precoCentavos,
+    estoque: p.estoque,
+  };
+}
+
+/**
+ * AS TRÊS SEÇÕES DA HOME, COM PREÇO E ESTOQUE DO BANCO.
+ *
+ * A curadoria (`lib/catalogo/curadoria.ts`) decide QUAIS SKUs; ela é pura e
+ * não sabe o que é uma API. Esta função é quem põe o comercial por cima, pelo
+ * mesmo mecanismo que `listarLotes` e `listarKits` já usam.
+ *
+ * SEM ELA A HOME NÃO VENDERIA. `produtoId` não existe em produto nenhum do
+ * JSON — ele nasce aqui, do casamento por SKU com o banco —, e é ele que o
+ * carrinho envia ao backend. Um card sem `produtoId` responde "não deu para
+ * falar com a loja" em todo clique: a home pareceria uma loja e não cobraria
+ * ninguém. O preço tem a mesma história: sem a sobreposição, a vitrine
+ * anunciaria o valor do JSON enquanto o painel mostra outro.
+ *
+ * UMA LEITURA SÓ PARA AS TRÊS SEÇÕES. `buscarDadosAoVivo` é chamada uma vez e
+ * o mapa é reusado — três chamadas custariam três `fetch` por render, e o
+ * cache de 60 s do Next abafaria isso sem tornar certo depender dele.
+ *
+ * A CONTINGÊNCIA É A MESMA DAS IRMÃS: API fora, o mapa volta vazio, e a home
+ * vende pelo JSON versionado. Loja com preço de ontem é melhor que loja que
+ * não abre, e o checkout reconfere preço e estoque no servidor antes de
+ * cobrar.
+ */
+export async function produtosDaHome(): Promise<{
+  maisVendidos: ProdutoVendavel[];
+  kits: ProdutoVendavel[];
+  escolhaDoProdutor: ProdutoVendavel[];
+}> {
+  const aoVivo = await buscarDadosAoVivo();
+  const comercial = (lista: ProdutoDoCatalogo[]) =>
+    lista.map((p) => sobreporAoVivo(comoVendavel(p), aoVivo));
+
+  return {
+    maisVendidos: comercial(maisVendidos(PRODUTOS)),
+    kits: comercial(kitsECaixas(PRODUTOS)),
+    escolhaDoProdutor: comercial(escolhaDoProdutor(PRODUTOS)),
+  };
 }

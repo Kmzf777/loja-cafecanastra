@@ -100,6 +100,45 @@ const pt = {
   comum: {
     verOsCafes: "Ver os cafés",
     verTodosOsCafes: "Ver todos os cafés",
+
+    /**
+     * OS RÓTULOS DAS TRÊS SEÇÕES DE VENDA DA HOME, e eles moram no dicionário
+     * — não num `conteudo.ts` de página — porque cada um aparece DUAS VEZES:
+     * como título da seção na home e como rótulo do chip do filtro na PLP,
+     * quando alguém clica em "Ver mais". Duas superfícies, um texto só.
+     *
+     * `maisVendidos` É AFIRMAÇÃO EDITORIAL, NÃO DADO DE PEDIDO. A ordem sai da
+     * curadoria de data/catalogo-canastra.json, que a casa edita à mão. Está
+     * documentado em lib/catalogo/curadoria.ts e no §6.1 do spec; o rótulo
+     * aparece aqui só porque é texto de tela.
+     */
+    maisVendidos: "Mais vendidos",
+    nossosKits: "Nossos kits",
+    escolhaDoProdutor: "Escolha do produtor",
+
+    /** O 7º card de todo carrossel de produto — leva à PLP filtrada. */
+    verMais: "Ver mais",
+
+    /**
+     * A trilha logo abaixo da faixa de prova. `maisCategorias` é o último item
+     * dela e leva à PLP inteira, sem filtro — por isso não é "Ver mais": ele
+     * não continua uma lista, ele abre o catálogo.
+     */
+    categorias: "Categorias",
+    maisCategorias: "+ Categorias",
+
+    /**
+     * O ANÚNCIO DE `aria-live` E O AVISO DE TETO, EM VERSÃO GENÉRICA.
+     *
+     * `venda.kit.adicionado` e `venda.kit.noTeto` já dizem estas duas coisas,
+     * mas dizem "kit" — e o `CardProduto` vende PACOTE. Reusar aquelas chaves
+     * faria quem usa leitor de tela ouvir "Kit adicionado à sacola" depois de
+     * pôr 250 g de café moído no carrinho. As do kit continuam onde estão,
+     * porque lá a palavra está certa.
+     */
+    adicionadoASacola: "Produto adicionado à sacola",
+    noTetoDoEstoque: "Você já tem o máximo disponível deste item na sacola.",
+
     irParaOsCafes: "Ir para os cafés",
     conhecerASerra: "Conhecer a serra",
     comecarAssinatura: "Começar assinatura",
@@ -756,6 +795,15 @@ const en: Dicionario = {
   comum: {
     verOsCafes: "Browse the coffees",
     verTodosOsCafes: "Browse all coffees",
+    maisVendidos: "Best sellers",
+    nossosKits: "Our boxes",
+    escolhaDoProdutor: "The grower's pick",
+    verMais: "See more",
+    categorias: "Categories",
+    maisCategorias: "+ Categories",
+    adicionadoASacola: "Product added to your bag",
+    noTetoDoEstoque:
+      "You already have the maximum available of this item in your bag.",
     irParaOsCafes: "Go to the coffees",
     conhecerASerra: "Get to know the serra",
     comecarAssinatura: "Start a subscription",
@@ -1109,6 +1157,15 @@ const es: Dicionario = {
   comum: {
     verOsCafes: "Ver los cafés",
     verTodosOsCafes: "Ver todos los cafés",
+    maisVendidos: "Más vendidos",
+    nossosKits: "Nuestros kits",
+    escolhaDoProdutor: "Elección del productor",
+    verMais: "Ver más",
+    categorias: "Categorías",
+    maisCategorias: "+ Categorías",
+    adicionadoASacola: "Producto añadido a la bolsa",
+    noTetoDoEstoque:
+      "Ya tiene el máximo disponible de este artículo en la bolsa.",
     irParaOsCafes: "Ir a los cafés",
     conhecerASerra: "Conocer la serra",
     comecarAssinatura: "Empezar la suscripción",

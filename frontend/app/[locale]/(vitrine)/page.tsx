@@ -1,29 +1,47 @@
 import type { Metadata } from "next";
 import Image from "next/image";
-import { listarLotes } from "@/lib/catalogo/repositorio";
-import { traduzirLote } from "@/lib/catalogo/produtos";
-import { CardCafe } from "@/components/catalogo/CardCafe";
+import { produtosDaHome } from "@/lib/catalogo/repositorio";
+import { lotesDoLocale } from "@/lib/catalogo/produtos";
+import { Carrossel, SlideDoCarrossel } from "@/components/ui/Carrossel";
+import { CardProduto } from "@/components/catalogo/CardProduto";
+import { CardVerMais } from "@/components/catalogo/CardVerMais";
+import { TrilhaDeCategorias } from "@/components/catalogo/TrilhaDeCategorias";
 import { SecaoDoBlog } from "@/components/blog/SecaoDoBlog";
 import { BotaoLink } from "@/components/ui/Botao";
 import { Serra } from "@/components/marca/Serra";
 import { alternativasDeIdioma, href, openGraphDaPagina } from "@/lib/i18n/rotas";
 import { LOCALES, comoLocale, type Locale } from "@/lib/i18n/tipos";
 import { dicionario } from "@/lib/i18n/dicionario";
-import { MARCO_DE_ORIGEM } from "./a-serra/conteudo";
+import type { ProdutoVendavel } from "@/lib/catalogo/tipos";
 
 /**
  * Home — estetica.md §7.1.
  *
- * ALTERNANCIA DE SUPERFICIE (§7.1: "nunca duas secoes escuras seguidas"):
- *   heroi fuligem -> prova cal -> torra cal -> processo kraft -> clube mata
- *   -> historia cal -> BLOG kraft -> rodape fuligem
+ * ELA DEIXOU DE SE APRESENTAR PARA VENDER. Eram sete secoes e so uma tinha
+ * produto: uma grade estatica das cinco linhas, com "a partir de" no lugar do
+ * preco. As outras seis eram marca, e tres delas repetiam, em versao curta,
+ * texto que /a-serra, /historia e /clube ja publicam inteiro. Uma loja de um
+ * produtor so nao precisa se apresentar quatro vezes antes de mostrar um
+ * preco.
  *
- * O BLOG ENTRA NO PENULTIMO LUGAR, e a alternancia e o que decide isso. O
- * rodape e Fuligem, entao a secao antes dele tem de ser clara; entre as duas
- * claras disponiveis, o kraft e a superficie de papel e esta e a secao de
- * texto. Encaixar o blog antes do Clube teria posto duas secoes Cal seguidas e
- * empurrado a assinatura — que vende — para baixo de uma secao que hoje esta
- * vazia.
+ * O QUE ENTROU sao a trilha de categorias e tres carrosseis de SKU compravel,
+ * com preco exato e botao de sacola em cada card. O QUE SAIU e "Torra da
+ * semana", que os tres substituem, e o bloco Historia — este sem realocacao,
+ * porque /historia conta a mesma narrativa inteira nos tres idiomas. "Do pe a
+ * xicara" ficou, e foi para o fim: ela e conteudo, e conteudo vem depois de
+ * produto.
+ *
+ * ALTERNANCIA DE SUPERFICIE (§7.1: "nunca duas secoes escuras seguidas"):
+ *   heroi fuligem -> prova cal -> trilha cal -> mais vendidos cal
+ *   -> kits kraft -> escolha do produtor cal -> clube mata -> BLOG kraft
+ *   -> do pe a xicara cal -> rodape fuligem
+ *
+ * SO HA UMA ESCURA NO MIOLO, e e o Clube: Cal em cima, kraft embaixo. O rodape
+ * e Fuligem, entao a ultima secao da pagina tem de ser clara — e e isso que
+ * "Do pe a xicara" passou a ser ao mudar de lugar, trocando kraft por Cal para
+ * nao encostar duas kraft no Blog. "Nossos kits" recebeu kraft pelo mesmo
+ * motivo ao contrario: sem ele seriam tres carrosseis Cal empilhados, e a
+ * pagina perderia o ritmo antes de chegar ao Clube.
  *
  * O documento previa o heroi como foto full-bleed do chapadao ao amanhecer. Ela
  * nao existe (§8 e o caminho critico do projeto). Em vez de forcar a unica foto
@@ -185,8 +203,6 @@ const pt = {
   /** Rótulo do landmark da faixa — só leitor de tela ouve. */
   provaRotulo: "Garantias",
 
-  torraTitulo: "Torra da semana",
-
   etapasTitulo: "Do pé à xícara",
   etapas: [
     { titulo: "Colheita", texto: "Grão maduro, colhido no ponto." },
@@ -202,15 +218,13 @@ const pt = {
     "Café novo em casa a cada 15, 30 ou 45 dias, moído do jeito que você prepara. Cancele quando quiser, sem multa.",
 
   /**
-   * "Quarenta anos na mesma serra" era falso, e a altitude "entre 900 e 1.320
-   * metros" nunca teve fonte. A correção inteira está documentada em
-   * a-serra/conteudo.ts; aqui fica a versão curta.
+   * AQUI MORAVA O BLOCO DE HISTÓRIA — título, texto e alt da foto — e ele saiu
+   * inteiro, sem ir para lugar nenhum, porque /historia já publica a mesma
+   * narrativa COMPLETA nos três idiomas. O que a home trazia era um resumo
+   * dela, e resumir na porta de entrada o que a página vizinha conta melhor é
+   * uma das quatro apresentações que esta página fazia antes de mostrar um
+   * preço. O link para /historia continua vivo no rodapé e no menu.
    */
-  historiaTitulo: "Quarenta anos de café, dezoito na Canastra",
-  historiaTexto:
-    "A família Boaventura plantou em 1985 no cerrado, em Patrocínio. A Serra da Canastra veio em 2008: dias quentes, noites frias, grão que amadurece devagar. É o que a xícara mostra.",
-  historiaImagemAlt:
-    "Dois produtores entre as fileiras de café, no fim da tarde",
 };
 
 type TextosDaHome = typeof pt;
@@ -225,8 +239,6 @@ const en: TextosDaHome = {
   prova: ["Roasted to order", "Single origin", "Since 1985"],
   provaRotulo: "Guarantees",
 
-  torraTitulo: "This week's roast",
-
   etapasTitulo: "From tree to cup",
   etapas: [
     { titulo: "Harvest", texto: "Ripe cherries, picked at the right moment." },
@@ -240,11 +252,6 @@ const en: TextosDaHome = {
   clubeTitulo: "Clube da Canastra",
   clubeTexto:
     "Fresh coffee at home every 15, 30 or 45 days, ground the way you brew. Cancel whenever you want, no penalty.",
-
-  historiaTitulo: "Forty years of coffee, eighteen in the Canastra",
-  historiaTexto:
-    "The Boaventura family planted in 1985 in the cerrado, in Patrocínio. The Serra da Canastra came in 2008: warm days, cold nights, beans that ripen slowly. That is what the cup shows.",
-  historiaImagemAlt: "Two growers between the coffee rows, late in the afternoon",
 };
 
 const es: TextosDaHome = {
@@ -256,8 +263,6 @@ const es: TextosDaHome = {
 
   prova: ["Tostado bajo pedido", "Origen único", "Desde 1985"],
   provaRotulo: "Garantías",
-
-  torraTitulo: "El tueste de la semana",
 
   etapasTitulo: "Del cafeto a la taza",
   etapas: [
@@ -272,14 +277,70 @@ const es: TextosDaHome = {
   clubeTitulo: "Clube da Canastra",
   clubeTexto:
     "Café nuevo en casa cada 15, 30 o 45 días, molido como usted prepara. Cancele cuando quiera, sin multa.",
-
-  historiaTitulo: "Cuarenta años de café, dieciocho en la Canastra",
-  historiaTexto:
-    "La familia Boaventura plantó en 1985 en el cerrado, en Patrocínio. La Serra da Canastra llegó en 2008: días cálidos, noches frías, grano que madura despacio. Es eso lo que muestra la taza.",
-  historiaImagemAlt: "Dos productores entre las hileras de café, al final de la tarde",
 };
 
 const TEXTOS: Record<Locale, TextosDaHome> = { pt, en, es };
+
+/**
+ * UMA SEÇÃO DE PRODUTO DA HOME — as três são a mesma coisa com dados
+ * diferentes, e por isso são uma função só.
+ *
+ * O SÉTIMO CARD É SEMPRE O "VER MAIS", e ele entra aqui e não em cada chamada:
+ * fosse responsabilidade de quem chama, o dia em que alguém acrescentasse a
+ * quarta seção e esquecesse o card, o trilho terminaria num beco sem saída — e
+ * ninguém veria, porque não quebra nada.
+ */
+function SecaoDeProdutos({
+  titulo,
+  produtos,
+  verMais,
+  locale,
+  superficie,
+}: {
+  titulo: string;
+  produtos: ProdutoVendavel[];
+  /** Caminho canônico em português — `href()` cuida do idioma. */
+  verMais: string;
+  locale: Locale;
+  /** A superfície da seção. §7.1: a alternância é o que dá ritmo à página. */
+  superficie: "cal" | "juta-claro";
+}) {
+  return (
+    <section
+      className={`${superficie === "cal" ? "bg-cal" : "bg-juta-claro"} py-12 md:py-16`}
+    >
+      <div className="mx-auto max-w-[1440px] px-4 md:px-10">
+        <h2 className="titulo-secao text-[clamp(1.5rem,3vw,2.25rem)] leading-tight">
+          {titulo}
+        </h2>
+      </div>
+
+      {/*
+        O TRILHO SANGRA ATÉ A BORDA, e a calha vira padding DELE — é o que as
+        quatro classes de filho fazem. Sem isso o card cortado terminaria no
+        meio da margem, e o corte pareceria erro de layout em vez de convite a
+        arrastar. O alvo é o container que rola, que mora dentro do
+        <Carrossel>; a mesma regra alcança a camada das setas, que passa a
+        respeitar a mesma calha.
+      */}
+      <div className="mt-6 md:mt-8">
+        <Carrossel
+          rotulo={titulo}
+          className="[&>div]:mx-auto [&>div]:max-w-[1440px] [&>div]:px-4 md:[&>div]:px-10"
+        >
+          {produtos.map((p) => (
+            <SlideDoCarrossel key={p.sku}>
+              <CardProduto produto={p} locale={locale} />
+            </SlideDoCarrossel>
+          ))}
+          <SlideDoCarrossel>
+            <CardVerMais caminho={verMais} locale={locale} />
+          </SlideDoCarrossel>
+        </Carrossel>
+      </div>
+    </section>
+  );
+}
 
 export default async function Home({
   params,
@@ -289,17 +350,31 @@ export default async function Home({
   const locale = comoLocale((await params).locale);
   const d = dicionario(locale);
   const t = TEXTOS[locale];
-  // Preço e estoque do banco primeiro; o editorial traduzido por cima.
-  const lotes = (await listarLotes()).map((l) => traduzirLote(l, locale));
-
   /**
    * A faixa de pontuação da coleção, do menor ao maior — 75 (Néctar de Minas,
    * gourmet) a 86 (Microlote). Sai do catálogo e não de uma constante escrita
    * à mão: no dia em que uma linha entrar ou sair, a faixa acompanha sozinha.
    * `font-dado` (Martian Mono) é exatamente para isto — número e código.
+   *
+   * O QUE MUDOU FOI A FONTE — `lotesDoLocale` no lugar de `listarLotes`. A
+   * home não desenha mais card de LINHA, e nota de xícara é editorial puro:
+   * não precisa do preço do banco para ser calculada. Quem fala com a API
+   * agora é `produtosDaHome()`, logo abaixo, que é quem de fato vende.
    */
-  const notasSca = lotes.map((l) => l.sca);
+  const notasSca = lotesDoLocale(locale).map((l) => l.sca);
   const faixaSca = `SCA ${Math.min(...notasSca)}–${Math.max(...notasSca)}`;
+
+  /**
+   * UMA LEITURA DA API PARA AS TRÊS SEÇÕES — ver `produtosDaHome()`. É aqui
+   * que o preço do painel e o `produtoId` do banco entram na página; sem este
+   * `await`, os carrosséis anunciariam o preço do JSON e nenhum botão
+   * conseguiria pôr nada na sacola.
+   *
+   * Isto NÃO tira a home da geração estática: `buscarDadosAoVivo` é `fetch`
+   * com `next: { revalidate }`, que é justamente a leitura que sobrevive ao
+   * prerender — a mesma que a listagem de lotes já fazia nesta página antes.
+   */
+  const seccoes = await produtosDaHome();
 
   return (
     <>
@@ -375,54 +450,46 @@ export default async function Home({
         </ul>
       </section>
 
-      {/* ── TORRA DA SEMANA ─────────────────────────────────────── superfície cal */}
-      <section className="bg-cal py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
-          <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
-              {t.torraTitulo}
-            </h2>
-            <span className="font-dado text-[13px] tracking-[0.06em] text-fuligem-55">
-              {lotes.length} {lotes.length === 1 ? d.comum.lote : d.comum.lotes}
-            </span>
-          </div>
+      {/* ── CATEGORIAS ────────────────────────────────────────────── superfície cal */}
+      {/* Logo abaixo da prova, e é o primeiro atalho da página: quem já sabe o
+          que quer sai daqui para a listagem em um toque, sem rolar os três
+          carrosséis. */}
+      <TrilhaDeCategorias locale={locale} />
 
-          <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {lotes.map((lote) => (
-              <CardCafe key={lote.slug} lote={lote} locale={locale} />
-            ))}
-          </div>
+      {/* ── MAIS VENDIDOS ─────────────────────────────────────────── superfície cal */}
+      {/* PRIMEIRA PORQUE É A MAIS FÁCIL DE ESCOLHER. Quem chega sem decisão
+          tomada compra o que os outros compram, e o §6.1 do spec registra que
+          a ordem aqui é curadoria da casa, declarada no catálogo — não
+          agregação de pedidos. */}
+      <SecaoDeProdutos
+        titulo={d.comum.maisVendidos}
+        produtos={seccoes.maisVendidos}
+        verMais="/cafes?destaque=mais-vendidos"
+        locale={locale}
+        superficie="cal"
+      />
 
-          <div className="mt-12">
-            <BotaoLink href={href(locale, "/cafes")} variante="secundario">
-              {d.comum.verTodosOsCafes}
-            </BotaoLink>
-          </div>
-        </div>
-      </section>
+      {/* ── NOSSOS KITS ────────────────────────────────────────── superfície kraft */}
+      {/* Kraft aqui é o que impede três carrosséis Cal empilhados — §7.1 pede
+          alternância, e sem ela a página perde o ritmo antes do Clube. */}
+      <SecaoDeProdutos
+        titulo={d.comum.nossosKits}
+        produtos={seccoes.kits}
+        verMais="/cafes?tipo=kit"
+        locale={locale}
+        superficie="juta-claro"
+      />
 
-      {/* ── DO PÉ À XÍCARA ────────────────────────────────────── superfície kraft */}
-      <section className="bg-juta-claro py-16 md:py-24">
-        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
-          <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
-            {t.etapasTitulo}
-          </h2>
-          {/* Numeração justificada: é sequência real e irreversível (§7.1). */}
-          <ol className="mt-10 grid grid-cols-1 gap-x-8 gap-y-8 sm:grid-cols-2 lg:grid-cols-5">
-            {t.etapas.map((etapa, i) => (
-              <li key={etapa.titulo} className="border-t border-fuligem/25 pt-4">
-                <span className="font-dado text-[13px] tracking-[0.08em] text-barro">
-                  {numeroDaEtapa(i)}
-                </span>
-                <h3 className="mt-2 text-[17px] font-semibold">{etapa.titulo}</h3>
-                <p className="mt-1.5 text-[15px] leading-relaxed text-fuligem-80">
-                  {etapa.texto}
-                </p>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </section>
+      {/* ── ESCOLHA DO PRODUTOR ───────────────────────────────────── superfície cal */}
+      {/* A última das três de propósito: é a seção para quem já sabe o que
+          quer, e ela puxa o microlote e os formatos de 1 kg. */}
+      <SecaoDeProdutos
+        titulo={d.comum.escolhaDoProdutor}
+        produtos={seccoes.escolhaDoProdutor}
+        verMais="/cafes?destaque=escolha-do-produtor"
+        locale={locale}
+        superficie="cal"
+      />
 
       {/* ── CLUBE ────────────────────────────────────────────── superfície mata */}
       <section className="bg-mata py-16 text-cal md:py-24">
@@ -445,63 +512,37 @@ export default async function Home({
         </div>
       </section>
 
-      {/* ── HISTÓRIA ────────────────────────────────────────────── superfície cal */}
+      {/* ── BLOG ──────────────────────────────────────────────── superfície kraft */}
+      {/* Só a casca, marcada "Em breve" — spec §4 e o comentário do componente.
+          Aqui, entre o Clube e as etapas, era a HISTÓRIA: um resumo do que
+          /historia já publica por inteiro nos três idiomas. Saiu sem ir para
+          lugar nenhum, e o link para a página continua no menu e no rodapé. */}
+      <SecaoDoBlog locale={locale} />
+
+      {/* ── DO PÉ À XÍCARA ──────────────────────────────────────── superfície cal */}
+      {/* Trocou kraft por Cal ao mudar de lugar: agora ela encosta no Blog, que
+          é kraft, e duas kraft seguidas apagariam a divisa entre as duas. */}
       <section className="bg-cal py-16 md:py-24">
-        <div className="mx-auto grid max-w-[1440px] items-center gap-8 px-4 md:grid-cols-2 md:gap-10 md:px-10">
-          {/* min-w-0: sem isto a largura intrinseca da imagem empurra a coluna
-              do grid e o documento estoura em mobile. */}
-          <div className="min-w-0">
-            <Image
-              src="/nossa-historia.png"
-              alt={t.historiaImagemAlt}
-              width={1448}
-              height={1448}
-              sizes="(min-width: 768px) 50vw, 100vw"
-              className="h-auto w-full border border-fuligem-20"
-            />
-          </div>
-          <div className="min-w-0">
-            {/* As duas datas vêm de a-serra/conteudo.ts — uma fonte só para o
-                fato. Duas páginas que afirmam a mesma coisa por duas constantes
-                diferentes é como a versão errada sobreviveu até aqui. */}
-            <p className="font-dado text-[13px] tracking-[0.08em] text-barro">
-              {MARCO_DE_ORIGEM}
-            </p>
-            <h2 className="mt-4 titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
-              {t.historiaTitulo}
-            </h2>
-            <p className="mt-5 max-w-[62ch] text-[17px] leading-relaxed text-fuligem-80">
-              {t.historiaTexto}
-            </p>
-            <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
-              <BotaoLink href={href(locale, "/a-serra")} variante="secundario">
-                {d.comum.conhecerASerra}
-              </BotaoLink>
-              {/* ALVO DE TOQUE: `min-h-[44px]` porque a variante `texto` é a
-                  única das quatro do <BotaoLink> que não recebe a altura
-                  `h-12` — e o BASE dela traz `leading-none`, então o alvo
-                  fecharia em ~13px de altura, um terço dos 44px que o §10
-                  exige. O conserto certo é no componente (ver o comentário
-                  igual em /a-serra e /rastreabilidade), mas
-                  components/ui/Botao.tsx não é desta tarefa; enquanto isso, o
-                  mínimo vem de fora. `inline-flex items-center` do BASE
-                  centraliza o texto na altura, e o sublinhado continua só
-                  embaixo da palavra. */}
-              <BotaoLink
-                href={href(locale, "/historia")}
-                variante="texto"
-                className="min-h-[44px]"
-              >
-                {d.nav.historia}
-              </BotaoLink>
-            </div>
-          </div>
+        <div className="mx-auto max-w-[1440px] px-4 md:px-10">
+          <h2 className="titulo-secao text-[clamp(1.75rem,3.5vw,2.75rem)] leading-tight">
+            {t.etapasTitulo}
+          </h2>
+          {/* Numeração justificada: é sequência real e irreversível (§7.1). */}
+          <ol className="mt-10 grid grid-cols-1 gap-x-8 gap-y-8 sm:grid-cols-2 lg:grid-cols-5">
+            {t.etapas.map((etapa, i) => (
+              <li key={etapa.titulo} className="border-t border-fuligem/25 pt-4">
+                <span className="font-dado text-[13px] tracking-[0.08em] text-barro">
+                  {numeroDaEtapa(i)}
+                </span>
+                <h3 className="mt-2 text-[17px] font-semibold">{etapa.titulo}</h3>
+                <p className="mt-1.5 text-[15px] leading-relaxed text-fuligem-80">
+                  {etapa.texto}
+                </p>
+              </li>
+            ))}
+          </ol>
         </div>
       </section>
-
-      {/* ── BLOG ──────────────────────────────────────────────── superfície kraft */}
-      {/* Só a casca, marcada "Em breve" — spec §4 e o comentário do componente. */}
-      <SecaoDoBlog locale={locale} />
     </>
   );
 }

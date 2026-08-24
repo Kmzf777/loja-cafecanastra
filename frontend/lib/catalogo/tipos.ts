@@ -167,6 +167,43 @@ export type Kit = {
   unidades?: number;
 };
 
+/**
+ * UM SKU COMPRÁVEL, no vocabulário comercial do resto da casa.
+ *
+ * É o que os carrosséis da home vendem. Existe porque o produto CRU do JSON
+ * fala outra língua — `precoCentavos`, `sku`, e nenhum `produtoId`, que aquele
+ * arquivo não tem como saber. Este tipo usa os mesmos nomes de `Variante` e
+ * `Kit` (`preco`, `estoque`, `skuLoja`, `produtoId`) de propósito: é o que o
+ * deixa passar pelo mesmo `sobreporAoVivo` do repositório, sem contrato
+ * paralelo, e o que permite ao card falar uma língua só.
+ */
+export type ProdutoVendavel = {
+  /** A chave no catálogo E na loja — para o SKU avulso são a mesma. */
+  sku: string;
+  skuLoja: string;
+  /**
+   * `product_id` da linha no banco. Chega com preço e estoque quando a API
+   * responde; fica indefinido no modo de contingência. É o que o carrinho
+   * precisa para falar com o backend — sem ele dá para navegar, não comprar.
+   */
+  produtoId?: string;
+  linha: Linha;
+  formato: Formato;
+  /** Ausente em drip e cápsula, que não se vendem por peso. */
+  gramas?: number;
+  pacotes: number;
+  /** Em português e sempre — fica gravado na sacola. Ver `Variante`. */
+  rotuloEmbalagem: string;
+  rotuloChave?: string;
+  /** O nome capturado da loja — a rastreabilidade até o catálogo real. */
+  nome: string;
+  /** Arte da linha: os SKUs não têm foto própria no acervo (§8). */
+  imagem: string;
+  /** Em centavos. */
+  preco: number;
+  estoque: number;
+};
+
 export type Preparo = {
   metodo: Metodo;
   proporcao: string;
@@ -259,6 +296,18 @@ export type Lote = {
 };
 
 /**
+ * As duas seções curadas da home, quando elas viram filtro de PLP.
+ *
+ * O "Ver mais" de cada carrossel abre a listagem inteira daquele recorte, e é
+ * por isso que o destaque precisa existir como filtro: sem ele, o sétimo card
+ * levaria a `/cafes` sem recorte nenhum e a pessoa perderia o contexto em que
+ * clicou.
+ */
+export type Destaque = "mais-vendidos" | "escolha-do-produtor";
+
+export const DESTAQUES: Destaque[] = ["mais-vendidos", "escolha-do-produtor"];
+
+/**
  * NÃO HÁ FILTRO DE MOAGEM AQUI, e a ausência é a decisão. O filtro "Formato"
  * logo abaixo já recorta o mesmo eixo — grãos, moído, drip, cápsula — e é o
  * eixo de variação verdadeiro deste catálogo. Dois filtros para um eixo é
@@ -275,6 +324,14 @@ export type Filtros = {
   pesoGramas?: PesoGramas;
   /** Esconde o que está esgotado em todas as combinações. */
   soDisponiveis?: boolean;
+  /** O recorte curado da home — ver `Destaque`. */
+  destaque?: Destaque;
+  /**
+   * "kit" traz só caixas e kits. É o mesmo recorte da seção "Kits e caixas"
+   * que a PLP já desenha, agora alcançável por URL — que é o que a trilha de
+   * categorias da home precisa.
+   */
+  tipo?: "kit";
 };
 
 /**
