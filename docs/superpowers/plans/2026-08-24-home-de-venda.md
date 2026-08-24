@@ -59,13 +59,13 @@ Coisas que não são óbvias e que vão te fazer perder tempo se você descobrir
 **Files:**
 - Modify: `frontend/package.json`
 
-- [ ] **Step 1: Instalar**
+- [x] **Step 1: Instalar**
 
 ```bash
 cd frontend && npm install embla-carousel-react@8.6.0
 ```
 
-- [ ] **Step 2: Conferir que entrou e que a suíte continua verde**
+- [x] **Step 2: Conferir que entrou e que a suíte continua verde**
 
 ```bash
 cd .. && npm test
@@ -73,7 +73,7 @@ cd .. && npm test
 
 Esperado: os testes que já existem passam. Anote quantos passaram — é a linha de base para as próximas tasks.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add frontend/package.json frontend/package-lock.json
@@ -89,11 +89,11 @@ Vem antes dos componentes porque todos eles leem daqui, e chave faltante quebra 
 **Files:**
 - Modify: `frontend/lib/i18n/dicionario.ts`
 
-- [ ] **Step 1: Achar o bloco `comum` do objeto `pt`**
+- [x] **Step 1: Achar o bloco `comum` do objeto `pt`**
 
 Ele começa na linha ~100, com `verOsCafes: "Ver os cafés",`.
 
-- [ ] **Step 2: Acrescentar as chaves em `pt.comum`**
+- [x] **Step 2: Acrescentar as chaves em `pt.comum`**
 
 Logo depois de `verTodosOsCafes`, insira:
 
@@ -137,7 +137,7 @@ Logo depois de `verTodosOsCafes`, insira:
     noTetoDoEstoque: "Você já tem o máximo disponível deste item na sacola.",
 ```
 
-- [ ] **Step 3: Repetir em `en.comum`**
+- [x] **Step 3: Repetir em `en.comum`**
 
 Ache o segundo bloco `comum: {` (linha ~756) e insira, no mesmo lugar relativo:
 
@@ -152,7 +152,7 @@ Ache o segundo bloco `comum: {` (linha ~756) e insira, no mesmo lugar relativo:
     noTetoDoEstoque: "You already have the maximum available of this item in your bag.",
 ```
 
-- [ ] **Step 4: Repetir em `es.comum`**
+- [x] **Step 4: Repetir em `es.comum`**
 
 Terceiro bloco `comum: {` (linha ~1109):
 
@@ -167,7 +167,7 @@ Terceiro bloco `comum: {` (linha ~1109):
     noTetoDoEstoque: "Ya tiene el máximo disponible de este artículo en la bolsa.",
 ```
 
-- [ ] **Step 5: Rodar os testes**
+- [x] **Step 5: Rodar os testes**
 
 ```bash
 npm test
@@ -175,7 +175,7 @@ npm test
 
 Esperado: PASS. Há um teste que prova que `en` e `es` não são o português copiado — se você repetir um valor, ele falha, e é de propósito.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/lib/i18n/dicionario.ts
@@ -192,7 +192,7 @@ git commit -m "feat: as tres secoes de venda ganham nome nos tres idiomas"
 - Create: `frontend/lib/catalogo/curadoria.test.ts`
 - Modify: `frontend/lib/catalogo/produtos.ts`
 
-- [ ] **Step 1: Semear a curadoria no JSON**
+- [x] **Step 1: Semear a curadoria no JSON**
 
 Em `data/catalogo-canastra.json`, no array `produtos`, acrescente os campos aos SKUs abaixo. **Não altere mais nada** — nem preço, nem estoque, nem nome.
 
@@ -231,7 +231,7 @@ Exemplo do resultado num produto:
 }
 ```
 
-- [ ] **Step 2: Conferir que o JSON continua válido e que o seed não quebrou**
+- [x] **Step 2: Conferir que o JSON continua válido e que o seed não quebrou**
 
 ```bash
 node -e "const c=require('./data/catalogo-canastra.json'); const m=c.produtos.filter(p=>p.maisVendido).length; const e=c.produtos.filter(p=>p.escolhaDoProdutor).length; console.log('maisVendido:',m,'escolhaDoProdutor:',e); if(m!==6||e!==5) throw new Error('curadoria incompleta');"
@@ -239,7 +239,7 @@ node -e "const c=require('./data/catalogo-canastra.json'); const m=c.produtos.fi
 
 Esperado: `maisVendido: 6 escolhaDoProdutor: 5`
 
-- [ ] **Step 3: Escrever o teste que falha**
+- [x] **Step 3: Escrever o teste que falha**
 
 Crie `frontend/lib/catalogo/curadoria.test.ts`:
 
@@ -311,7 +311,7 @@ describe("curadoria", () => {
 });
 ```
 
-- [ ] **Step 4: Rodar e ver falhar**
+- [x] **Step 4: Rodar e ver falhar**
 
 ```bash
 npm test -- curadoria
@@ -319,7 +319,7 @@ npm test -- curadoria
 
 Esperado: FAIL — `Cannot find module './curadoria'`.
 
-- [ ] **Step 5: Expor os produtos crus em `produtos.ts`**
+- [x] **Step 5: Expor os produtos crus em `produtos.ts`**
 
 No fim de `frontend/lib/catalogo/produtos.ts`, acrescente:
 
@@ -353,7 +353,7 @@ export function imagemDoProduto(p: ProdutoDoCatalogo): string {
 }
 ```
 
-- [ ] **Step 6: Escrever `curadoria.ts`**
+- [x] **Step 6: Escrever `curadoria.ts`**
 
 Crie `frontend/lib/catalogo/curadoria.ts`:
 
@@ -471,7 +471,7 @@ export function kitsECaixas(
 }
 ```
 
-- [ ] **Step 7: Rodar até passar**
+- [x] **Step 7: Rodar até passar**
 
 ```bash
 npm test -- curadoria
@@ -479,7 +479,7 @@ npm test -- curadoria
 
 Esperado: PASS, 7 testes.
 
-- [ ] **Step 8: Rodar a suíte inteira**
+- [x] **Step 8: Rodar a suíte inteira**
 
 ```bash
 npm test
@@ -487,7 +487,7 @@ npm test
 
 Esperado: PASS — o mesmo número da Task 1, mais 7.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add data/catalogo-canastra.json frontend/lib/catalogo/curadoria.ts frontend/lib/catalogo/curadoria.test.ts frontend/lib/catalogo/produtos.ts
@@ -504,7 +504,7 @@ git commit -m "feat: a casa escolhe o que a home vende, num arquivo revisavel"
 
 **Por que esta task existe:** `CardKit.tsx` carrega ~60 linhas de regra de compra dentro do componente — teto por estoque, acumulado na sacola, `produtoId` ausente, timeout cancelável, `aria-live`, evento GA4. `CardProduto` precisa da mesma regra. Copiá-la criaria a segunda cópia de uma regra que decide se a loja cobra certo.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Crie `frontend/lib/sacola/usar-adicionar.test.ts`:
 
@@ -575,7 +575,7 @@ describe("decidirAdicao", () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 ```bash
 npm test -- usar-adicionar
@@ -583,7 +583,7 @@ npm test -- usar-adicionar
 
 Esperado: FAIL — `Cannot find module './usar-adicionar'`.
 
-- [ ] **Step 3: Escrever `usar-adicionar.ts`**
+- [x] **Step 3: Escrever `usar-adicionar.ts`**
 
 Crie `frontend/lib/sacola/usar-adicionar.ts`:
 
@@ -740,7 +740,7 @@ export function useAdicionarNaSacola(item: ItemParaSacola) {
 }
 ```
 
-- [ ] **Step 4: Rodar até passar**
+- [x] **Step 4: Rodar até passar**
 
 ```bash
 npm test -- usar-adicionar
@@ -748,7 +748,7 @@ npm test -- usar-adicionar
 
 Esperado: PASS, 10 testes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/lib/sacola/usar-adicionar.ts frontend/lib/sacola/usar-adicionar.test.ts
@@ -764,7 +764,7 @@ git commit -m "feat: a regra de por na sacola sai do card e vira funcao provavel
 
 **Regra desta task: nenhum teste novo, e `CardKit.test.tsx` não pode ser alterado.** Ele é a prova de que a extração não mudou comportamento. Se você precisar mudar o teste, a extração está errada.
 
-- [ ] **Step 1: Rodar os testes do `CardKit` antes de tocar em nada**
+- [x] **Step 1: Rodar os testes do `CardKit` antes de tocar em nada**
 
 ```bash
 npm test -- CardKit
@@ -772,7 +772,7 @@ npm test -- CardKit
 
 Anote quantos passam. Esse número não pode cair.
 
-- [ ] **Step 2: Trocar o corpo do componente**
+- [x] **Step 2: Trocar o corpo do componente**
 
 Em `frontend/components/catalogo/CardKit.tsx`, remova os imports de `useEffect`, `useRef`, `useState`, `useSacola` e `eventoAddToCart`, e acrescente:
 
@@ -816,7 +816,7 @@ Na chamada do botão, troque `onClick={aoAdicionar}` por:
 
 Remova a linha `const nomeNaSacola = nomeDoKitNaSacola(kit);` se ela ficou sem uso.
 
-- [ ] **Step 3: Rodar os testes do `CardKit`**
+- [x] **Step 3: Rodar os testes do `CardKit`**
 
 ```bash
 npm test -- CardKit
@@ -824,7 +824,7 @@ npm test -- CardKit
 
 Esperado: PASS, o mesmo número do Step 1.
 
-- [ ] **Step 4: Rodar a suíte inteira e checar tipos**
+- [x] **Step 4: Rodar a suíte inteira e checar tipos**
 
 ```bash
 npm test && cd frontend && npx tsc --noEmit && cd ..
@@ -832,7 +832,7 @@ npm test && cd frontend && npx tsc --noEmit && cd ..
 
 Esperado: PASS e zero erro de tipo.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/components/catalogo/CardKit.tsx
