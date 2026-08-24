@@ -9,6 +9,7 @@ import {
   temEstoque,
   acharVariante,
   embalagensDe,
+  produtosDaHome,
 } from "./repositorio";
 
 describe("repositorio do catalogo", () => {
@@ -260,5 +261,62 @@ describe("a API que não responde", () => {
 
     expect((await obterLote("suave"))?.slug).toBe("suave");
     expect(await listarKits()).toHaveLength(3);
+  });
+});
+
+describe("produtosDaHome", () => {
+  it("entrega as três seções", async () => {
+    const { maisVendidos, kits, escolhaDoProdutor } = await produtosDaHome();
+    expect(maisVendidos.length).toBeGreaterThan(0);
+    expect(kits.length).toBeGreaterThan(0);
+    expect(escolhaDoProdutor.length).toBeGreaterThan(0);
+  });
+
+  it("fala o vocabulário comercial da casa, não o do JSON cru", () => {
+    // `preco`/`estoque`/`skuLoja` são os mesmos nomes de Variante e Kit. É o
+    // que deixa o SKU passar pelo mesmo sobreporAoVivo sem contrato paralelo.
+    return produtosDaHome().then(({ maisVendidos }) => {
+      const p = maisVendidos[0];
+      expect(p).toHaveProperty("preco");
+      expect(p).toHaveProperty("estoque");
+      expect(p).toHaveProperty("skuLoja");
+      expect(p).not.toHaveProperty("precoCentavos");
+    });
+  });
+
+  it("continua de pé quando a API não responde", async () => {
+    // A contingência que repositorio.ts documenta: loja com preço de ontem é
+    // melhor que loja que não abre, e o checkout reconfere antes de cobrar.
+    const { maisVendidos } = await produtosDaHome();
+    for (const p of maisVendidos) {
+      expect(p.preco, p.sku).toBeGreaterThan(0);
+      expect(p.imagem, p.sku).toBeTruthy();
+    }
+  });
+
+  it("nunca oferece o que não dá para comprar", async () => {
+    const { maisVendidos, kits, escolhaDoProdutor } = await produtosDaHome();
+    for (const p of [...maisVendidos, ...kits, ...escolhaDoProdutor]) {
+      expect(p.estoque, p.sku).toBeGreaterThan(0);
+      expect(p.preco, p.sku).toBeGreaterThan(0);
+    }
+  });
+
+  it("faz UMA leitura da API para as três seções", async () => {
+    // Três chamadas separadas custariam três fetch por render da home. O
+    // cache de 60 s do Next abafaria isso, mas depender de cache para não
+    // fazer trabalho triplicado é depender de sorte.
+    const chamadas: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      chamadas.push(String(url));
+      return { ok: false } as Response;
+    }) as typeof fetch;
+    try {
+      await produtosDaHome();
+      expect(chamadas.length).toBeLessThanOrEqual(1);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

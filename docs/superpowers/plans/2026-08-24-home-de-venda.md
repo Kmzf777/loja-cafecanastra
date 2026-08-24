@@ -856,7 +856,7 @@ O mesmo caminho conserta a segunda metade: sem a sobreposição, a home mostrari
 
 **A fronteira a respeitar:** `curadoria.ts` continua PURA e não aprende o que é uma API — ela decide QUAIS SKUs, e só. Quem sobrepõe o comercial é o repositório, que já é dono desse assunto e já tem `sobreporAoVivo`, cache de 60 s e teto de espera de 3 s prontos.
 
-- [ ] **Step 1: Declarar o tipo do que a home vende**
+- [x] **Step 1: Declarar o tipo do que a home vende**
 
 Em `frontend/lib/catalogo/tipos.ts`, depois de `export type Kit = {...}`, acrescente:
 
@@ -899,7 +899,7 @@ export type ProdutoVendavel = {
 };
 ```
 
-- [ ] **Step 2: Escrever o teste que falha**
+- [x] **Step 2: Escrever o teste que falha**
 
 Acrescente ao fim de `frontend/lib/catalogo/repositorio.test.ts` (confira os imports do topo antes de colar; acrescente só o que faltar):
 
@@ -964,7 +964,7 @@ describe("produtosDaHome", () => {
 });
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [x] **Step 3: Rodar e ver falhar**
 
 ```bash
 npm test -- repositorio
@@ -972,7 +972,7 @@ npm test -- repositorio
 
 Esperado: FAIL — `produtosDaHome` não existe.
 
-- [ ] **Step 4: Implementar no repositório**
+- [x] **Step 4: Implementar no repositório**
 
 Em `frontend/lib/catalogo/repositorio.ts`, acrescente os imports:
 
@@ -1050,7 +1050,7 @@ export async function produtosDaHome(): Promise<{
 }
 ```
 
-- [ ] **Step 5: Rodar até passar**
+- [x] **Step 5: Rodar até passar**
 
 ```bash
 npm test -- repositorio
@@ -1060,7 +1060,7 @@ Esperado: PASS, 5 testes novos.
 
 ⚠️ **A curadoria filtra por estoque ANTES de o banco falar.** Isso significa que um SKU que o JSON diz esgotado, mas que o banco tem em estoque, não aparece na home. É o comportamento aceito por ora — o JSON é a fonte editorial e o banco corrige o número, não a lista. Se o teste "nunca oferece o que não dá para comprar" falhar porque o banco zerou um estoque que o JSON tem, é este o motivo, e a correção é filtrar de novo DEPOIS da sobreposição. Registre no relatório se acontecer.
 
-- [ ] **Step 6: Checar tipos e commitar**
+- [x] **Step 6: Checar tipos e commitar**
 
 ```bash
 npm test && cd frontend && npx tsc --noEmit && cd ..
