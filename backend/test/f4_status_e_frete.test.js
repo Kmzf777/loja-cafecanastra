@@ -771,17 +771,23 @@ test("cotação pública e recotação do checkout fecham no MESMO par, sem 409"
   /**
    * O TESTE QUE FIXA O PROPÓSITO DESTA CORREÇÃO.
    *
-   * O QUE ELE **NÃO** É: um teste do `process_payment` via HTTP — não há aqui
-   * mock de requisição nem do Mercado Pago. O lado direito é `conferirFrete`
-   * sobre itens montados por `montarItensDaCotacao`, a MESMA função que a rota
-   * pública usa. E isso já basta: desde a Task 4 o `PaymentController` não
-   * carrega mais cópia própria do SELECT — `createPayment` lê pelo mesmo
-   * `cotacaoRepository.lerParaCotacao` que `montarItensDaCotacao` chama aqui.
-   * Então o que está provado aqui é que a cotação da vitrine e a recotação do
-   * checkout fecham no mesmo par nome/preço PORQUE as duas pontas leem do
-   * MESMO repositório — não sobrou um segundo SELECT para divergir, e este
-   * teste cobre o caminho inteiro sem precisar simular o processo de
-   * pagamento inteiro.
+   * O QUE ELE **NÃO** É: um teste do checkout de verdade. Os DOIS lados são
+   * montados por `montarItensDaCotacao`; `createPayment` nunca roda aqui.
+   *
+   * A Task 4 unificou a LEITURA, não a MONTAGEM, e a diferença importa para
+   * saber o que este teste pega. As duas pontas hoje leem pelo mesmo
+   * `cotacaoRepository.lerParaCotacao` — esse SELECT duplicado acabou. Mas o
+   * laço que transforma a linha lida no item da cotação (`product_id`,
+   * `quantity`, `price: precoComPromocao(...)`, `weight`, `width`, `height`,
+   * `length`) continua escrito à mão nos dois lugares:
+   * `ShippingController.montarItensDaCotacao` e o laço de `createPayment`.
+   *
+   * ENTÃO É AÍ QUE MORA O RISCO QUE SOBROU: alguém acrescenta um campo de um
+   * lado só, e as duas pontas voltam a divergir sem que este teste veja — ele
+   * exercita a montagem da vitrine duas vezes, não uma de cada. O que ele
+   * prova, e não é pouco, é que a cotação da vitrine e uma recotação A PARTIR
+   * DO BANCO fecham no mesmo par nome/preço. Quem for unificar a montagem
+   * herda este teste cobrindo o caminho inteiro, sem precisar mudá-lo.
    *
    * Os números straddleiam o piso de R$ 149,00 DE PROPÓSITO, senão o teste
    * passaria sem provar nada:

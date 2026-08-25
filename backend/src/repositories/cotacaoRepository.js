@@ -4,10 +4,15 @@
  * A LEITURA ÚNICA que alimenta toda cotação de frete.
  *
  * Existe uma vez só porque as DUAS pontas precisam do mesmo pacote: a rota
- * pública `/shipping/calculate`, que diz ao cliente quanto custa, e o
- * `conferirFrete` do checkout, que decide quanto ele paga. Enquanto a primeira
- * usava defaults do código e a segunda lia do banco, os dois números discordavam
- * em toda venda — e quem descobria era o cliente, com 409 na hora de pagar.
+ * pública `/shipping/calculate`, que diz ao cliente quanto custa, e o checkout,
+ * que decide quanto ele paga. Enquanto a primeira usava defaults do código e a
+ * segunda lia do banco, os dois números discordavam em toda venda — e quem
+ * descobria era o cliente, com 409 na hora de pagar.
+ *
+ * OS DOIS CHAMADORES, pelo nome: `montarItensDaCotacao` (ShippingController) e
+ * `createPayment` (PaymentController). Não é o `conferirFrete` quem lê — ele
+ * recebe os itens já montados e só reconfere o par nome/preço; confundir os
+ * dois faz procurar a consulta no lugar errado.
  *
  * Devolve um Map indexado por `product_id` e NÃO um array: quem chama itera a
  * sacola (que tem quantidade e ordem) e busca aqui. Um array obrigaria cada

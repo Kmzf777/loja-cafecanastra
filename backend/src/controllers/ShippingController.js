@@ -269,9 +269,11 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
    * o NOME — e por isso que `conferirFrete` casa nome e preco, nao so o preco.
    *
    * O `price` dos itens vem do BANCO nos DOIS caminhos desde a F8: a rota
-   * publica o relê em `montarItensDaCotacao` e o checkout em `conferirFrete`.
-   * Antes o da rota publica vinha do navegador, e era por isso que a promessa
-   * de frete gratis da vitrine podia nao sobreviver ao pagamento.
+   * publica o relê em `montarItensDaCotacao`, o checkout em `createPayment`.
+   * NAO e o `conferirFrete` quem relê — ele nao consulta nada, recebe os itens
+   * ja montados; quem le e quem chama. Antes, o preco da rota publica vinha do
+   * navegador, e era por isso que a promessa de frete gratis da vitrine podia
+   * nao sobreviver ao pagamento.
    */
   // O desconto do cupom abate ANTES da comparacao com o piso: um carrinho de
   // R$ 160 com cupom de 10% e um carrinho de R$ 144 para efeito de frete
@@ -377,16 +379,26 @@ async function montarItensDaCotacao(items) {
    * verdade não é "errar para o lado bom": é NÃO DIVERGIR. Com as promoções
    * mudas, a única forma de não divergir é não responder.
    *
-   * O CATCH DE `freteGratisMinimoCentavos` (bem acima) NÃO É PRECEDENTE para
-   * um catch aqui, e a razão não é uma diferença de mecanismo — é datada. Ele
-   * é um sobrevivente da rota PRÉ-F8, quando esta cotação realmente rodava sem
-   * banco nenhum, com peso e dimensão vindos de defaults do código. Hoje
-   * `calculate` começa lendo produtos e promoções: com o banco fora, a
-   * requisição morre antes e aquele catch nem é alcançado. O que ele ainda
-   * absorve é uma falha isolada em `config_loja` — e absorvê-la produz
-   * exatamente o 409 desta conta na direção oposta (cotação com preço,
-   * checkout com grátis). Pelo argumento acima, ele também não é seguro;
-   * continua no lugar por ESCOPO, não por mérito, e a docstring dele explica.
+   * SOBRAM DOIS CATCHES COM ESTE MESMO DEFEITO, e nenhum deles é precedente
+   * para um catch aqui. Os dois são anteriores à F8, e ficam por ESCOPO, não
+   * por mérito — mexer neles de passagem seria mudar comportamento alheio no
+   * escuro. Ficam nomeados para a lista não ser mentira:
+   *
+   * 1. `freteGratisMinimoCentavos` (bem acima). Sobrevivente da rota PRÉ-F8,
+   *    quando esta cotação rodava sem banco nenhum: hoje `calculate` já leu
+   *    produtos e promoções antes, então com o banco fora a requisição morre
+   *    antes e aquele catch nem é alcançado. O que ele ainda absorve é uma
+   *    falha isolada em `config_loja`, e absorvê-la dá o 409 desta conta na
+   *    direção oposta — cotação com preço, checkout com grátis. A docstring
+   *    dele explica.
+   *
+   * 2. O catch do CUPOM, no handler `calculate` logo abaixo. Como
+   *    `buscarPorCodigo` devolve `rows[0]`, código inexistente é `undefined` e
+   *    não exceção: aquele catch só dispara com o BANCO falhando. E aí o
+   *    caminho é idêntico ao desta conta — sem desconto o subtotal fica mais
+   *    alto, cruza o piso, a vitrine promete grátis, o checkout aplica o
+   *    desconto, o subtotal cai abaixo do piso e o par não casa. Mesmo 409,
+   *    mesma direção de dano.
    *
    * O checkout também não protege esta leitura (`PaymentController`): lá uma
    * falha de promoção já é 500. Um catch só deste lado deixaria os dois
@@ -471,7 +483,25 @@ class ShippingController {
           );
           if (avaliacao.valido) descontoCentavos = avaliacao.descontoCentavos;
         } catch (erro) {
-          console.error("Cupom ignorado na cotação de frete:", erro.message);
+          /**
+           * ESTE CATCH SÓ DISPARA COM O BANCO FALHANDO, e não com cupom
+           * inexistente: `buscarPorCodigo` devolve `rows[0]`, então código que
+           * ninguém cadastrou é `undefined` e `avaliarCupom` o recusa sem
+           * exceção. O nome "cupom ignorado" sempre deu a entender o contrário.
+           *
+           * E seguir sem desconto tem o preço que `montarItensDaCotacao`
+           * descreve: subtotal mais alto → cruza o piso → a vitrine promete
+           * frete grátis → no checkout o desconto entra, o subtotal cai abaixo
+           * do piso, a opção volta a ter preço e o par não casa. 409.
+           *
+           * Fica por ESCOPO — é anterior a esta correção e sem teste que fixe
+           * o caminho de falha dele. Está na lista de catches condenados na
+           * docstring de `montarItensDaCotacao`, para não passar por seguro.
+           */
+          console.error(
+            "Cupom não pôde ser lido na cotação (banco), seguindo SEM desconto:",
+            erro.message,
+          );
         }
       }
 
