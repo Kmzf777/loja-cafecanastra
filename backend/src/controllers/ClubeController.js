@@ -41,10 +41,16 @@ const { GRUPO_ATIVO, traduzirStatusMp } = require("../utils/statusDePedido");
 // pagamentos avulsos — mora em utils/estoque.js para um status novo em GRUPO_*
 // não precisar ser corrigido em dois controllers (revisão da 3J).
 const { lerItensDoPedido, aplicarTransicaoDeEstoque } = require("../utils/estoque");
-// O MESMO `garantirCpf` do checkout (mora em utils/cpf.js desde a revisão
+// A MESMA disciplina de CPF do checkout (mora em utils/cpf.js desde a revisão
 // transversal da F7): a adesão do Clube grava o CPF em `canastra.clientes` com
-// a mesma disciplina — persistência, UNIQUE de 0002 virando 400 legível, e o
-// CPF que a conta já tem valendo sem redigitar.
+// persistência, UNIQUE de 0002 virando 400 legível, e o CPF que a conta já tem
+// valendo sem redigitar.
+//
+// O CHECKOUT ENTRA POR OUTRA PORTA, e desde 2026-08-25 elas são duas: ele usa
+// `garantirCpfENome`, que devolve `{ cpf, nome }` numa consulta só, porque o
+// `payer` do Mercado Pago precisa do nome. `garantirCpf` virou um invólucro
+// fino sobre ela e mantém o contrato `Promise<string | null>` que este
+// controller sempre teve — o caminho de código é o mesmo, a porta é que muda.
 const { garantirCpf } = require("../utils/cpf");
 // Bling (onda 3G): o MESMO gatilho que o PaymentController dispara quando um
 // pedido entra em 'aprovado'. Ele confere BLING_ATIVO por conta própria, roda
@@ -224,7 +230,8 @@ async function assinar(req, res) {
      * A recusa é na ADESÃO, não na cobrança, porque é aqui que existe alguém
      * do outro lado da tela para digitar. No webhook não há a quem pedir nada.
      *
-     * `garantirCpf` é a MESMA função do checkout: grava o número informado em
+     * `garantirCpf` roda a MESMA lógica do checkout (que a alcança por
+     * `garantirCpfENome`, o irmão que também devolve o nome): grava o número informado em
      * `canastra.clientes` (e a conta passa a ter CPF para sempre), traduz o
      * 23505 do UNIQUE de 0002 em 400 com frase, e devolve o CPF VIGENTE — por
      * isso quem já tem CPF no cadastro não precisa mandar nada: o corpo sem
