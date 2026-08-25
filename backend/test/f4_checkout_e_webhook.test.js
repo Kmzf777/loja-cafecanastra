@@ -715,3 +715,62 @@ test("checkout: endereço sem número não quebra a cobrança nem manda lixo ao 
     "additional_info.shipments.receiver_address.street_number não pode existir sem número",
   );
 });
+
+test("checkout: o device id do navegador chega ao Mercado Pago", async () => {
+  // Mesmo motivo dos dois testes anteriores: mais um checkout de sucesso no
+  // fim do arquivo, e cada um consome 2 das 10 unidades semeadas.
+  await bd.pool.query(
+    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
+    [PRODUTO],
+  );
+
+  const corpo = corpoDeCheckout();
+  corpo.deviceId = "dev-sessao-abc";
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-device" },
+      body: corpo,
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  assert.equal(
+    mp.opcoes[mp.opcoes.length - 1]?.meliSessionId,
+    "dev-sessao-abc",
+  );
+});
+
+test("checkout: sem device id a cobrança sai do mesmo jeito", async () => {
+  // Bloqueador de script no navegador. Recusar aqui seria trocar uma melhoria
+  // de aprovação por uma venda perdida.
+  await bd.pool.query(
+    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
+    [PRODUTO],
+  );
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-sem-device" },
+      body: corpoDeCheckout(),
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  // AUSENTE de verdade, não `undefined` explícito — mesmo motivo dos dois
+  // testes de `street_number` acima: `=== undefined` também passaria se o
+  // código mandasse `meliSessionId: undefined`.
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      mp.opcoes[mp.opcoes.length - 1] || {},
+      "meliSessionId",
+    ),
+    false,
+    "sem deviceId no corpo, meliSessionId não pode nem existir na chave",
+  );
+});
