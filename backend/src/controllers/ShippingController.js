@@ -37,6 +37,42 @@ const NOME_DO_CAMPO = {
 };
 
 /**
+ * A resposta ÚNICA para `ITEM_SEM_PACOTE`, usada pelas DUAS rotas.
+ *
+ * As duas encontram o mesmo produto quebrado — a vitrine ao cotar, o checkout ao
+ * reconferir — e têm de dizer a mesma coisa sobre ele. Deixar cada uma com a
+ * própria frase e o próprio status é como o `frontend` e o backend acabaram
+ * discordando sobre o pacote, um degrau abaixo: duas cópias divergem, e a
+ * primeira correção só acerta uma.
+ *
+ * 422 E NÃO 500/503, e é aqui que mora a diferença que importa. 5xx diz "o
+ * serviço caiu": convida a tentar de novo e acorda quem está de plantão. Este
+ * erro é determinístico e permanente até alguém EDITAR o produto — toda
+ * tentativa falha igualzinha, e "tente novamente em instantes" é mentira. 422
+ * diz o que de fato é: a requisição está bem formada, mas tem um item que esta
+ * loja não consegue processar.
+ *
+ * As duas audiências ficam separadas de propósito: `log` nomeia produto e
+ * coluna, porque quem conserta é o operador; `mensagem` carrega a saída que o
+ * CLIENTE tem agora (tirar o item da sacola), porque ele não pode esperar o
+ * conserto.
+ */
+function respostaDeItemSemPacote(erro) {
+  const campo = NOME_DO_CAMPO[erro.campo] || erro.campo;
+  return {
+    status: 422,
+    mensagem:
+      "Um dos produtos da sacola está sem peso ou medidas cadastradas, " +
+      "então não dá para calcular o frete dele. Remova o item para " +
+      "seguir, ou fale com a loja.",
+    log:
+      `o produto ${erro.productId} está sem ${campo} no catálogo. ` +
+      "Corrija peso e dimensões no painel — toda cotação com este item " +
+      "falha até lá.",
+  };
+}
+
+/**
  * O piso do frete gratis, em centavos, lido de `canastra.config_loja` (0009).
  *
  * FRETE GRATIS E REGRA DE SERVIDOR (decisao 3 do plano mestre): o navegador
@@ -460,29 +496,13 @@ class ShippingController {
        * não nomeia nada: ninguém descobre qual produto, e a loja parece
        * quebrada quando quem está errado é uma linha do catálogo.
        *
-       * 422 E NÃO 500 de propósito. 500 diz "o serviço caiu": convida a tentar
-       * de novo e acorda quem está de plantão. Este erro é determinístico e
-       * permanente até alguém editar o produto — toda tentativa falha
-       * igualzinha. 422 diz o que é: a requisição está bem formada, mas tem um
-       * item que esta loja não consegue processar.
-       *
-       * O log carrega produto e coluna porque é o operador quem conserta; a
-       * frase de resposta carrega a saída que o CLIENTE tem agora (tirar o item
-       * da sacola), porque ele não pode esperar o conserto.
+       * O status e as duas frases vêm de `respostaDeItemSemPacote`, que o
+       * `conferirFrete` do checkout também usa — o porquê está lá.
        */
       if (error.code === "ITEM_SEM_PACOTE") {
-        const campoEmPortugues = NOME_DO_CAMPO[error.campo] || error.campo;
-        console.error(
-          `Cotação impossível: o produto ${error.productId} está sem ` +
-            `${campoEmPortugues} no catálogo. Corrija peso e dimensões no ` +
-            "painel — toda cotação com este item falha até lá.",
-        );
-        return res.status(422).json({
-          error:
-            "Um dos produtos da sacola está sem peso ou medidas cadastradas, " +
-            "então não dá para calcular o frete dele. Remova o item para " +
-            "seguir, ou fale com a loja.",
-        });
+        const resposta = respostaDeItemSemPacote(error);
+        console.error("Cotação impossível:", resposta.log);
+        return res.status(resposta.status).json({ error: resposta.mensagem });
       }
 
       console.error("Erro geral no frete:", error);
@@ -494,3 +514,4 @@ class ShippingController {
 module.exports = new ShippingController();
 module.exports.calcularOpcoesDeFrete = calcularOpcoesDeFrete;
 module.exports.montarItensDaCotacao = montarItensDaCotacao;
+module.exports.respostaDeItemSemPacote = respostaDeItemSemPacote;

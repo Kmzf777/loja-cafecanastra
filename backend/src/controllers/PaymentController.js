@@ -4,7 +4,10 @@ const { payment } = require("../config/mercadopago");
 const OrderRepository = require("../repositories/ordersRepository");
 const pool = require("../pgPool");
 const PromotionsRepository = require("../repositories/promotionsRepository");
-const { calcularOpcoesDeFrete } = require("./ShippingController");
+const {
+  calcularOpcoesDeFrete,
+  respostaDeItemSemPacote,
+} = require("./ShippingController");
 const {
   GRUPO_ATIVO,
   GRUPO_CANCELADO,
@@ -105,10 +108,40 @@ async function conferirFrete({
   let opcoes;
   try {
     opcoes = await calcularOpcoesDeFrete({ zipCode: cep, itens, descontoCentavos });
-  } catch {
+  } catch (erroDaCotacao) {
+    /**
+     * O ERRO VEM LIGADO AGORA, e nao e detalhe de estilo: este catch era
+     * `catch {` pelado, sem binding. Ele engolia ate erro que carrega
+     * diagnostico (`productId`, `campo`), e o operador nao recebia NADA no log
+     * — so o cliente recebia uma frase, e a frase errada.
+     *
+     * PACOTE INCOMPLETO NAO E INDISPONIBILIDADE. O 503 abaixo foi escrito para
+     * transportadora muda (timeout da Melhor Envio), onde "tente de novo em
+     * instantes" e verdade. Produto com peso 0 e o oposto: e deterministico e
+     * permanente ate alguem editar a linha, entao mandar tentar de novo e
+     * mentira, e toda tentativa queima outra ida a transportadora.
+     *
+     * Esta janela e NOVA, criada pela propria F8: antes `peso = 0` era falsy e
+     * caia no default de 0,3 kg — errado, mas mudo. Agora recusa, e a recusa
+     * precisa chegar dizendo a mesma coisa que a rota publica ja diz sobre o
+     * MESMO produto. Dai `respostaDeItemSemPacote` morar no ShippingController
+     * e ser usada pelos dois: uma frase so, um status so.
+     */
+    if (erroDaCotacao.code === "ITEM_SEM_PACOTE") {
+      const resposta = respostaDeItemSemPacote(erroDaCotacao);
+      console.error("Checkout recusado, cotação impossível:", resposta.log);
+      const erro = new Error(resposta.mensagem);
+      erro.status = resposta.status;
+      throw erro;
+    }
+
     // Sem conseguir recalcular, aceitar o numero do cliente seria reabrir o
     // buraco. Recusar o pedido e o comportamento seguro — e o checkout ja
     // estaria quebrado de qualquer forma, porque o frete nao pode ser cotado.
+    console.error(
+      "Frete nao pode ser reconferido no checkout:",
+      erroDaCotacao.message,
+    );
     const erro = new Error(
       "Não foi possível confirmar o frete agora. Tente novamente em instantes.",
     );

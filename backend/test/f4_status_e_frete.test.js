@@ -636,6 +636,57 @@ test("produto com peso 0 responde 422 com frase acionável, não 500 opaco", asy
   assert.doesNotMatch(res.corpo.error, /Falha ao calcular frete/);
 });
 
+test("no CHECKOUT, produto sem peso é o mesmo 422 — não um 503 'tente de novo'", async () => {
+  /**
+   * A JANELA QUE A PRÓPRIA F8 ABRIU: antes, `peso = 0` era falsy e caía no
+   * default de 0,3 kg — errado, mas mudo. Agora recusa, e `conferirFrete`
+   * transformava QUALQUER falha de cotação em 503 "tente novamente em
+   * instantes". Para peso 0 isso é mentira: é determinístico e permanente até
+   * alguém editar a linha, e cada tentativa queima outra ida à transportadora.
+   *
+   * O caso real é estreito (o peso ser editado para 0 entre a cotação e o
+   * pagamento), mas a resposta errada é o que manda o cliente ficar tentando e
+   * deixa o operador sem log nenhum — o catch era `catch {` pelado.
+   */
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.produtos (nome, preco, peso, largura, altura, comprimento)
+     VALUES ('Café sem peso no checkout', 50.00, 0, 18, 7, 24)
+     RETURNING produto_id`,
+  );
+  const id = rows[0].produto_id;
+  const itens = await montarItensDaCotacao([{ product_id: id, quantity: 1 }]);
+
+  const gritos = [];
+  const consoleErrorOriginal = console.error;
+  console.error = (...partes) => gritos.push(partes.join(" "));
+  try {
+    await assert.rejects(
+      () =>
+        conferirFrete({
+          address: { zip_code: CEP_LOCAL },
+          itens,
+          shippingCost: 5,
+          shippingMethod: "Entrega Local",
+        }),
+      (erro) => {
+        assert.equal(erro.status, 422, "503 aqui seria mentira");
+        assert.match(erro.message, /remova|fale com a loja/i);
+        assert.doesNotMatch(erro.message, /tente novamente/i);
+        return true;
+      },
+    );
+  } finally {
+    console.error = consoleErrorOriginal;
+  }
+
+  // O operador precisa saber QUAL produto e QUAL coluna — em português, que é
+  // como o campo aparece no painel onde ele vai consertar.
+  assert.ok(
+    gritos.some((linha) => linha.includes(id) && /peso/.test(linha)),
+    `o log deveria nomear o produto e a coluna; veio: ${JSON.stringify(gritos)}`,
+  );
+});
+
 /* --------------------------------------------------------------------------
  * A PROMOÇÃO, que é a razão de o preço vir do banco
  *
