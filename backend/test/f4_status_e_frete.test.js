@@ -23,10 +23,26 @@ const {
 } = require("../src/utils/statusDePedido.js");
 
 let bd;
+let ShippingController;
 let calcularOpcoesDeFrete;
 let montarItensDaCotacao;
 let conferirFrete;
 let cotacaoRepository;
+
+/** O req/res mínimo dos outros arquivos, para exercitar o handler HTTP. */
+function respostaFalsa() {
+  const res = { codigo: null, corpo: null };
+  res.status = (codigo) => {
+    res.codigo = codigo;
+    return res;
+  };
+  res.json = (corpo) => {
+    if (res.codigo === null) res.codigo = 200;
+    res.corpo = corpo;
+    return res;
+  };
+  return res;
+}
 
 const ANA = "aaaaaaaa-0000-0000-0000-000000000001";
 
@@ -54,9 +70,8 @@ before(async () => {
   // que é o que estes testes precisam — nenhum teste pode depender de rede.
   process.env.MELHOR_ENVIO_URL = "http://127.0.0.1:9";
 
-  ({ calcularOpcoesDeFrete, montarItensDaCotacao } = require(
-    "../src/controllers/ShippingController.js",
-  ));
+  ShippingController = require("../src/controllers/ShippingController.js");
+  ({ calcularOpcoesDeFrete, montarItensDaCotacao } = ShippingController);
   ({ conferirFrete } = require("../src/controllers/PaymentController.js"));
   cotacaoRepository = require("../src/repositories/cotacaoRepository.js");
 }, { timeout: 120_000 });
@@ -508,4 +523,55 @@ test("a cotação recusa product_id que não existe", async () => {
       ]),
     /não existe/i,
   );
+});
+
+test("product_id que não é UUID é 400 de entrada ruim, não 500 de loja quebrada", async () => {
+  // "12345" é a forma do id da Tray — o que uma sacola de localStorage montada
+  // na loja antiga ainda carrega. Sem a guarda, isto vira 22P02 dentro do
+  // lerParaCotacao e sai como 500.
+  await assert.rejects(
+    () => montarItensDaCotacao([{ product_id: "12345", quantity: 1 }]),
+    /inválido|invalido/i,
+  );
+});
+
+test("e a ROTA responde 400 com a mesma frase do checkout", async () => {
+  // O teste acima prova que a função recusa; este prova o que o cliente VÊ —
+  // que era o bug: a função já estourava antes, mas pelo caminho errado, e a
+  // rota traduzia isso para 500 "Falha ao calcular frete".
+  const res = respostaFalsa();
+  await ShippingController.calculate(
+    {
+      body: {
+        zipCode: CEP_LOCAL,
+        items: [{ product_id: "12345", quantity: 1 }],
+      },
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 400);
+  // A MESMA frase do PaymentController: as duas rotas dizem a mesma coisa
+  // sobre a mesma sacola velha.
+  assert.equal(res.corpo.error, "Identificador de produto inválido.");
+});
+
+test("uuid válido de produto morto também é 400 na rota, não 500", async () => {
+  // O irmão do caso acima pelo outro código de erro (PRODUTO_INEXISTENTE):
+  // produto tirado do catálogo com a sacola aberta. Também é sacola ruim.
+  const res = respostaFalsa();
+  await ShippingController.calculate(
+    {
+      body: {
+        zipCode: CEP_LOCAL,
+        items: [
+          { product_id: "00000000-0000-0000-0000-000000000000", quantity: 1 },
+        ],
+      },
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 400);
+  assert.match(res.corpo.error, /não existe/i);
 });

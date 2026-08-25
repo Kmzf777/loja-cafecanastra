@@ -8,6 +8,7 @@ const cuponsRepository = require("../repositories/cuponsRepository");
 const cotacaoRepository = require("../repositories/cotacaoRepository");
 const PromotionsRepository = require("../repositories/promotionsRepository");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
+const { ehUuid } = require("../utils/formatoUuid");
 const { precoComPromocao, somarCentavos } = require("../utils/preco");
 
 /**
@@ -238,6 +239,31 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
  * recusaria — o mesmo 409 por outra porta.
  */
 async function montarItensDaCotacao(items) {
+  /**
+   * A SACOLA VELHA DA TRAY É O CASO REAL AQUI, e é por isso que a checagem vem
+   * ANTES da consulta. A loja está saindo da Tray, e a sacola mora no
+   * `localStorage` do navegador: quem voltar com um carrinho montado na loja
+   * antiga traz `product_id` NUMÉRICO, o id da Tray, não o uuid do Postgres.
+   * Isso não é hipótese — é a cauda esperada da migração.
+   *
+   * Sem esta linha esse id chega ao `ANY($1::uuid[])` do `lerParaCotacao`,
+   * estoura 22P02 lá dentro e a rota devolve 500 "Falha ao calcular frete": a
+   * loja parece quebrada quando quem está velho é o carrinho. Pior, o checkout
+   * já responde 400 "Identificador de produto inválido." para a MESMA sacola
+   * (`PaymentController`) — as duas rotas discordando sobre o mesmo problema.
+   * A frase daqui é igual à de lá de propósito.
+   *
+   * `ehUuid` vem de `utils/formatoUuid`, que existe exatamente para esta
+   * expressão não ser copiada mais uma vez.
+   */
+  for (const item of items) {
+    if (!ehUuid(item.product_id)) {
+      const erro = new Error("Identificador de produto inválido.");
+      erro.code = "PRODUTO_ID_INVALIDO";
+      throw erro;
+    }
+  }
+
   const ids = items.map((i) => i.product_id);
   const porId = await cotacaoRepository.lerParaCotacao(ids);
 
@@ -299,7 +325,13 @@ class ShippingController {
       try {
         itensDoBanco = await montarItensDaCotacao(items);
       } catch (erro) {
-        if (erro.code === "PRODUTO_INEXISTENTE") {
+        // Os dois são sacola ruim, não loja quebrada: id que nunca foi uuid
+        // (a sacola velha da Tray) e uuid de produto que saiu do catálogo.
+        // 400 nos dois, para o navegador saber que precisa limpar a sacola.
+        if (
+          erro.code === "PRODUTO_ID_INVALIDO" ||
+          erro.code === "PRODUTO_INEXISTENTE"
+        ) {
           return res.status(400).json({ error: erro.message });
         }
         throw erro;
