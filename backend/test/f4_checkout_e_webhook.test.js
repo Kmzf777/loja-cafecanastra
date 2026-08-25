@@ -582,3 +582,27 @@ test("checkout: a cobrança leva a chave de idempotência ao Mercado Pago", asyn
     "a chave tem que ser a MESMA que a linha do pedido grava",
   );
 });
+
+test("checkout: external_reference liga o pagamento à linha do pedido", async () => {
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-ref" },
+      body: corpoDeCheckout(),
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  const cobranca = mp.criacoes[mp.criacoes.length - 1];
+  assert.equal(cobranca.external_reference, `${ANA}:clique-ref`);
+
+  // O que torna a conciliação possível: o campo do painel do MP e a coluna do
+  // pedido guardam o MESMO valor.
+  const { rows } = await bd.pool.query(
+    "SELECT chave_idempotencia FROM canastra.pedidos WHERE pedido_id = $1",
+    [res.corpo.orderId],
+  );
+  assert.equal(rows[0].chave_idempotencia, cobranca.external_reference);
+});

@@ -796,6 +796,17 @@ class PaymentController {
         installments: Number(formData.installments || 1),
         payment_method_id: finalPaymentMethodId,
         notification_url: webhookUrl,
+        /**
+         * O FIO DA CONCILIAÇÃO. Sem ele, o painel do Mercado Pago mostra
+         * `payment_id` e mais nada, e casar um pagamento com um pedido da loja
+         * vira garimpo manual.
+         *
+         * POR QUE NÃO O ID DO PEDIDO: nesta loja a cobrança acontece ANTES de
+         * `createOrder` — o id ainda não existe aqui. A chave de idempotência
+         * existe, é única por índice, e é exatamente o que a linha do pedido
+         * grava em `chave_idempotencia`. Um campo, os dois lados.
+         */
+        external_reference: chaveIdempotencia,
         payer: {
           email: formData.payer.email || userEmail,
           ...(identification && identification.number
