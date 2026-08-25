@@ -620,9 +620,9 @@ test("checkout: a fatura do cliente traz o nome da loja", async () => {
 
   assert.equal(res.codigo, 201);
   const cobranca = mp.criacoes[mp.criacoes.length - 1];
-  assert.equal(cobranca.statement_descriptor, "CAFECANASTRA");
   assert.ok(
     cobranca.statement_descriptor.length <= 13,
     "o Mercado Pago corta o descritor em 13 caracteres",
   );
+  assert.equal(cobranca.statement_descriptor, "CAFECANASTRA");
 });
