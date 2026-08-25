@@ -18,12 +18,18 @@ import { PontoTorra } from "./PontoTorra";
  * Hover: crossfade sabor -> pacote, sombra de carimbo de 4px (deslocamento
  * solido, nunca sombra difusa — §4.4) e o filete passando a vermelho.
  *
- * DUAS LIMITACOES CONHECIDAS, ambas de acervo e nao de codigo:
- *  - `fotos.sabor` e hoje um fallback do pacote (§8 pede o ingrediente da nota
- *    de degustacao). O crossfade existe e funciona, mas as duas imagens sao a
- *    mesma, entao ele nao aparece ate a producao fotografica acontecer.
- *  - Os PNGs disponiveis sao 1:1 e o card e 4:5 (§8). Usamos `object-cover`,
- *    o que recorta o quadrado — decisao de enquadramento provisoria.
+ * O CROSSFADE JA APARECE nas tres linhas principais: `fotos.pacote` passou a
+ * ser a foto de estudio do pacote (`imagemEstudio` no catalogo), que e outra
+ * imagem, em 4:5 — a proporcao deste card. Onde o acervo ainda nao alcanca
+ * (Microlote, Nectar de Minas) `produtos.ts` devolve o proprio packshot nos
+ * dois papeis e o hover simplesmente nao aparece, como antes.
+ *
+ * DUAS LIMITACOES CONHECIDAS QUE FICARAM, ambas de acervo e nao de codigo:
+ *  - `fotos.sabor` e ainda um fallback do pacote (§8 pede o ingrediente da
+ *    nota de degustacao, nao o pacote outra vez).
+ *  - Os packshots PNG sao 1:1 e o card e 4:5 (§8). Usamos `object-cover`, o
+ *    que recorta o quadrado — decisao de enquadramento provisoria, e que so
+ *    vale para o repouso: a foto de estudio ja entra sem recorte.
  */
 
 export function CardCafe({

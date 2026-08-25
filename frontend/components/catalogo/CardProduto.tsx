@@ -26,7 +26,10 @@ import type { ProdutoVendavel } from "@/lib/catalogo/tipos";
  *
  * A FOTO É A DA LINHA. Os SKUs não têm arte própria no acervo (§8 do
  * estetica.md segue como caminho crítico), e inventar uma seria pior que
- * reusar a real.
+ * reusar a real. São DUAS quando a linha foi fotografada em estúdio: o
+ * packshot em repouso e a foto de estúdio no hover, o mesmo crossfade do
+ * `<CardCafe>` — dois vocabulários de hover na mesma rolagem leriam como dois
+ * sites, pelo mesmo motivo que a fita e a sombra são iguais.
  */
 
 export function CardProduto({
@@ -114,8 +117,35 @@ export function CardProduto({
             width={500}
             height={500}
             sizes="(min-width: 1024px) 26vw, (min-width: 640px) 38vw, 58vw"
-            className="h-full w-full object-cover"
+            className={`h-full w-full object-cover ${
+              produto.imagemEstudio
+                ? "transition-opacity duration-[320ms] ease-canastra group-hover:opacity-0"
+                : ""
+            }`}
           />
+
+          {/* O CROSSFADE SÓ EXISTE QUANDO HÁ SEGUNDA FOTO, e é por isso que
+              ele é condicional em vez de sempre desenhado com fallback: a
+              linha sem foto de estúdio pagaria um segundo download para
+              cruzar uma imagem com ela mesma — que é exatamente o que o
+              `<CardCafe>` fazia enquanto `sabor` e `pacote` eram o mesmo
+              arquivo.
+
+              `fill` e não width/height: a foto de estúdio não tem medida
+              única no acervo (4:5 em duas linhas, 825×1024 na terceira) e o
+              quadrado deste card já é a caixa de layout que segura o CLS.
+              Declarar um tamanho aqui obrigaria o card a saber o tamanho do
+              arquivo — que é justamente o que `produtos.ts` centraliza. */}
+          {produto.imagemEstudio ? (
+            <Image
+              src={produto.imagemEstudio}
+              alt=""
+              aria-hidden
+              fill
+              sizes="(min-width: 1024px) 26vw, (min-width: 640px) 38vw, 58vw"
+              className="object-cover opacity-0 transition-opacity duration-[320ms] ease-canastra group-hover:opacity-100"
+            />
+          ) : null}
         </div>
 
         <div className="border-t border-fuligem-20 px-4 pt-4">

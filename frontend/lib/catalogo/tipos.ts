@@ -199,6 +199,18 @@ export type ProdutoVendavel = {
   nome: string;
   /** Arte da linha: os SKUs não têm foto própria no acervo (§8). */
   imagem: string;
+  /**
+   * A SEGUNDA FOTO DO PACOTE — a que o card revela no hover.
+   *
+   * OPCIONAL porque o acervo é parcial: só as três linhas principais foram
+   * fotografadas em estúdio. Sem ela o card não desenha o crossfade e fica
+   * como sempre esteve, com a arte de catálogo parada — que é melhor do que
+   * cruzar uma imagem com ela mesma e cobrar um download por nada.
+   *
+   * NÃO é a imagem que vai para a sacola: aquela é `imagem`, o packshot de
+   * fundo branco, porque a miniatura do carrinho é pequena e precisa ser lida.
+   */
+  imagemEstudio?: string;
   /** Em centavos. */
   preco: number;
   estoque: number;

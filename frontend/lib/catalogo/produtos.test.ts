@@ -22,15 +22,56 @@ import type { Locale } from "../i18n/tipos";
 const PUBLIC = fileURLToPath(new URL("../../public/", import.meta.url));
 
 /**
- * Le largura/altura do bloco IHDR de um PNG — bytes 16..23, big-endian.
- * Sem dependencia: um PNG valido sempre traz o IHDR como primeiro chunk.
- * Devolve null se o arquivo nao for PNG, e o teste trata isso como falha
- * explicita (ver comentario no caso de teste).
+ * Le largura/altura de um PNG: bloco IHDR, bytes 16..23, big-endian. Sem
+ * dependencia — um PNG valido sempre traz o IHDR como primeiro chunk.
  */
 function dimensoesPng(caminho: string): { w: number; h: number } | null {
   const b = readFileSync(caminho);
   if (b.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return null;
   return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+}
+
+/**
+ * O mesmo para JPEG, varrendo os marcadores ate o SOF (Start Of Frame).
+ *
+ * JPEG nao tem cabecalho de tamanho fixo: e uma sequencia de segmentos
+ * `FF <marcador> <tamanho:2>`, e a altura/largura so aparecem no SOFn — o
+ * unico marcador da familia C0..CF que NAO e tabela de Huffman (C4),
+ * reinicio (C8) ou aritmetica (CC). Por isso o pulo e por `tamanho`, e nao
+ * uma leitura de deslocamento fixo.
+ *
+ * Este formato entrou no acervo com as fotos de estudio do pacote
+ * (`imagemEstudio`), que sao JPEG e nao PNG.
+ */
+function dimensoesJpeg(caminho: string): { w: number; h: number } | null {
+  const b = readFileSync(caminho);
+  if (b.readUInt16BE(0) !== 0xffd8) return null;
+
+  let i = 2;
+  while (i + 9 < b.length) {
+    if (b[i] !== 0xff) {
+      i++;
+      continue;
+    }
+    const marcador = b[i + 1];
+    const ehSof =
+      marcador >= 0xc0 &&
+      marcador <= 0xcf &&
+      marcador !== 0xc4 &&
+      marcador !== 0xc8 &&
+      marcador !== 0xcc;
+    if (ehSof) return { w: b.readUInt16BE(i + 7), h: b.readUInt16BE(i + 5) };
+    i += 2 + b.readUInt16BE(i + 2);
+  }
+  return null;
+}
+
+/**
+ * Devolve null se o arquivo nao for PNG nem JPEG, e o teste trata isso como
+ * falha explicita (ver comentario no caso de teste).
+ */
+function dimensoesDaImagem(caminho: string): { w: number; h: number } | null {
+  return dimensoesPng(caminho) ?? dimensoesJpeg(caminho);
 }
 
 describe("dados brutos do catalogo (data/catalogo-canastra.json)", () => {
@@ -298,9 +339,10 @@ describe("catalogo montado", () => {
         expect(existsSync(caminho), `${onde}: arquivo nao existe em public/`).toBe(true);
 
         // Falha de proposito se o ativo migrar para AVIF/WebP (previsto no §8):
-        // e um lembrete para estender dimensoesPng(), nao para apagar o teste.
-        const real = dimensoesPng(caminho);
-        expect(real, `${onde}: nao e PNG — estenda dimensoesPng() para o novo formato`).not.toBeNull();
+        // e um lembrete para estender dimensoesDaImagem(), nao para apagar o
+        // teste. Foi o que aconteceu com o JPEG das fotos de estudio.
+        const real = dimensoesDaImagem(caminho);
+        expect(real, `${onde}: nao e PNG nem JPEG — estenda dimensoesDaImagem() para o novo formato`).not.toBeNull();
 
         expect({ w: foto.w, h: foto.h }, `${onde}: dimensao declarada difere do arquivo`).toEqual(real);
       }

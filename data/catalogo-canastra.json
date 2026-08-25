@@ -11,7 +11,8 @@
     },
     "acesso_direto_bloqueado": "Este ambiente nao alcanca loja.cafecanastra.com (a politica de egresso responde 403 no CONNECT), entao nada foi raspado do site. Por isso a procedencia por campo importa: quando o dominio for liberado, da para reconferir SKU a SKU pelo campo `url`.",
     "chaves_de_texto": "`rotuloChave` (em cada produto) e `marca.atributosChaves` NAO sao dado novo: sao a CHAVE ESTAVEL do texto que ja esta ao lado deles em portugues. O texto de cada idioma vive em frontend/lib/i18n/dicionario.ts, em `catalogo.embalagem` e `catalogo.atributo`, chaveado por elas — a mesma regra que ja vale para torra, formato e moagem. O portugues daqui continua sendo o oraculo: produtos.test.ts falha se o dicionario e este arquivo discordarem de uma virgula. Nada disso e lido por backend/db/seed.js, que continua enxergando exatamente os mesmos campos de antes.",
-    "moeda": "precoCentavos esta em centavos de real. 3970 = R$ 39,70."
+    "moeda": "precoCentavos esta em centavos de real. 3970 = R$ 39,70.",
+    "imagem_e_imagemEstudio": "`imagem` e o packshot de catalogo — pacote de frente, fundo branco, 500x500. E a arte canonica: e ela que vai para a miniatura da sacola e para o card em repouso. `imagemEstudio` e a SEGUNDA foto do pacote, em estudio com fundo de cor, e e a que aparece no hover do card e como segunda peca da galeria da PDP; so as tres linhas principais (classico, suave, canela) tem uma. Onde falta, o hover cai no proprio packshot e o crossfade simplesmente nao aparece — que e como o site inteiro se comportava antes destas fotos existirem. Procedencia: as tres foram entregues pelo dono do projeto; as de classico e canela vieram com nome de arquivo declarando geracao por IA a partir da arte real da embalagem, a de suave veio como fotografia. Nenhuma delas e dado comercial: nao muda preco, estoque nem SKU. backend/db/seed.js nao le este campo."
   },
   "marca": {
     "nome": "Café Canastra",
@@ -62,6 +63,7 @@
       "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra escura, intensidade 8. Notas caramelizadas e achocolatadas.",
       "preparoSugerido": "Ristretto e espresso",
       "imagem": "/cafe-classico.png",
+      "imagemEstudio": "/pacote-classico.jpg",
       "fonte": "material-da-marca",
       "sca": 80,
       "scaExata": false,
@@ -82,6 +84,7 @@
       "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra média, intensidade 7. Notas achocolatadas e finalização cítrica.",
       "preparoSugerido": "Coador, prensa francesa e aeropress",
       "imagem": "/cafe-suave.png",
+      "imagemEstudio": "/pacote-suave.jpg",
       "fonte": "material-da-marca",
       "sca": 80,
       "scaExata": false
@@ -101,6 +104,7 @@
       "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra escura, intensidade 7. Notas caramelizadas, com canela natural moída junto ao grão.",
       "preparoSugerido": "Coador",
       "imagem": "/cafe-canela.png",
+      "imagemEstudio": "/pacote-canela.jpg",
       "fonte": "material-da-marca",
       "sca": 80,
       "scaExata": false

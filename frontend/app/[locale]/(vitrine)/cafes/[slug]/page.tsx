@@ -157,9 +157,15 @@ export default async function PaginaLote({
   const relacionados = (await lotesRelacionados(lote)).map((l) =>
     traduzirLote(l, locale),
   );
-  const galeria = [lote.fotos.sabor, lote.fotos.pacote, lote.fotos.terreiro].filter(
-    (f): f is NonNullable<typeof f> => Boolean(f),
-  );
+  // SEM REPETIDA. `sabor` e `pacote` sao o MESMO arquivo nas linhas que ainda
+  // nao tem foto de estudio (ver `doPacote` em lib/catalogo/produtos.ts), e a
+  // galeria empilhava o packshot duas vezes, uma embaixo da outra. Nas tres
+  // linhas principais sao duas fotos de verdade e as duas aparecem.
+  const galeria = [lote.fotos.sabor, lote.fotos.pacote, lote.fotos.terreiro]
+    .filter((f): f is NonNullable<typeof f> => Boolean(f))
+    .filter(
+      (f, i, todas) => todas.findIndex((o) => o.src === f.src) === i,
+    );
 
   // Uma LINHA da vitrine agrupa varios SKUs do banco (um por peso/pacote, e a
   // avaliacao e gravada no SKU exato que a pessoa recebeu) — a busca e sempre

@@ -11,10 +11,14 @@
 // dois: se a vitrine e o painel divergissem sobre o que a loja vende, o bug
 // seria invisível até alguém comparar as duas telas lado a lado.
 //
-// PROPORÇÃO DE IMAGEM — pendência de acervo, não de código. As artes em
-// public/ são 1:1 (500×500) e o card é 4:5 (estetica.md §8). Os campos w/h
-// declaram 500×500 porque descrevem o arquivo real; declarar 4:5 num arquivo
-// quadrado distorce a imagem e estoura o CLS, que o §10 exige abaixo de 0,05.
+// PROPORÇÃO DE IMAGEM — pendência de acervo PARCIALMENTE RESOLVIDA. Os
+// packshots de catálogo em public/ são 1:1 (500×500) e o card é 4:5
+// (estetica.md §8), então `object-cover` recorta o quadrado. As fotos de
+// estúdio (`imagemEstudio`, hoje nas três linhas principais) já nascem em 4:5
+// e entram no card sem recorte nenhum. Os campos w/h declaram sempre a medida
+// do ARQUIVO REAL, nunca a da caixa: declarar 4:5 num arquivo quadrado
+// distorce a imagem e estoura o CLS, que o §10 exige abaixo de 0,05.
+// `produtos.test.ts` confere arquivo por arquivo.
 
 import bruto from "../../../data/catalogo-canastra.json";
 import editorialTraduzido from "../../../data/catalogo-canastra.i18n.json";
@@ -165,8 +169,53 @@ function alt(
  */
 const EMBALAGEM_PT = new Map(bruto.linhas.map((l) => [l.slug, l.embalagem]));
 
+/**
+ * O TAMANHO REAL DE CADA ARTE EM public/, por caminho — a caixa de layout que
+ * o `next/image` reserva antes de o arquivo chegar.
+ *
+ * Estava chumbado em 500×500 dentro de `monta()`, o que era verdade enquanto
+ * TODA arte do acervo era um packshot quadrado. Deixou de ser quando as fotos
+ * de estúdio entraram em 4:5: um w/h errado aqui não quebra build nem tipo —
+ * só distorce a imagem e estoura o CLS que o §10 exige abaixo de 0,05.
+ *
+ * Quem guarda a verdade é o arquivo, e quem cobra é `produtos.test.ts`, que
+ * abre cada um em public/ e compara. Por isso o mapa pode ter fallback: uma
+ * entrada esquecida cai no quadrado e o teste falha com o nome do arquivo.
+ */
+const DIMENSAO_DA_ARTE: Record<string, { w: number; h: number }> = {
+  "/pacote-classico.jpg": { w: 1000, h: 1241 },
+  "/pacote-suave.jpg": { w: 825, h: 1024 },
+  "/pacote-canela.jpg": { w: 1000, h: 1241 },
+};
+
+/** Os packshots de catálogo do acervo são todos 500×500. */
+const ARTE_QUADRADA = { w: 500, h: 500 };
+
+const dimensaoDe = (src: string) => DIMENSAO_DA_ARTE[src] ?? ARTE_QUADRADA;
+
 function monta(linha: LinhaBruta): Lote {
   const pontoTorra = linha.pontoTorra as Lote["pontoTorra"];
+
+  /**
+   * A FOTO QUE O CARD REVELA NO HOVER — e desde agora ela é outra imagem.
+   *
+   * `fotos.sabor` e `fotos.pacote` eram o MESMO arquivo em toda linha: o §8
+   * pede um ingrediente da nota de degustação para o repouso, o acervo não
+   * tinha, e o packshot cobria os dois papéis. O crossfade do `<CardCafe>`
+   * existia e não aparecia, porque cruzava uma imagem com ela mesma.
+   *
+   * As três linhas principais ganharam a segunda foto do pacote — estúdio,
+   * fundo de cor, 4:5 — e é ela que entra aqui. Onde o acervo ainda não
+   * alcança (Microlote, Néctar), `imagemEstudio` não existe e o papel cai no
+   * packshot: o card fica exatamente como estava, sem hover visível, em vez de
+   * ficar sem imagem.
+   *
+   * `sabor` continua sendo o packshot em TODA linha, e continua sendo
+   * fallback: é a arte canônica — a que vai para a miniatura da sacola e para
+   * o card em repouso — e o ingrediente do §8 segue como pendência de acervo.
+   */
+  const doPacote =
+    ("imagemEstudio" in linha ? linha.imagemEstudio : null) ?? linha.imagem;
 
   return {
     slug: linha.slug,
@@ -206,19 +255,17 @@ function monta(linha: LinhaBruta): Lote {
     },
     fotos: {
       // FALLBACK: falta a foto de sabor — estetica.md §8 pede o ingrediente da
-      // nota de degustação, não o pacote. Enquanto a produção não acontece, as
-      // duas imagens são a mesma e o crossfade do card não aparece.
+      // nota de degustação, não o pacote. Enquanto a produção não acontece, o
+      // repouso do card é o packshot de catálogo.
       sabor: {
         src: linha.imagem,
         alt: alt("sabor", linha.embalagem, linha.nome, LOCALE_PADRAO),
-        w: 500,
-        h: 500,
+        ...dimensaoDe(linha.imagem),
       },
       pacote: {
-        src: linha.imagem,
+        src: doPacote,
         alt: alt("pacote", linha.embalagem, linha.nome, LOCALE_PADRAO),
-        w: 500,
-        h: 500,
+        ...dimensaoDe(doPacote),
       },
     },
     variantes: variantesDa(linha),
@@ -462,9 +509,7 @@ export const KITS_DA_LOJA: Kit[] = KITS.map((p) => ({
   rotuloChave: p.rotuloChave,
   formato: p.formato as Formato,
   linha: p.linha as Linha,
-  imagem:
-    bruto.linhas.find((l) => l.slug === p.linha)?.imagem ??
-    "/logo-canastra.png",
+  imagem: arteDaLinha(p.linha),
   preco: p.precoCentavos,
   estoque: p.estoque,
   pacotes: p.pacotes,
@@ -492,9 +537,48 @@ export type ProdutoDoCatalogo = ProdutoBruto & {
 export const PRODUTOS: ProdutoDoCatalogo[] =
   bruto.produtos as ProdutoDoCatalogo[];
 
+/**
+ * O PACKSHOT DE CATÁLOGO DE UMA LINHA — pacote de frente, fundo branco.
+ *
+ * É a arte CANÔNICA da linha, e é dela que dependem as superfícies em que a
+ * imagem precisa ser lida pequena e sem dúvida: a miniatura da sacola, o card
+ * em repouso, o card de kit. A foto de estúdio é a outra ponta — bonita,
+ * escura, feita para ocupar a tela inteira do card — e num quadrado de 64 px o
+ * pacote preto sobre fundo preto seria um retângulo preto.
+ *
+ * Existe como função porque três superfícies precisam da MESMA resposta e
+ * chegavam a ela por caminhos diferentes: `imagemDoProduto` e os kits repetiam
+ * o `find` no JSON, e o `PainelCompra` usava `fotos.pacote.src` — que era o
+ * mesmo arquivo por coincidência, e deixou de ser no dia em que aquele papel
+ * virou a foto de estúdio. O sintoma seria o mesmo SKU aparecendo na sacola
+ * com fotos diferentes conforme a tela em que a pessoa clicou.
+ */
+export function arteDaLinha(slug: string): string {
+  return (
+    bruto.linhas.find((l) => l.slug === slug)?.imagem ?? "/logo-canastra.png"
+  );
+}
+
+/**
+ * A segunda foto do pacote, quando o acervo tem uma — o hover do card.
+ *
+ * `undefined` nas linhas que ainda não foram fotografadas, e quem chama trata
+ * a ausência apagando o crossfade em vez de inventar uma imagem. Ver o
+ * comentário de `doPacote` em `monta()`.
+ */
+export function fotoDeEstudioDaLinha(slug: string): string | undefined {
+  const linha = bruto.linhas.find((l) => l.slug === slug);
+  return linha && "imagemEstudio" in linha ? linha.imagemEstudio : undefined;
+}
+
 /** A arte da linha a que um SKU pertence — os SKUs não têm foto própria. */
 export function imagemDoProduto(p: ProdutoDoCatalogo): string {
-  return (
-    bruto.linhas.find((l) => l.slug === p.linha)?.imagem ?? "/logo-canastra.png"
-  );
+  return arteDaLinha(p.linha);
+}
+
+/** A foto de hover da linha a que um SKU pertence. Ver `arteDaLinha`. */
+export function imagemEstudioDoProduto(
+  p: ProdutoDoCatalogo,
+): string | undefined {
+  return fotoDeEstudioDaLinha(p.linha);
 }

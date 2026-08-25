@@ -4,6 +4,7 @@ import {
   LOTES,
   PRODUTOS,
   imagemDoProduto,
+  imagemEstudioDoProduto,
   type ProdutoDoCatalogo,
 } from "./produtos";
 import {
@@ -338,6 +339,7 @@ function comoVendavel(p: ProdutoDoCatalogo): ProdutoVendavel {
     rotuloChave: p.rotuloChave,
     nome: p.nome,
     imagem: imagemDoProduto(p),
+    imagemEstudio: imagemEstudioDoProduto(p),
     preco: p.precoCentavos,
     estoque: p.estoque,
   };

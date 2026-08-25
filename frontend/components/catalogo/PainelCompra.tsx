@@ -9,6 +9,7 @@ import {
   formatarPreco,
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
+import { arteDaLinha } from "@/lib/catalogo/produtos";
 import { Botao, BotaoLink } from "@/components/ui/Botao";
 // Só o nome da variável CSS, não o componente: é o contrato de quem manda na
 // base da janela. Ver o comentário longo em BannerCookies.tsx.
@@ -179,7 +180,14 @@ export function PainelCompra({
         name: `${lote.nome} — ${variante.rotuloEmbalagem}`,
         price: variante.preco / 100,
         quantity: quantidade,
-        image: lote.fotos.pacote.src,
+        // A ARTE DE CATÁLOGO, não `fotos.pacote`: aquele papel passou a ser a
+        // foto de estúdio quando a segunda foto do pacote entrou no acervo, e
+        // a miniatura da sacola tem uns 64 px — o pacote preto sobre fundo
+        // preto viraria um quadrado preto. É também a mesma imagem que o
+        // `<CardProduto>` grava ao adicionar da home; sem isto, o mesmo SKU
+        // apareceria no carrinho com duas fotos diferentes conforme a tela em
+        // que a pessoa clicou.
+        image: arteDaLinha(lote.linha),
         size: variante.rotuloEmbalagem,
         // EM PORTUGUÊS, SEMPRE, e não no idioma da página: a sacola é pt-BR
         // por decisão (spec §1) e este rótulo é dado GRAVADO — ele entra na
