@@ -68,7 +68,8 @@ Edite. Em produção **estes valores mudam em relação ao example**:
 | `EMAIL_PASS2` | a API key do Resend (§9.2) |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` | e-mail real + senha gerada (`openssl rand -base64 24`). Guarde a senha: é a conta do painel |
 | `LOJA_URL` | `https://loja.exemplo.com.br` |
-| `ZIPCODE_ORIGIN`, `MELHOR_ENVIO_TOKEN` | CEP de despacho e token da Melhor Envio |
+| `ZIPCODE_ORIGIN` | CEP de despacho — **38402330**, o mesmo endereço cadastrado na conta da Melhor Envio |
+| `MELHOR_ENVIO_CLIENT_ID`, `MELHOR_ENVIO_CLIENT_SECRET`, `MELHOR_ENVIO_REFRESH_TOKEN` | credenciais da Melhor Envio — exigem uma autorização no navegador: `docs/melhor-envio.md` |
 
 Sem as obrigatórias a API **recusa subir** e diz quais faltam — isso é desenho,
 não defeito (`backend/src/config/ambiente.js`).
@@ -372,9 +373,19 @@ no painel do Supabase — pode ser o mesmo Resend, mas são dois lugares.
 
 ### 9.3 Melhor Envio
 
-Token de produção em `MELHOR_ENVIO_TOKEN`, CEP de despacho em
-`ZIPCODE_ORIGIN`. Sem eles a cotação de frete falha — o checkout mostra o
-erro, mas teste antes do primeiro cliente (checklist, §11).
+**Runbook completo: `docs/melhor-envio.md`.** O resumo, porque a armadilha é
+cara: não basta ter `client_id` e `client_secret`. As rotas `/api/v2/me/*`
+exigem token de **usuário**, e `grant_type=client_credentials` devolve 200 com
+um token de **aplicação** que leva 401 na cotação — mesmo com o escopo certo.
+É preciso autorizar uma vez no navegador e trocar o `code` por um
+`refresh_token`, que vai em `MELHOR_ENVIO_REFRESH_TOKEN` como semente.
+
+CEP de despacho em `ZIPCODE_ORIGIN`: **38402330**, e ele precisa ser o mesmo
+endereço de origem cadastrado na conta — cotar de um CEP e postar de outro
+devolve preço errado sem erro nenhum aparecer.
+
+Sem isso a cotação de frete falha — o checkout mostra o erro, mas teste antes
+do primeiro cliente (checklist, §11).
 
 ## 10. Backup — antes do primeiro cliente, não depois
 

@@ -55,7 +55,7 @@ de credencial de verdade.
 | `MP_WEBHOOK_SECRET` | Mercado Pago → Webhooks | **nenhum pedido sai de "pendente"** |
 | `WEBHOOK_URL` | seu domínio público, https | o MP não consegue avisar nada |
 | `EMAIL_PASS2` + `EMAIL_DOMINIO` | Resend, com domínio verificado | nenhum e-mail é entregue |
-| `MELHOR_ENVIO_TOKEN`, `ZIPCODE_ORIGIN` | Melhor Envio | o checkout recusa fechar pedido |
+| `MELHOR_ENVIO_CLIENT_ID`/`CLIENT_SECRET`/`REFRESH_TOKEN`, `ZIPCODE_ORIGIN` | Melhor Envio — a semente do refresh token sai de uma autorização no navegador, feita uma vez (`docs/melhor-envio.md`) | o checkout recusa fechar pedido |
 
 ### Opcionais — cada uma liga um recurso
 
