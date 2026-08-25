@@ -895,9 +895,23 @@ CREATE INDEX pedidos_sem_etiqueta_idx
   ON canastra.pedidos (criado_em DESC)
   WHERE me_order_id IS NULL;
 
-INSERT INTO canastra.migracoes (versao) VALUES ('0017_melhor_envio')
-  ON CONFLICT DO NOTHING;
+-- FIM. Nao insira em `canastra.migracoes` aqui.
 ```
+
+> **O rascunho original deste plano terminava com um `INSERT INTO
+> canastra.migracoes`. Isso é um bug, e teria quebrado toda instalação limpa.**
+>
+> Nenhuma migração de 0001 a 0016 faz isso. Quem grava a linha de versão é o
+> próprio `db/migrar.js`, na mesma transação, logo depois de rodar o arquivo. Uma
+> migração que também inserisse colidiria na chave primária (`23505`) em toda
+> aplicação nova.
+>
+> O `INSERT ... ON CONFLICT (versao) DO NOTHING` existe **só no arquivo gerado**
+> (`gerar-instalacao.js` o acrescenta por migração), porque aquele script é
+> plano e não tem runner nenhum o conduzindo. Lugar certo, arquivo errado.
+>
+> Achado ao executar a tarefa, por leitura das 16 migrações existentes em vez de
+> confiança no rascunho.
 
 - [ ] **Step 4: Rodar e ver passar**
 
