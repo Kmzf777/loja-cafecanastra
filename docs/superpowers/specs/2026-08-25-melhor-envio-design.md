@@ -206,13 +206,40 @@ a renovação é automática e o token vive no banco.
 
 ### Autorização: manual, sem rota pública
 
-`redirect_uri = https://loja.canastrainteligencia.com/` — a própria home, que
-ignora o `?code=`. O `code` é copiado da barra de endereço e trocado por `curl`,
-uma vez.
+O `code` é copiado da barra de endereço e trocado por `curl`, uma vez. Rejeitada
+a **implementação** da rota de callback: é uma rota pública que aceita um `code`
+e emite um token, criada numa loja em produção para um botão usado uma vez por
+ano. `docs/bling.md` já documenta o caminho manual e ele funciona.
 
-Rejeitada a rota `/api/melhor-envio/callback`: é uma rota pública que aceita um
-`code` e emite um token, criada numa loja em produção para um botão usado uma vez
-por ano. `docs/bling.md` já documenta o caminho manual e ele funciona.
+O **endereço** do callback, porém, é registrado desde já como se a rota fosse
+existir:
+
+| Ambiente | `redirect_uri` |
+|---|---|
+| Sandbox | `https://loja.canastrainteligencia.com/api/melhor-envio/callback-sandbox` |
+| Produção | `https://loja.canastrainteligencia.com/api/melhor-envio/callback` |
+
+Três razões, na ordem em que importam:
+
+1. **`/api/*` não passa pelo rewrite de idioma** (`middleware.ts:73`). A home
+   passa. O rewrite preserva a query string — é rewrite, não redirect —, mas
+   depender disso é amarrar o OAuth a um detalhe do i18n que uma refatoração
+   futura muda sem lembrar que existe um `?code=` em jogo.
+2. **Se um dia a rota for construída, o endereço já está cadastrado.** Trocar o
+   `redirect_uri` depois obriga a mexer no aplicativo e reautorizar.
+3. **Sandbox e produção têm caminhos diferentes de propósito:** um `code` no log
+   é identificável, e um código de sandbox nunca é aceito por engano pela rota de
+   produção.
+
+Hoje o navegador cai num **404 do backend, e isso é o esperado** — o Traefik tira
+o `/api` (`stack.swarm.yml:96`), o Express recebe `/melhor-envio/callback` e não
+conhece a rota. O que importa está na barra de endereços.
+
+### Endereço do webhook
+
+`https://loja.canastrainteligencia.com/api/webhook/melhor-envio` — de fora, com
+`/api`; dentro do Express, `POST /webhook/melhor-envio`, porque o prefixo é
+inventado e removido pelo Traefik.
 
 ### Escopos — os dez, e só eles
 
