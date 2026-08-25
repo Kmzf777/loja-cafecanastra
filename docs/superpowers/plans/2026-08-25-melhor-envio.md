@@ -22,6 +22,22 @@ Postgres embarcado — é ruído de ambiente, não regressão.
 cd backend && node --test test/*.test.js --test-concurrency=1
 ```
 
+**Isto vale para DUAS suítes rodando ao mesmo tempo, não só para o flag.** Medido
+durante a execução deste plano: uma segunda suíte disparada em paralelo com a
+primeira levou as duas de 1 falha para 8. Nenhuma das 7 extras era regressão.
+Quem executa uma tarefa não roda a suíte enquanto outro agente roda a dele.
+
+### O baseline medido em 25/08/2026, no commit `f040695`
+
+```
+# tests 419   # pass 410   # fail 1   # skipped 1
+```
+
+A **única** falha é `o arquivo no repositorio esta em dia com o gerador`, em
+`test/instalacao.test.js`. É ruído de CRLF no Windows — falta um `.gitattributes`
+no projeto —, não desatualização do arquivo. Se a sua execução mostrar essa e só
+essa, o baseline está bom. Qualquer outra falha é sua.
+
 **Nenhuma tarefa da Fase 1 precisa de credencial.** As Fases 2 a 4 são escritas e
 testadas inteiras contra mocks e uma porta fechada (`http://127.0.0.1:9`) — o
 molde já existe em `test/f4_status_e_frete.test.js:53`. Credencial de sandbox só
@@ -822,10 +838,31 @@ cd backend && node --test test/f8_melhor_envio_token.test.js --test-concurrency=
 Esperado: os três testes de migração passam. O `require` do
 `melhorEnvioClient.js` ainda falha — normal, é a Task 7.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Regenerar `instalacao-completa.sql` — NÃO PULE**
 
 ```bash
-git add backend/db/migrations/0017_melhor_envio.sql backend/test/f8_melhor_envio_token.test.js
+node backend/db/gerar-instalacao.js
+```
+
+`backend/db/instalacao-completa.sql` é o arquivo que se cola no editor SQL do
+Supabase para levantar a loja inteira; ele é **gerado** a partir de
+`db/migrations/*.sql` e `db/seed.js`. Migração nova sem regenerar significa que o
+banco instalado pelo SQL colável fica diferente do instalado pelo runner — e a
+divergência não levanta erro, só aparece quando alguém compara os dois.
+
+`backend/test/instalacao.test.js` vigia isso: sobe dois Postgres, aplica o runner
+num e o arquivo colável no outro, e compara. Pular este passo faz o teste
+`"o arquivo no repositorio esta em dia com o gerador"` falhar.
+
+> **No Windows este teste já falha por CRLF, antes de qualquer mudança.** É
+> ruído de plataforma conhecido (falta um `.gitattributes` no projeto), não
+> desatualização. Se ele for a ÚNICA falha da suíte, o baseline está bom. Depois
+> de regenerar, confirme que a falha continua sendo a mesma e só ela.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/db/migrations/0017_melhor_envio.sql backend/db/instalacao-completa.sql backend/test/f8_melhor_envio_token.test.js
 git commit -m "feat(melhor-envio): a migracao do token e das colunas de etiqueta"
 ```
 
