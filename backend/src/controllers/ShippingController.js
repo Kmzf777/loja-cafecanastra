@@ -104,8 +104,27 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
     quantity: Number(item.quantity),
   }));
 
+  /**
+   * A origem passa pela MESMA limpeza do destino, e nao por simetria estetica.
+   *
+   * O destino sempre chegou limpo — vem do navegador, que manda digito — entao
+   * a assimetria nunca doeu. Mas `ZIPCODE_ORIGIN` vem do `.env`, escrito a mao
+   * por uma pessoa, e a forma natural de escrever um CEP e "38.402-330". Basta
+   * um ponto ali para a Melhor Envio recusar a cotacao INTEIRA.
+   *
+   * O modo de falha e mudo do lado errado: a loja nao mostra "CEP de origem
+   * invalido", ela simplesmente para de oferecer frete dos Correios — e o log
+   * so ecoa o que a API respondeu, sem apontar o `.env` como culpado. Custa uma
+   * linha fechar essa porta; custa uma tarde descobrir por que ela estava
+   * aberta.
+   */
+  const cepDeOrigem = String(process.env.ZIPCODE_ORIGIN || "").replace(
+    /\D/g,
+    "",
+  );
+
   const payload = {
-    from: { postal_code: process.env.ZIPCODE_ORIGIN },
+    from: { postal_code: cepDeOrigem },
     to: { postal_code: cleanZip },
     products: productsPayload,
     options: { receipt: false, own_hand: false },
