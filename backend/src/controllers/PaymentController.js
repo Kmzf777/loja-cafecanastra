@@ -24,7 +24,9 @@ const { precoComPromocao, somarCentavos } = require("../utils/preco");
 // `garantirCpf` morou AQUI dentro ate a revisao transversal da F7. Foi para
 // utils/cpf.js quando a adesao do Clube virou o segundo chamador — o
 // comportamento e o mesmo, linha por linha; o contrato esta no proprio modulo.
-const { garantirCpf } = require("../utils/cpf");
+// `garantirCpfENome` e a irma que le CPF e nome na MESMA consulta — e o que
+// este controller usa, porque tambem precisa do nome para o `payer` do MP.
+const { garantirCpfENome } = require("../utils/cpf");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const cuponsRepository = require("../repositories/cuponsRepository");
 const promotionsRepo = new PromotionsRepository();
@@ -442,17 +444,20 @@ class PaymentController {
       /**
        * O nome do titular, para o `payer` que vai ao antifraude.
        *
-       * CONSULTA PRÓPRIA, e não um campo a mais no retorno de `garantirCpf`:
-       * o contrato daquela função (`Promise<string | null>`) está documentado
-       * por extenso em utils/cpf.js e é COMPARTILHADO com a adesão do Clube.
-       * Alargar o retorno para servir a este caso mudaria o contrato dos dois
-       * chamadores por causa de um campo — exatamente o que o comentário de lá
-       * avisa para não fazer. O custo é uma ida a mais ao banco, fora da
-       * transação e antes da cobrança.
+       * `garantirCpfENome`, não `garantirCpf`: as duas leem a MESMA linha de
+       * `canastra.clientes`, no mesmo request — antes desta função existir,
+       * eram duas idas ao banco (uma dentro de `garantirCpf`, só pelo CPF, e
+       * outra aqui, só pelo nome) para a mesma linha, fora de transação. Uma
+       * consulta com as duas colunas resolve os dois. `garantirCpf` continua
+       * existindo, com o contrato INALTERADO que a adesão do Clube usa; o
+       * porquê da divisão está documentado por extenso em utils/cpf.js.
        */
       let nomeDoCliente = "";
       if (userId) {
-        const cpf = await garantirCpf(userId, formData?.payer?.identification);
+        const { cpf, nome } = await garantirCpfENome(
+          userId,
+          formData?.payer?.identification,
+        );
         if (!cpf) {
           return res.status(400).json({
             error: "CPF_MISSING",
@@ -460,11 +465,7 @@ class PaymentController {
               "É necessário informar o CPF para prosseguir com a entrega.",
           });
         }
-        const { rows: linhasDoCliente } = await pool.query(
-          "SELECT nome FROM canastra.clientes WHERE user_id = $1::uuid",
-          [userId],
-        );
-        nomeDoCliente = String(linhasDoCliente[0]?.nome || "").trim();
+        nomeDoCliente = String(nome || "").trim();
       }
 
       if (!Array.isArray(items) || items.length === 0) {
