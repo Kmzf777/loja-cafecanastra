@@ -14,6 +14,7 @@ import { validarCupom, type CupomAplicado } from "@/lib/sacola/cupom";
 import { descartarChave } from "@/lib/sacola/idempotencia";
 import {
   IDS_CARTAO,
+  carregarSecurityMp,
   chavePublicaMp,
   montarFormularioDeCartao,
   type DadosDoCartao,
@@ -157,6 +158,15 @@ export default function PaginaCheckout() {
   const temCartao = chavePublicaMp() !== null;
   const [metodo, setMetodo] = useState<"pix" | "cartao">("pix");
   const [cartaoPronto, setCartaoPronto] = useState(false);
+
+  /**
+   * O fingerprint precisa ter tempo de coletar antes do pagamento, então
+   * carrega na montagem da página — não no submit. Não depende de
+   * NEXT_PUBLIC_MP_PUBLIC_KEY: vale para Pix também.
+   */
+  useEffect(() => {
+    void carregarSecurityMp();
+  }, []);
 
   // Comprar exige conta: o pedido precisa de dono. Quem não está logado vai
   // para o login e volta.

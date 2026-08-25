@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _zerarIdempotencia } from "./idempotencia";
 import {
   buscarPrecosAtuais,
@@ -326,5 +326,34 @@ describe("cotarFrete", () => {
     const f = fetchComResposta([]);
     await cotarFrete("37928-000", itens, undefined, f);
     expect(corpoEnviado(f)).not.toHaveProperty("cupom");
+  });
+});
+
+describe("device id do Mercado Pago", () => {
+  // Ambiente node (vitest.config.ts): não há `window` global de verdade, então
+  // o teste dubla exatamente o mesmo jeito de lib/analytics.test.ts — planta
+  // `globalThis.window` para o `typeof window` de deviceIdDoNavegador() achar
+  // objeto em vez de "undefined", e desfaz depois para não vazar entre testes.
+  const global_ = globalThis as unknown as {
+    window?: { MP_DEVICE_SESSION_ID?: string };
+  };
+
+  afterEach(() => {
+    delete global_.window;
+  });
+
+  it("manda o deviceId no corpo quando o security.js populou a sessão", async () => {
+    global_.window = { MP_DEVICE_SESSION_ID: "dev-sessao-123" };
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("tok-sessao", dadosBase, f);
+    expect(corpoEnviado(f).deviceId).toBe("dev-sessao-123");
+  });
+
+  it("sem security.js o corpo não traz deviceId, e o pagamento segue", async () => {
+    // Bloqueador de script é cenário real. Perder a venda por causa do
+    // fingerprint seria trocar aprovação por conversão.
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("tok-sessao", dadosBase, f);
+    expect(corpoEnviado(f)).not.toHaveProperty("deviceId");
   });
 });

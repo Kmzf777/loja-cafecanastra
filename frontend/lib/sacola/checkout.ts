@@ -3,6 +3,7 @@
 import { API_BASE } from "../api-base";
 import type { ItemDaSacola } from "./sacola";
 import type { DadosDoCartao } from "./cartao";
+import { deviceIdDoNavegador } from "./cartao";
 import { assinaturaDoPedido, chaveDeIdempotencia } from "./idempotencia";
 
 /**
@@ -277,6 +278,7 @@ function chaveDestePedido(dados: DadosDoPedido): string {
  * não tinha conferência nenhuma.
  */
 function corpoComum(dados: DadosDoPedido) {
+  const deviceId = deviceIdDoNavegador();
   return {
     items: dados.itens.map((i) => ({
       product_id: i.product_id,
@@ -289,6 +291,10 @@ function corpoComum(dados: DadosDoPedido) {
     shippingMethod: dados.frete.name,
     subtotalCentavos: subtotalDosItensCentavos(dados.itens),
     ...(dados.cupom ? { cupom: dados.cupom } : {}),
+    // Fingerprint do Mercado Pago. Vale para Pix e cartão — o motor de risco
+    // lê o device nos dois. Ausente quando o security.js não carregou, e a
+    // ausência é tratada como normal em todo o caminho.
+    ...(deviceId ? { deviceId } : {}),
   };
 }
 

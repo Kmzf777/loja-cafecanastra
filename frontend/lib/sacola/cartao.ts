@@ -92,6 +92,54 @@ export function carregarSdkMp(): Promise<ConstrutorMp> {
   return sdkCarregando;
 }
 
+/** Onde o security.js do Mercado Pago publica o identificador da sessão. */
+export const URL_SECURITY_MP = "https://www.mercadopago.com/v2/security.js";
+
+/**
+ * Carrega o script de fingerprint do Mercado Pago.
+ *
+ * SEPARADO DO SDK DE PROPÓSITO: o SDK v2 tokeniza o cartão e só entra quando
+ * há `NEXT_PUBLIC_MP_PUBLIC_KEY`; este aqui não depende de chave nenhuma e
+ * vale também para Pix, porque o motor de risco lê o device em qualquer meio
+ * de pagamento.
+ *
+ * NÃO REJEITA NUNCA. Bloqueador de script é cenário corriqueiro, e um
+ * checkout que morresse por não carregar o fingerprint trocaria aprovação por
+ * conversão. Falhou, segue sem — `deviceIdDoNavegador()` devolve string vazia
+ * e o corpo do pagamento sai sem o campo.
+ *
+ * A CSP já libera www.mercadopago.com em script-src (next.config.mjs).
+ */
+let securityCarregando: Promise<void> | null = null;
+
+export function carregarSecurityMp(): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (securityCarregando) return securityCarregando;
+
+  securityCarregando = new Promise<void>((resolve) => {
+    const script = document.createElement("script");
+    script.src = URL_SECURITY_MP;
+    script.setAttribute("view", "checkout");
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      script.remove();
+      resolve();
+    };
+    document.head.appendChild(script);
+  });
+  return securityCarregando;
+}
+
+/** O identificador da sessão, ou string vazia se o script não carregou. */
+export function deviceIdDoNavegador(): string {
+  if (typeof window === "undefined") return "";
+  return (
+    (window as unknown as { MP_DEVICE_SESSION_ID?: string })
+      .MP_DEVICE_SESSION_ID || ""
+  );
+}
+
 /**
  * Ids dos elementos que o CardForm controla. Constante COMPARTILHADA com a
  * página de checkout: o SDK acha os campos por id, e um id digitado errado nos
