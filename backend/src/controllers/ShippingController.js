@@ -267,17 +267,42 @@ async function montarItensDaCotacao(items) {
   const ids = items.map((i) => i.product_id);
   const porId = await cotacaoRepository.lerParaCotacao(ids);
 
-  const promocoes = await promotionsRepo
-    .findActivePromotionsForCheckout()
-    .catch((erro) => {
-      // Promoção indisponível NÃO derruba a cotação: sem ela o preço é o de
-      // catálogo, que é mais ALTO — o lado seguro do erro para o frete grátis.
-      console.error(
-        "Cotação: promoções indisponíveis, usando preço de catálogo:",
-        erro.message,
-      );
-      return [];
-    });
+  /**
+   * SEM `.catch` AQUI, E A VERSÃO ANTERIOR TINHA UM — com a justificativa
+   * errada: "sem promoção vale o preço de catálogo, que é mais ALTO, o lado
+   * seguro do erro". Não é o lado seguro. É o 409 que esta correção inteira
+   * existe para matar, entrando por outra porta.
+   *
+   * A CONTA, com o piso do frete grátis em R$ 100,00: as promoções falham na
+   * cotação → preço de catálogo R$ 109,90 → subtotal 10990 ≥ piso → toda opção
+   * sai zerada e `gratis: true`, e a vitrine promete frete grátis. Trinta
+   * segundos depois, no checkout, as promoções respondem → preço promocional
+   * R$ 87,92 → subtotal 8792 < piso → o PAC volta a custar R$ 24,90.
+   * `conferirFrete` casa nome E preço; o par não bate; o cliente leva 409 na
+   * hora de pagar, depois de ter lido "frete grátis" na tela.
+   *
+   * E NÃO EXISTE LADO SEGURO PARA ONDE CAIR — é isto que derruba o argumento
+   * do "preço mais alto". O casamento do checkout é EXATO, então prometer de
+   * MENOS estoura 409 exatamente igual a prometer de mais. O que precisa ser
+   * verdade não é "errar para o lado bom": é NÃO DIVERGIR. Com as promoções
+   * mudas, a única forma de não divergir é não responder.
+   *
+   * POR QUE ISTO NÃO CONTRADIZ `freteGratisMinimoCentavos` (bem acima), que
+   * TEM catch e assume o mesmo risco de 409 de olhos abertos: lá o catch
+   * compra uma coisa que aqui não existe — a cotação da vitrine continuar de
+   * pé com o BANCO fora do ar. Aqui o banco acabou de responder: o
+   * `lerParaCotacao` deste mesmo carrinho está na linha de cima. Não há
+   * vitrine a salvar, só um número que o checkout não vai confirmar.
+   *
+   * O checkout também não protege esta leitura (`PaymentController`): lá uma
+   * falha de promoção já é 500. Um catch só deste lado deixaria os dois
+   * assimétricos de propósito, que é a definição do problema.
+   *
+   * Cotação que falha é um aviso na tela, com botão de tentar de novo. Cotação
+   * errada é uma venda perdida no último passo, e com cara de propaganda
+   * enganosa.
+   */
+  const promocoes = await promotionsRepo.findActivePromotionsForCheckout();
 
   return items.map((item) => {
     const produto = porId.get(String(item.product_id));

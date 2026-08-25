@@ -575,3 +575,116 @@ test("uuid válido de produto morto também é 400 na rota, não 500", async () 
   assert.equal(res.codigo, 400);
   assert.match(res.corpo.error, /não existe/i);
 });
+
+/* --------------------------------------------------------------------------
+ * A PROMOÇÃO, que é a razão de o preço vir do banco
+ *
+ * A docstring de `montarItensDaCotacao` diz que o preço é relido por causa da
+ * promoção; até aqui nenhum teste tinha promoção ATIVA, então `precoComPromocao`
+ * só era exercitada com lista vazia — a justificativa da mudança não tinha
+ * cobertura nenhuma.
+ * -------------------------------------------------------------------------- */
+
+/** Um produto com promoção de `percent` só para ele. Devolve o produto_id. */
+async function produtoComPromocao(nome, preco, percentual) {
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.produtos (nome, preco, peso, largura, altura, comprimento)
+     VALUES ($1, $2, 1.000, 24, 10, 32)
+     RETURNING produto_id`,
+    [nome, preco],
+  );
+  const id = rows[0].produto_id;
+  // `aplica_a = 'product'` de propósito: uma promoção 'all' vazaria para os
+  // outros testes deste arquivo, que rodam no mesmo banco.
+  await bd.pool.query(
+    `INSERT INTO canastra.promocoes
+       (titulo, tipo, valor, aplica_a, produto_id, inicio_em, fim_em, ativa)
+     VALUES ($1, 'percent', $2, 'product', $3,
+             now() - interval '1 day', now() + interval '1 day', true)`,
+    [`${percentual}% em ${nome}`, percentual, id],
+  );
+  return id;
+}
+
+test("o preço sai do banco JÁ com a promoção ativa aplicada", async () => {
+  const id = await produtoComPromocao("Pacote em promoção", 109.9, 20);
+
+  // O navegador manda o preço de CATÁLOGO — é o que a vitrine renderiza.
+  const itens = await montarItensDaCotacao([
+    { product_id: id, quantity: 1, price: 109.9 },
+  ]);
+
+  // 109,90 − 20% = 87,92. Nem o número do navegador, nem o do catálogo.
+  assert.equal(itens[0].price, 87.92);
+});
+
+test("promoção fora do ar DERRUBA a cotação em vez de inventar o preço", async () => {
+  /**
+   * Este teste fixa a AUSÊNCIA de um catch, e por isso existe: a versão
+   * anterior degradava para preço de catálogo "porque é mais alto". Preço mais
+   * alto sobe o subtotal, o subtotal cruza o piso, a vitrine promete frete
+   * grátis — e o checkout, com as promoções de volta, recota com preço e
+   * responde 409. Não há lado seguro para cair quando o casamento é exato; só
+   * não divergir é seguro.
+   *
+   * Derrubar a tabela é o jeito honesto de simular a indisponibilidade sem
+   * dublê: quem estoura é a consulta de verdade. O handler traduz isso em 500,
+   * que é o certo — promoção fora do ar É problema da loja, não da sacola.
+   */
+  const id = await produtoComPromocao("Café sem promoções", 79.9, 20);
+
+  await bd.pool.query(
+    "ALTER TABLE canastra.promocoes RENAME TO promocoes_fora_do_ar",
+  );
+  try {
+    await assert.rejects(() =>
+      montarItensDaCotacao([{ product_id: id, quantity: 1, price: 79.9 }]),
+    );
+  } finally {
+    await bd.pool.query(
+      "ALTER TABLE canastra.promocoes_fora_do_ar RENAME TO promocoes",
+    );
+  }
+});
+
+test("cotação pública e recotação do checkout fecham no MESMO par, sem 409", async () => {
+  /**
+   * O TESTE QUE FIXA O PROPÓSITO DESTA CORREÇÃO, e o único que exercita as duas
+   * pontas juntas.
+   *
+   * Os números straddleiam o piso de R$ 149,00 DE PROPÓSITO, senão o teste
+   * passaria sem provar nada:
+   *   - preço de catálogo: 2 × R$ 79,90 = R$ 159,80 ≥ piso → tudo zerado, grátis
+   *   - preço promocional: 2 × R$ 63,92 = R$ 127,84 < piso → Entrega Local R$ 5
+   * Ou seja: se a cotação pública usasse o preço do NAVEGADOR (catálogo), ela
+   * prometeria frete grátis, o checkout recotaria R$ 5, o par nome/preço não
+   * casaria e o cliente levaria 409. É exatamente o bug da F8.
+   *
+   * Quantidade 2, e não 3, porque com 3 a Entrega Local já sai de graça pela
+   * regra local — e aí o zero não distinguiria mais nada.
+   */
+  const id = await produtoComPromocao("Café da fronteira", 79.9, 20);
+  const sacolaDoNavegador = [{ product_id: id, quantity: 2, price: 79.9 }];
+
+  // 1) A vitrine cota pela rota pública, com a sacola crua do navegador.
+  const res = respostaFalsa();
+  await ShippingController.calculate(
+    { body: { zipCode: CEP_LOCAL, items: sacolaDoNavegador } },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+  const escolhida = res.corpo.find((o) => o.name === "Entrega Local");
+  assert.ok(escolhida, "a entrega local deveria cobrir o CEP 350xx");
+  assert.equal(escolhida.price, 5, "o preço promocional não atinge o piso");
+
+  // 2) O checkout monta os itens do banco e reconfere o que o cliente escolheu.
+  const itensDoCheckout = await montarItensDaCotacao(sacolaDoNavegador);
+  const conferido = await conferirFrete({
+    address: { zip_code: CEP_LOCAL },
+    itens: itensDoCheckout,
+    shippingCost: escolhida.price,
+    shippingMethod: escolhida.name,
+  });
+
+  assert.deepEqual(conferido, { valor: 5, metodo: "Entrega Local" });
+});
