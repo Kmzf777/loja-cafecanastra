@@ -94,15 +94,45 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
     });
   }
 
-  const productsPayload = itens.map((item) => ({
-    id: item.product_id,
-    width: item.width ? Number(item.width) : 20,
-    height: item.height ? Number(item.height) : 5,
-    length: item.length ? Number(item.length) : 20,
-    weight: item.weight ? Number(item.weight) : 0.3,
-    insurance_value: Number(item.price),
-    quantity: Number(item.quantity),
-  }));
+  /**
+   * SEM DEFAULT, E ESTA É A CORREÇÃO DA F8.
+   *
+   * Este bloco tinha `item.weight ? Number(item.weight) : 0.3` e três irmãos
+   * para as dimensões. Como o navegador nunca manda esses campos
+   * (`frontend/lib/sacola/checkout.ts` envia product_id, quantity e price),
+   * TODA cotação da vitrine saía com um pacote de 0,3 kg e 20×5×20 — que não é
+   * nenhum produto do catálogo. O checkout recotava com o peso do banco, os
+   * dois números discordavam, e o cliente levava 409 na hora de pagar.
+   *
+   * Recusar é o lado seguro do erro: cotação que falha é um aviso na tela;
+   * cotação errada é uma venda perdida no último passo, sem ninguém saber por
+   * quê. Quem chama é responsável por trazer o pacote do banco
+   * (`cotacaoRepository.lerParaCotacao`).
+   */
+  const productsPayload = itens.map((item) => {
+    const dimensoes = {
+      width: Number(item.width),
+      height: Number(item.height),
+      length: Number(item.length),
+      weight: Number(item.weight),
+    };
+    for (const [campo, valor] of Object.entries(dimensoes)) {
+      if (!Number.isFinite(valor) || valor <= 0) {
+        const erro = new Error(
+          `Item ${item.product_id} sem ${campo}: o peso e as dimensões têm de ` +
+            "vir do banco (cotacaoRepository), nunca do navegador.",
+        );
+        erro.code = "ITEM_SEM_PACOTE";
+        throw erro;
+      }
+    }
+    return {
+      id: item.product_id,
+      ...dimensoes,
+      insurance_value: Number(item.price),
+      quantity: Number(item.quantity),
+    };
+  });
 
   const payload = {
     from: { postal_code: process.env.ZIPCODE_ORIGIN },

@@ -295,6 +295,46 @@ test("com o piso desligado (0), nada é zerado", async () => {
 });
 
 /* --------------------------------------------------------------------------
+ * F8 — item sem pacote é RECUSA, não default
+ *
+ * O default de 0,3 kg e 20×5×20 que morava aqui não era o pacote de nenhum
+ * produto do catálogo (os reais pesam 0,250/0,500/1,000/2,000 kg e medem
+ * 18×7×24 ou 24×10×32). Como o navegador nunca manda peso, TODA cotação da
+ * vitrine saía com esse pacote fantasma, o checkout recotava com o peso do
+ * banco, e o cliente levava 409 na hora de pagar.
+ * -------------------------------------------------------------------------- */
+
+test("cotar item sem peso é erro, não um pacote inventado de 300 g", async () => {
+  await assert.rejects(
+    () =>
+      calcularOpcoesDeFrete({
+        zipCode: CEP_LOCAL,
+        itens: [{ product_id: "x", quantity: 1, price: 39.7 }],
+      }),
+    /peso|dimens/i,
+  );
+});
+
+test("cotar item COM peso segue funcionando", async () => {
+  const opcoes = await calcularOpcoesDeFrete({
+    zipCode: CEP_LOCAL,
+    itens: [
+      {
+        product_id: "x",
+        quantity: 1,
+        price: 39.7,
+        weight: 0.25,
+        width: 18,
+        height: 7,
+        length: 24,
+      },
+    ],
+  });
+  // A porta fechada derruba a cotação externa; sobra a entrega local do 350.
+  assert.ok(opcoes.some((o) => o.name === "Entrega Local"));
+});
+
+/* --------------------------------------------------------------------------
  * O PAREAMENTO método/preço
  *
  * POR QUE casar nome E preço, e não só o preço: o comentário no ponto do
