@@ -107,19 +107,12 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
   }
 
   /**
-   * SEM DEFAULT, E ESTA É A CORREÇÃO DA F8.
+   * SEM DEFAULT: item sem pacote completo é recusa, não um 0,3 kg inventado.
    *
-   * Este bloco tinha `item.weight ? Number(item.weight) : 0.3` e três irmãos
-   * para as dimensões. Como o navegador nunca manda esses campos
-   * (`frontend/lib/sacola/checkout.ts` envia product_id, quantity e price),
-   * TODA cotação da vitrine saía com um pacote de 0,3 kg e 20×5×20 — que não é
-   * nenhum produto do catálogo. O checkout recotava com o peso do banco, os
-   * dois números discordavam, e o cliente levava 409 na hora de pagar.
-   *
-   * Recusar é o lado seguro do erro: cotação que falha é um aviso na tela;
-   * cotação errada é uma venda perdida no último passo, sem ninguém saber por
-   * quê. Quem chama é responsável por trazer o pacote do banco
-   * (`cotacaoRepository.lerParaCotacao`).
+   * Quem chama traz peso e dimensões do banco — `montarItensDaCotacao` na rota
+   * pública, a leitura prévia do `PaymentController` no checkout. Esta função
+   * não tem de onde adivinhar, e adivinhar era o bug (a história completa está
+   * na docstring do `cotacaoRepository`).
    */
   const productsPayload = itens.map((item) => {
     const dimensoes = {
@@ -232,9 +225,14 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
  * Transforma o que o NAVEGADOR mandou no pacote que a transportadora vai levar.
  *
  * Do corpo da requisição sobrevivem dois campos: `product_id` e `quantity`.
- * Todo o resto — peso, dimensões, preço, categoria — vem do banco. É o que faz
- * esta cotação e a recotação do checkout (`conferirFrete`) chegarem ao MESMO
- * número, que era exatamente o que não acontecia antes da F8.
+ * Peso, dimensões e preço saem do banco, e é o que faz esta cotação e a
+ * recotação do checkout (`conferirFrete`) chegarem ao MESMO número — que era
+ * exatamente o que não acontecia antes da F8.
+ *
+ * A `categoria` também é lida, mas NÃO viaja no item devolvido: ela serve aqui
+ * dentro, para `precoComPromocao` decidir se uma promoção de categoria pega
+ * este produto. A transportadora não tem o que fazer com ela, e devolvê-la
+ * daria a impressão de que alguém adiante depende do campo.
  *
  * O PREÇO TAMBÉM VEM DO BANCO, e não é excesso de zelo: o preço entra na
  * decisão de frete grátis (o piso é comparado com o subtotal) e na promoção. O
