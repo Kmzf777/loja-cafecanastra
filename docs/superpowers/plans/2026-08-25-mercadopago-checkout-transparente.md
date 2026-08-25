@@ -806,7 +806,9 @@ Esperado: `# fail 1` — **e a única falha tem de ser o teste 289**, `o arquivo
 cd frontend && npm test
 ```
 
-Esperado: tudo passando. A base era 366/366.
+Esperado: tudo passando. **A base é 869 testes em 69 arquivos**, medida em
+2026-08-25 durante a Task 5. (Uma versão anterior deste plano dizia 366/366 —
+número obsoleto, de uma fase antiga do projeto. Não use aquele.)
 
 - [ ] **Step 3: Build de produção**
 
