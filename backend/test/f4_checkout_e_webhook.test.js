@@ -772,3 +772,34 @@ test("checkout: sem device id a cobrança sai do mesmo jeito", async () => {
     "sem deviceId no corpo, meliSessionId não pode nem existir na chave",
   );
 });
+
+test("checkout: deviceId acima de 128 caracteres não vai ao Mercado Pago, mas a cobrança sai do mesmo jeito", async () => {
+  // Mesmo limite da `chaveDoCliente` (PaymentController.js): acima de 128
+  // caracteres a chave nem entra no payload, em vez de forçar o SDK a
+  // tentar e falhar com uma entrada malformada. Falhar aberto continua
+  // sendo a regra — o fingerprint é uma melhoria de aprovação, nunca um
+  // motivo para travar a cobrança.
+  await reporEstoque();
+
+  const corpo = corpoDeCheckout();
+  corpo.deviceId = "a".repeat(129);
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-device-longo" },
+      body: corpo,
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201, "deviceId longo demais não pode derrubar a cobrança");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      mp.opcoes[mp.opcoes.length - 1] || {},
+      "meliSessionId",
+    ),
+    false,
+    "deviceId acima do limite não pode nem existir na chave",
+  );
+});

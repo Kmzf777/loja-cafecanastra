@@ -956,10 +956,22 @@ class PaymentController {
          * envia como `X-meli-session-id`. CONDICIONAL, e é o ponto todo:
          * bloqueador de script deixa o campo ausente, e nesse caso a
          * cobrança sai sem o header em vez de não sair.
+         *
+         * O LIMITE DE 128, mesmo raciocínio da `chaveDoCliente` lá em cima
+         * (a chave de idempotência que o navegador manda): não é
+         * vulnerabilidade — um CR/LF no valor já estoura dentro do
+         * node-fetch antes de qualquer I/O, e o express.json tampa o corpo
+         * em 256kb bem antes disso — é endurecimento barato que evita
+         * forçar o retry-e-falha do SDK diante de uma entrada malformada.
+         * Acima do limite a chave SOME, o mesmo comportamento de quando o
+         * deviceId simplesmente não vem: falhar aberto é a regra aqui,
+         * igual a um fingerprint ausente.
          */
         const requestOptions = {
           idempotencyKey: chaveIdempotencia,
-          ...(typeof req.body?.deviceId === "string" && req.body.deviceId
+          ...(typeof req.body?.deviceId === "string" &&
+          req.body.deviceId &&
+          req.body.deviceId.length <= 128
             ? { meliSessionId: req.body.deviceId }
             : {}),
         };
