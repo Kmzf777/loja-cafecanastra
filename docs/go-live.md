@@ -93,6 +93,19 @@ detalhados em `producao.md`; a lista curta é:
 - [ ] **Domínio verificado no Resend.** Sem isso nenhum e-mail transacional sai.
 - [ ] **Webhook do Mercado Pago** apontando para
       `https://SEU-DOMINIO/api/webhook/mercadopago` (com o prefixo `/api`).
+- [ ] **UM CARTÃO DE TESTE APROVADO, com credenciais `TEST-`, ANTES das de
+      produção.** Não é zelo: o `statement_descriptor` (`CAFECANASTRA`) é o
+      único campo que a loja manda ao gateway que **falha fechado**. Todo o
+      resto degrada com elegância — sem device id cobra igual, sem
+      `additional_info` cobra igual. Mas conta com restrição de descritor
+      RECUSA o pagamento, e aí não é uma venda que se perde, são todas. A
+      suíte não pega isso: ela exercita um dublê, não o Mercado Pago.
+      Titular `APRO`, Mastercard `5031 4332 1540 6351`, CVV `123`, `11/30`.
+- [ ] **`security.js` carregando no checkout.** Abra o console do navegador na
+      página e confira que `MP_DEVICE_SESSION_ID` existe. Se não existir, a
+      cobrança sai do mesmo jeito — de propósito —, mas a taxa de aprovação
+      de cartão fica menor e a Qualidade da integração marca o item como não
+      atendido.
 
 Depois de tudo: faça **um cadastro completo e uma compra de R$ 1** em um
 navegador limpo. É a única prova que vale.
