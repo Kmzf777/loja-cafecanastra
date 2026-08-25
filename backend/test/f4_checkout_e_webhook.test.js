@@ -85,6 +85,23 @@ async function statusDoPedido(pagamentoMp) {
   return rows.length ? rows[0].status : null;
 }
 
+/**
+ * Repõe o estoque do produto de teste para `qtd` unidades.
+ *
+ * O produto semeia com 10 e cada checkout de sucesso consome 2; os testes que
+ * só querem verificar o CORPO mandado ao Mercado Pago (não o estoque em si)
+ * ficam sem headroom depois de alguns checkouts de sucesso rodarem antes
+ * deles no arquivo. NÃO virou `beforeEach`: alguns testes aqui testam
+ * justamente o ESGOTAMENTO do estoque, e um reset cego por teste quebraria
+ * exatamente o que eles verificam.
+ */
+async function reporEstoque(qtd = 10) {
+  await bd.pool.query(
+    "UPDATE canastra.produtos SET quantidade = $1 WHERE produto_id = $2",
+    [qtd, PRODUTO],
+  );
+}
+
 before(async () => {
   bd = await subirPostgres();
   await aplicarMigracoes(bd.pool);
@@ -628,13 +645,7 @@ test("checkout: a fatura do cliente traz o nome da loja", async () => {
 });
 
 test("checkout: additional_info leva itens, destinatário e IP ao antifraude", async () => {
-  // Repõe o estoque: este é o teste mais no fim do arquivo, e os checkouts de
-  // sucesso anteriores (2 unidades cada) já esgotaram as 10 iniciais. O que
-  // se confere aqui é o corpo mandado ao Mercado Pago, não o estoque.
-  await bd.pool.query(
-    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
-    [PRODUTO],
-  );
+  await reporEstoque();
 
   const res = respostaFalsa();
   await PaymentController.createPayment(
@@ -672,12 +683,7 @@ test("checkout: additional_info leva itens, destinatário e IP ao antifraude", a
 });
 
 test("checkout: endereço sem número não quebra a cobrança nem manda lixo ao Mercado Pago", async () => {
-  // Mesmo motivo do teste anterior: cada checkout de sucesso consome 2
-  // unidades, e este é mais um checkout de sucesso no fim do arquivo.
-  await bd.pool.query(
-    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
-    [PRODUTO],
-  );
+  await reporEstoque();
 
   const corpo = corpoDeCheckout();
   // Endereço sem número existe de verdade (zona rural, "S/N") — e
@@ -717,12 +723,7 @@ test("checkout: endereço sem número não quebra a cobrança nem manda lixo ao 
 });
 
 test("checkout: o device id do navegador chega ao Mercado Pago", async () => {
-  // Mesmo motivo dos dois testes anteriores: mais um checkout de sucesso no
-  // fim do arquivo, e cada um consome 2 das 10 unidades semeadas.
-  await bd.pool.query(
-    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
-    [PRODUTO],
-  );
+  await reporEstoque();
 
   const corpo = corpoDeCheckout();
   corpo.deviceId = "dev-sessao-abc";
@@ -746,10 +747,7 @@ test("checkout: o device id do navegador chega ao Mercado Pago", async () => {
 test("checkout: sem device id a cobrança sai do mesmo jeito", async () => {
   // Bloqueador de script no navegador. Recusar aqui seria trocar uma melhoria
   // de aprovação por uma venda perdida.
-  await bd.pool.query(
-    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
-    [PRODUTO],
-  );
+  await reporEstoque();
 
   const res = respostaFalsa();
   await PaymentController.createPayment(
