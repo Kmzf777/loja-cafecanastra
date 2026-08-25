@@ -25,6 +25,7 @@ const {
 let bd;
 let calcularOpcoesDeFrete;
 let conferirFrete;
+let cotacaoRepository;
 
 const ANA = "aaaaaaaa-0000-0000-0000-000000000001";
 
@@ -54,6 +55,7 @@ before(async () => {
 
   ({ calcularOpcoesDeFrete } = require("../src/controllers/ShippingController.js"));
   ({ conferirFrete } = require("../src/controllers/PaymentController.js"));
+  cotacaoRepository = require("../src/repositories/cotacaoRepository.js");
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -390,4 +392,40 @@ test("com frete grátis, o casamento por nome ainda identifica a opção", async
   });
 
   assert.deepEqual(conferido, { valor: 0, metodo: "Entrega Local" });
+});
+
+/* --------------------------------------------------------------------------
+ * cotacaoRepository — a leitura única de peso e dimensão
+ *
+ * Extraída de PaymentController.js:488 (a leitura que já existia ali). Existe
+ * como módulo separado porque a rota pública /shipping/calculate PRECISA da
+ * mesma leitura: sem ela, a rota confia em defaults do código (0.3 kg,
+ * 20×5×20) que não correspondem a nenhum produto real do catálogo, e a
+ * recotação do checkout — que já lê do banco — discorda em toda venda.
+ * -------------------------------------------------------------------------- */
+
+test("lerParaCotacao devolve peso e dimensões reais, indexados por product_id", async () => {
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.produtos (nome, preco, peso, largura, altura, comprimento, categoria)
+     VALUES ('Pacote de 1 kg', 109.90, 1.000, 24, 10, 32, 'Café em grãos')
+     RETURNING produto_id`,
+  );
+  const id = rows[0].produto_id;
+
+  const porId = await cotacaoRepository.lerParaCotacao([id]);
+
+  const p = porId.get(id);
+  assert.equal(Number(p.weight), 1.0);
+  assert.equal(Number(p.width), 24);
+  assert.equal(Number(p.height), 10);
+  assert.equal(Number(p.length), 32);
+  assert.equal(Number(p.price), 109.9);
+  assert.equal(p.category, "Café em grãos");
+});
+
+test("lerParaCotacao não inventa produto que não existe", async () => {
+  const porId = await cotacaoRepository.lerParaCotacao([
+    "00000000-0000-0000-0000-000000000000",
+  ]);
+  assert.equal(porId.size, 0);
 });
