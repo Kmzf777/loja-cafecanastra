@@ -47,6 +47,29 @@ const TIMEOUT_MS = 15000;
 const MARGEM_DE_EXPIRACAO_MS = 60 * 60 * 1000;
 
 /**
+ * Piso da validade quando a resposta NÃO traz `expires_in`.
+ *
+ * O BURACO QUE ISTO TAPA é uma negação de serviço auto-infligida: sem piso,
+ * `expires_in` ausente vira validade 0, o token nasce vencido, e AÍ toda
+ * requisição dispara uma renovação OAuth completa — até o limitador de taxa da
+ * Melhor Envio derrubar a integração inteira. Um campo que faltou vira a loja
+ * sem frete.
+ *
+ * SEIS HORAS, e o número tem três razões:
+ *   · Precisa ser bem maior que a MARGEM de 1 hora, senão `validade - margem`
+ *     volta a zero e a tempestade continua — um piso de 1h não seria piso.
+ *   · Cinco horas úteis de token cobrem uma jornada inteira de expedição, então
+ *     uma rajada de compra de etiquetas nunca reautentica no meio.
+ *   · É curto o bastante para não agarrar um token morto por um mês. Se
+ *     `expires_in` sumiu, a premissa dos 30 dias é justamente a que não vale
+ *     mais; descobrir isso em horas é melhor que descobrir em semanas.
+ *
+ * O custo do pior caso — token realmente longo e campo ausente por bobagem — é
+ * quatro renovações por dia. Ruído perto de qualquer limite de taxa.
+ */
+const VALIDADE_MINIMA_MS = 6 * 60 * 60 * 1000;
+
+/**
  * Estado do OAuth em memória. Vive no módulo (singleton por processo, como o
  * pool): o access token vale para o processo inteiro, e renovar por chamador
  * seria gastar autorização à toa.
@@ -138,7 +161,16 @@ async function carregarRefreshToken() {
 }
 
 /**
- * Persiste o refresh token vigente e a data em que o access token morre.
+ * Persiste o refresh token vigente, a data em que o access token morre e o
+ * carimbo de QUANDO esta renovação aconteceu.
+ *
+ * OS DOIS RELÓGIOS (a razão de `melhor_envio_renovado_em` existir, e a mesma
+ * escrita na migração 0017): `melhor_envio_token_expira_em` é o relógio do
+ * ACCESS token, 30 dias, e ele não preocupa ninguém — este módulo o renova
+ * sozinho. Quem mata a integração é o REFRESH token, 45 dias, e a resposta da
+ * Melhor Envio não diz nada sobre ele. Guardando o carimbo do que de fato
+ * aconteceu, quem exibir deriva "a autorização morre por volta de X" na hora,
+ * em vez de ler o relógio errado e mostrar uma data tranquilizadora e falsa.
  *
  * O INSERT garante a linha 1 (mesma defesa do `configRepository` e do
  * `blingClient`: numa instalação sem seed, o UPDATE seria um no-op silencioso).
@@ -158,6 +190,7 @@ async function persistirToken(refreshToken, expiraEm) {
       `UPDATE canastra.config_loja
           SET melhor_envio_refresh_token = $1,
               melhor_envio_token_expira_em = $2,
+              melhor_envio_renovado_em = now(),
               atualizado_em = now()
         WHERE id = 1`,
       [refreshToken, expiraEm],
@@ -294,7 +327,23 @@ async function renovarAccessToken({ fetchImpl = fetch } = {}) {
     throw new Error("A Melhor Envio respondeu a renovação sem access_token.");
   }
 
-  const validadeMs = Math.max(0, Number(dados.expires_in || 0) * 1000);
+  /**
+   * O piso vale para os DOIS destinos (memória e coluna): uma validade
+   * inventada para um lado e não para o outro faria o painel discordar do
+   * comportamento. Ver `VALIDADE_MINIMA_MS` para o porquê do número.
+   *
+   * `Number.isFinite` NÃO é cerimônia: `expires_in` ausente e `expires_in`
+   * com texto inútil viram os dois `NaN`, e NaN reabriria exatamente a
+   * tempestade que o piso existe para fechar — só que pior, porque o NaN também
+   * chegaria ao `new Date()` e faria a gravação estourar com "Invalid Date".
+   *
+   * `> 0` entra junto porque `expires_in: 0` não é um valor a respeitar: um
+   * token que já nasce vencido é a mesma negação de serviço que a ausência do
+   * campo, e tratá-lo "ao pé da letra" só a disfarçaria de obediência.
+   */
+  const anunciada = Number(dados.expires_in) * 1000;
+  const validadeMs =
+    Number.isFinite(anunciada) && anunciada > 0 ? anunciada : VALIDADE_MINIMA_MS;
   memoria.accessToken = dados.access_token;
   memoria.expiraEm = Date.now() + Math.max(0, validadeMs - MARGEM_DE_EXPIRACAO_MS);
 
@@ -336,6 +385,15 @@ async function accessToken({ fetchImpl = fetch } = {}) {
  * recusou — saldo insuficiente, endereço incompleto, serviço indisponível — e
  * quem lê é o gestor no painel. `status` e `dados` viajam no erro para o
  * chamador decidir sem reabrir a string.
+ *
+ * LACUNA CONHECIDA E DELIBERADA — NÃO É ESQUECIMENTO: aqui não há retentativa
+ * com renovação forçada no 401, e o `blingClient` tem (ver `requisitar` lá).
+ * A consequência é real: um token revogado à mão no painel da Melhor Envio
+ * ANTES do vencimento calculado produz 401 duro, e a memória segue oferecendo
+ * o token morto até a validade calculada acabar — até 30 dias. A retentativa
+ * é mudança de comportamento que merece ser provada contra o ambiente de
+ * homologação, e isso acontece na tarefa que começa a gastar dinheiro
+ * (compra de etiqueta), não nesta. O contorno enquanto isso é um restart.
  */
 async function requisitar(metodo, caminho, { body, fetchImpl = fetch } = {}) {
   const token = await accessToken({ fetchImpl });

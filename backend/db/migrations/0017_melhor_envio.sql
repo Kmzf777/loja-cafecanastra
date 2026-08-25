@@ -16,9 +16,29 @@
 -- leem pelo PostgREST, sem precisar de REVOKE nenhum aqui. NAO acrescente estas
 -- duas a nenhum GRANT: o unico que as escreve e o servico Node, que conecta como
 -- dono do banco e nao passa por GRANT.
+-- SAO DOIS RELOGIOS, E O ALARME PRECISA DO SEGUNDO.
+--
+-- `melhor_envio_token_expira_em` e o relogio do ACCESS token: 30 dias, e a
+-- propria resposta da renovacao diz quantos segundos faltam (`expires_in`). Esse
+-- relogio nao preocupa ninguem — o servico o renova sozinho antes de vencer.
+--
+-- Quem MATA a integracao e o outro: o REFRESH token vale 45 dias, e quando ele
+-- morre nao ha renovacao possivel, so reautorizacao manual no painel da Melhor
+-- Envio. Uma loja que passe 45 dias sem despachar acorda sem frete. E por isso
+-- que existe `melhor_envio_renovado_em`: sem ele, um painel que avisasse "o
+-- token vence em X" leria o relogio do access token e mostraria uma data
+-- tranquilizadora e FALSA enquanto a autorizacao sangra.
+--
+-- POR QUE A COLUNA GUARDA *QUANDO RENOVOU* E NAO A DATA DA MORTE JA CALCULADA:
+-- os 45 dias sao constante documentada do lado da Melhor Envio, nao um valor que
+-- a resposta nos entregue. Uma data derivada de constante vira mentira gravada
+-- no dia em que eles mudarem a politica, e ninguem tem como perceber. O carimbo
+-- do que de fato aconteceu continua verdadeiro para sempre; quem exibe deriva
+-- "morre por volta de X" na hora, e pode dizer com essas palavras.
 ALTER TABLE canastra.config_loja
   ADD COLUMN melhor_envio_refresh_token   text,
-  ADD COLUMN melhor_envio_token_expira_em timestamptz;
+  ADD COLUMN melhor_envio_token_expira_em timestamptz,
+  ADD COLUMN melhor_envio_renovado_em     timestamptz;
 
 -- As colunas da etiqueta, no pedido.
 --

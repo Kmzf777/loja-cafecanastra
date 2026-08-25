@@ -48,16 +48,22 @@ after(async () => {
 /** O refresh token gravado, do jeito que o serviço o deixou. */
 async function tokenNoBanco() {
   const { rows } = await bd.pool.query(
-    `SELECT melhor_envio_refresh_token, melhor_envio_token_expira_em
+    `SELECT melhor_envio_refresh_token,
+            melhor_envio_token_expira_em,
+            melhor_envio_renovado_em
        FROM canastra.config_loja WHERE id = 1`,
   );
   return rows[0];
 }
 
-/** Volta a coluna ao estado neutro entre casos. */
+/** Volta as colunas ao estado neutro entre casos. */
 async function limparTokenDoBanco(valor = null) {
   await bd.pool.query(
-    "UPDATE canastra.config_loja SET melhor_envio_refresh_token = $1 WHERE id = 1",
+    `UPDATE canastra.config_loja
+        SET melhor_envio_refresh_token = $1,
+            melhor_envio_token_expira_em = NULL,
+            melhor_envio_renovado_em = NULL
+      WHERE id = 1`,
     [valor],
   );
 }
@@ -90,6 +96,11 @@ test("a migração 0017 cria as colunas de token e de etiqueta", async () => {
   );
   assert.deepEqual(config.map((r) => r.column_name), [
     "melhor_envio_refresh_token",
+    // O carimbo da última renovação. Ele não é redundante com o expira_em ao
+    // lado: aquele é o relógio do ACCESS token (30 dias), este é o único
+    // ponto de apoio para saber quando o REFRESH token (45 dias) morre — que
+    // é o vencimento que de fato derruba a integração.
+    "melhor_envio_renovado_em",
     "melhor_envio_token_expira_em",
   ]);
 
@@ -198,6 +209,7 @@ test("a renovação persiste o refresh token novo no banco", async () => {
       },
     ]);
 
+    const antes = new Date();
     const token = await melhorEnvioClient.renovarAccessToken({ fetchImpl });
     assert.equal(token, "access-novo");
 
@@ -206,6 +218,22 @@ test("a renovação persiste o refresh token novo no banco", async () => {
     assert.ok(
       config.melhor_envio_token_expira_em > new Date(),
       "o vencimento gravado tem de estar no futuro",
+    );
+
+    /**
+     * OS DOIS RELÓGIOS. `expira_em` conta os 30 dias do ACCESS token, e o
+     * serviço cuida dele sozinho. `renovado_em` é o carimbo de quando a
+     * autorização foi de fato exercida — a ÚNICA âncora para saber quando o
+     * REFRESH token (45 dias, que a resposta não menciona) morre. Sem ele um
+     * alarme leria o relógio errado e mostraria data tranquilizadora e falsa.
+     */
+    assert.ok(
+      config.melhor_envio_renovado_em >= antes,
+      "a renovação tem de carimbar quando aconteceu",
+    );
+    assert.ok(
+      config.melhor_envio_renovado_em < config.melhor_envio_token_expira_em,
+      "renovado_em e expira_em são relógios diferentes, não cópias",
     );
 
     /**
@@ -478,4 +506,54 @@ test("falhar ao gravar no banco NÃO derrota a renovação", async () => {
     !gritos.some((linha) => linha.includes("refresh-que-o-banco-recusa")),
     "e o grito NÃO pode ecoar o token",
   );
+});
+
+test("resposta sem expires_in não produz um token que já nasce vencido", async () => {
+  /**
+   * A NEGAÇÃO DE SERVIÇO AUTO-INFLIGIDA que isto fecha: sem piso de validade,
+   * um `expires_in` ausente vira validade zero, o token nasce vencido, e cada
+   * requisição passa a disparar uma renovação OAuth inteira — até o limitador
+   * de taxa da Melhor Envio derrubar a integração. Um campo que faltou vira a
+   * loja sem frete.
+   *
+   * A prova é indireta de propósito, e é a mais honesta que existe: a fila do
+   * `fetchFalso` tem UMA resposta só. Se o token nascesse vencido, o
+   * `accessToken()` seguinte renovaria de novo e o dublê estouraria.
+   */
+  for (const [rotulo, expiresIn] of [
+    ["ausente", undefined],
+    ["texto inútil", "amanhã"],
+  ]) {
+    melhorEnvioClient.zerarMemoria();
+    await limparTokenDoBanco("semente-sem-validade");
+
+    try {
+      const corpo = { access_token: "acc-do-piso", refresh_token: "r-do-piso" };
+      if (expiresIn !== undefined) corpo.expires_in = expiresIn;
+      const fetchImpl = fetchFalso([{ status: 200, corpo }]);
+
+      await melhorEnvioClient.renovarAccessToken({ fetchImpl });
+      assert.equal(
+        await melhorEnvioClient.accessToken({ fetchImpl }),
+        "acc-do-piso",
+        `expires_in ${rotulo}: o token do piso segue servindo`,
+      );
+      assert.equal(
+        fetchImpl.chamadas.length,
+        1,
+        `expires_in ${rotulo}: uma renovação só — sem tempestade`,
+      );
+
+      // E a coluna acompanha: nada de "Invalid Date" nem de data no passado.
+      const config = await tokenNoBanco();
+      assert.ok(
+        config.melhor_envio_token_expira_em > new Date(),
+        `expires_in ${rotulo}: o vencimento gravado tem de estar no futuro`,
+      );
+      assert.equal(config.melhor_envio_refresh_token, "r-do-piso");
+    } finally {
+      melhorEnvioClient.zerarMemoria();
+      await limparTokenDoBanco(null);
+    }
+  }
 });
