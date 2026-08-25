@@ -951,20 +951,22 @@ class PaymentController {
          * O log de PAGAMENTO DUPLICADO mais abaixo FICA: defesa de servidor
          * não se aposenta porque apareceu uma defesa de gateway.
          */
+        /**
+         * O fingerprint que o security.js coletou no navegador; o SDK o
+         * envia como `X-meli-session-id`. CONDICIONAL, e é o ponto todo:
+         * bloqueador de script deixa o campo ausente, e nesse caso a
+         * cobrança sai sem o header em vez de não sair.
+         */
+        const requestOptions = {
+          idempotencyKey: chaveIdempotencia,
+          ...(typeof req.body?.deviceId === "string" && req.body.deviceId
+            ? { meliSessionId: req.body.deviceId }
+            : {}),
+        };
+
         mpResponse = await payment.create({
           body: paymentData,
-          requestOptions: {
-            idempotencyKey: chaveIdempotencia,
-            /**
-             * O fingerprint que o security.js coletou no navegador; o SDK o
-             * envia como `X-meli-session-id`. CONDICIONAL, e é o ponto todo:
-             * bloqueador de script deixa o campo ausente, e nesse caso a
-             * cobrança sai sem o header em vez de não sair.
-             */
-            ...(typeof req.body?.deviceId === "string" && req.body.deviceId
-              ? { meliSessionId: req.body.deviceId }
-              : {}),
-          },
+          requestOptions,
         });
       } catch (falhaNoGateway) {
         // Cobranca nao saiu: devolve o que foi reservado, senao o produto some
