@@ -630,11 +630,18 @@ Em `backend/src/.env.example`, substitua o comentário de `ZIPCODE_ORIGIN`:
 # endereco de origem cadastrado na conta da Melhor Envio. Cotar de um CEP e
 # postar de outro devolve preco e prazo errados, sem erro nenhum aparecer.
 #
-# O valor 01001000 que morou aqui e a Praca da Se, em Sao Paulo: era placeholder.
-# Se ele estiver em producao, todo frete ja cotado saiu de Sao Paulo e nao da
-# Canastra. Conferir na VPS antes de fechar a Fase 1.
+# O `.env` LOCAL desta maquina carrega 01001000 — a Praca da Se, em Sao Paulo.
+# E placeholder, nao endereco de despacho. Se o mesmo valor estiver na VPS, todo
+# frete ja cotado saiu de Sao Paulo e nao da Canastra. Conferir la.
 ZIPCODE_ORIGIN=
 ```
+
+> **Aponte para onde o valor realmente está.** Uma versão anterior deste plano
+> dizia "o valor 01001000 que morou aqui" — no `.env.example`. Ele nunca esteve
+> nesse arquivo: `git log -S"01001000" -- backend/src/.env.example` não devolve
+> nada além do commit que escreveu a frase. O valor vive no `.env` local, que não
+> é versionado. Um aviso que manda procurar no lugar errado gasta o tempo de
+> quem confia nele.
 
 - [ ] **Step 2: Commit**
 
