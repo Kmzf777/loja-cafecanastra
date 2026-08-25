@@ -108,6 +108,14 @@ export const URL_SECURITY_MP = "https://www.mercadopago.com/v2/security.js";
  * conversão. Falhou, segue sem — `deviceIdDoNavegador()` devolve string vazia
  * e o corpo do pagamento sai sem o campo.
  *
+ * "NÃO REJEITA NUNCA" é sobre não LANÇAR — não é sobre desistir de coletar.
+ * As duas coisas precisam valer ao mesmo tempo: por isso, igual a
+ * `carregarSdkMp`, o `onerror` LIMPA o cache antes de resolver. Sem isso, uma
+ * falha passageira (rede instável, bloqueador ligado por um instante) deixava
+ * `securityCarregando` cacheada como "resolvida sem device id" para sempre —
+ * e a montagem seguinte do checkout (troca de página, nova visita à sacola)
+ * herdava essa promessa morta em vez de tentar de novo.
+ *
  * A CSP já libera www.mercadopago.com em script-src (next.config.mjs).
  */
 let securityCarregando: Promise<void> | null = null;
@@ -123,6 +131,7 @@ export function carregarSecurityMp(): Promise<void> {
     script.async = true;
     script.onload = () => resolve();
     script.onerror = () => {
+      securityCarregando = null;
       script.remove();
       resolve();
     };

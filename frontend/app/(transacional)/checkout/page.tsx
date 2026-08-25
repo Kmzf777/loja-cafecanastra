@@ -160,8 +160,12 @@ export default function PaginaCheckout() {
   const [cartaoPronto, setCartaoPronto] = useState(false);
 
   /**
-   * O fingerprint precisa ter tempo de coletar antes do pagamento, então
-   * carrega na montagem da página — não no submit. Não depende de
+   * Dispara o carregamento do fingerprint já na montagem — não no submit —
+   * para dar ao script a maior folga possível até o pagamento. Não é garantia:
+   * a chamada é fire-and-forget (`void`) e `deviceIdDoNavegador()` é lida na
+   * hora de montar o corpo, sem esperar nada. Quem paga rápido pode submeter
+   * antes do script responder, e aí o campo simplesmente não viaja — caminho
+   * já tratado como normal em corpoComum. Não depende de
    * NEXT_PUBLIC_MP_PUBLIC_KEY: vale para Pix também.
    */
   useEffect(() => {

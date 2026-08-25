@@ -356,4 +356,13 @@ describe("device id do Mercado Pago", () => {
     await pagarComPix("tok-sessao", dadosBase, f);
     expect(corpoEnviado(f)).not.toHaveProperty("deviceId");
   });
+
+  // corpoComum é compartilhado entre os dois meios — mas ninguém prova isso
+  // sem exercitar o cartão também. O Pix passando não garante o cartão.
+  it("também manda o deviceId no cartão — corpoComum é dos dois meios", async () => {
+    global_.window = { MP_DEVICE_SESSION_ID: "dev-sessao-123" };
+    const f = fetchComResposta({ status: "aprovado", orderId: "abc-123" });
+    await pagarComCartao("t", { ...dadosBase, cartao }, f);
+    expect(corpoEnviado(f).deviceId).toBe("dev-sessao-123");
+  });
 });
