@@ -598,10 +598,18 @@ export const URL_SECURITY_MP = "https://www.mercadopago.com/v2/security.js";
  * vale também para Pix, porque o motor de risco lê o device em qualquer meio
  * de pagamento.
  *
- * NÃO REJEITA NUNCA. Bloqueador de script é cenário corriqueiro, e um
- * checkout que morresse por não carregar o fingerprint trocaria aprovação por
- * conversão. Falhou, segue sem — `deviceIdDoNavegador()` devolve string vazia
- * e o corpo do pagamento sai sem o campo.
+ * DUAS PROPRIEDADES, e elas são diferentes:
+ *
+ *   NÃO REJEITA NUNCA — bloqueador de script é cenário corriqueiro, e um
+ *   checkout que morresse por não carregar o fingerprint trocaria aprovação
+ *   por conversão. Falhou, segue sem: `deviceIdDoNavegador()` devolve string
+ *   vazia e o corpo do pagamento sai sem o campo.
+ *
+ *   FALHA NÃO ENVENENA A PRÓXIMA TENTATIVA — o cache volta a `null` no erro,
+ *   como `carregarSdkMp` já faz. Sem isso, uma queda de rede de um segundo
+ *   deixaria a aba inteira sem device id para sempre: a promessa resolvida
+ *   "sem fingerprint" ficaria no cache e toda navegação seguinte para o
+ *   checkout a receberia de volta, em silêncio.
  *
  * A CSP já libera www.mercadopago.com em script-src (next.config.mjs).
  */
@@ -618,6 +626,9 @@ export function carregarSecurityMp(): Promise<void> {
     script.async = true;
     script.onload = () => resolve();
     script.onerror = () => {
+      // Some do cache ANTES de resolver: a próxima chamada injeta de novo,
+      // em vez de receber esta mesma promessa "sem fingerprint" para sempre.
+      securityCarregando = null;
       script.remove();
       resolve();
     };
