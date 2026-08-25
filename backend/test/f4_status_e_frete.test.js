@@ -24,6 +24,7 @@ const {
 
 let bd;
 let calcularOpcoesDeFrete;
+let montarItensDaCotacao;
 let conferirFrete;
 let cotacaoRepository;
 
@@ -53,7 +54,9 @@ before(async () => {
   // que é o que estes testes precisam — nenhum teste pode depender de rede.
   process.env.MELHOR_ENVIO_URL = "http://127.0.0.1:9";
 
-  ({ calcularOpcoesDeFrete } = require("../src/controllers/ShippingController.js"));
+  ({ calcularOpcoesDeFrete, montarItensDaCotacao } = require(
+    "../src/controllers/ShippingController.js",
+  ));
   ({ conferirFrete } = require("../src/controllers/PaymentController.js"));
   cotacaoRepository = require("../src/repositories/cotacaoRepository.js");
 }, { timeout: 120_000 });
@@ -468,4 +471,41 @@ test("lerParaCotacao não inventa produto que não existe", async () => {
     "00000000-0000-0000-0000-000000000000",
   ]);
   assert.equal(porId.size, 0);
+});
+
+/* --------------------------------------------------------------------------
+ * montarItensDaCotacao — o que sobrevive do que o NAVEGADOR mandou
+ *
+ * A rota pública recebe uma sacola de localStorage, que não é fonte de verdade
+ * sobre nada: só `product_id` e `quantity` atravessam. Peso, dimensões e preço
+ * são relidos do banco, para esta cotação e a recotação do checkout chegarem ao
+ * MESMO número — o desencontro que gerava o 409 de todo pedido.
+ * -------------------------------------------------------------------------- */
+
+test("a cotação pública ignora peso e preço do navegador e usa o do banco", async () => {
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.produtos (nome, preco, peso, largura, altura, comprimento)
+     VALUES ('Caixa de 2 kg', 236.70, 2.000, 18, 7, 24)
+     RETURNING produto_id`,
+  );
+  const id = rows[0].produto_id;
+
+  // O navegador MENTE: diz que pesa 1 g e custa R$ 1.
+  const itens = await montarItensDaCotacao([
+    { product_id: id, quantity: 1, price: 1, weight: 0.001 },
+  ]);
+
+  assert.equal(Number(itens[0].weight), 2.0);
+  assert.equal(Number(itens[0].price), 236.7);
+  assert.equal(Number(itens[0].width), 18);
+});
+
+test("a cotação recusa product_id que não existe", async () => {
+  await assert.rejects(
+    () =>
+      montarItensDaCotacao([
+        { product_id: "00000000-0000-0000-0000-000000000000", quantity: 1 },
+      ]),
+    /não existe/i,
+  );
 });

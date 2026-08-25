@@ -1,10 +1,21 @@
 const axios = require("axios");
 const pool = require("../pgPool");
-// Sem ciclo aqui: cuponsRepository e utils/cupom só dependem do pgPool. (É o
-// PaymentController que importa ESTE módulo, nunca o contrário.)
+// Sem ciclo aqui: cuponsRepository, cotacaoRepository, promotionsRepository e
+// os utils só dependem do pgPool. (É o PaymentController que importa ESTE
+// módulo, nunca o contrário — e é por isso que a lista abaixo não pode ganhar
+// um require de controller.)
 const cuponsRepository = require("../repositories/cuponsRepository");
+const cotacaoRepository = require("../repositories/cotacaoRepository");
+const PromotionsRepository = require("../repositories/promotionsRepository");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
-const { somarCentavos } = require("../utils/preco");
+const { precoComPromocao, somarCentavos } = require("../utils/preco");
+
+/**
+ * Uma instância por processo, como no PaymentController e no CuponsController:
+ * o repositório não guarda estado (fala com o pool, que já é singleton), então
+ * instanciar por requisição seria lixo de graça.
+ */
+const promotionsRepo = new PromotionsRepository();
 
 /** CEPs atendidos por entrega propria. */
 const LOCAL_PREFIXES = ["350"];
@@ -187,9 +198,10 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
    * o zero, seja ela qual for. Quem separa uma opcao da outra depois do zero e
    * o NOME — e por isso que `conferirFrete` casa nome e preco, nao so o preco.
    *
-   * Na cotacao publica o `price` dos itens vem do navegador e vale como
-   * SUGESTAO, como o resto da cotacao; quem decide dinheiro e o checkout, que
-   * chama esta mesma funcao com os precos relidos do banco.
+   * O `price` dos itens vem do BANCO nos DOIS caminhos desde a F8: a rota
+   * publica o relê em `montarItensDaCotacao` e o checkout em `conferirFrete`.
+   * Antes o da rota publica vinha do navegador, e era por isso que a promessa
+   * de frete gratis da vitrine podia nao sobreviver ao pagamento.
    */
   // O desconto do cupom abate ANTES da comparacao com o piso: um carrinho de
   // R$ 160 com cupom de 10% e um carrinho de R$ 144 para efeito de frete
@@ -211,6 +223,55 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
   return shippingOptions;
 }
 
+/**
+ * Transforma o que o NAVEGADOR mandou no pacote que a transportadora vai levar.
+ *
+ * Do corpo da requisição sobrevivem dois campos: `product_id` e `quantity`.
+ * Todo o resto — peso, dimensões, preço, categoria — vem do banco. É o que faz
+ * esta cotação e a recotação do checkout (`conferirFrete`) chegarem ao MESMO
+ * número, que era exatamente o que não acontecia antes da F8.
+ *
+ * O PREÇO TAMBÉM VEM DO BANCO, e não é excesso de zelo: o preço entra na
+ * decisão de frete grátis (o piso é comparado com o subtotal) e na promoção. O
+ * checkout aplica `precoComPromocao`; se aqui o preço viesse da sacola, um
+ * carrinho com promoção ativa poderia prometer frete grátis que o checkout
+ * recusaria — o mesmo 409 por outra porta.
+ */
+async function montarItensDaCotacao(items) {
+  const ids = items.map((i) => i.product_id);
+  const porId = await cotacaoRepository.lerParaCotacao(ids);
+
+  const promocoes = await promotionsRepo
+    .findActivePromotionsForCheckout()
+    .catch((erro) => {
+      // Promoção indisponível NÃO derruba a cotação: sem ela o preço é o de
+      // catálogo, que é mais ALTO — o lado seguro do erro para o frete grátis.
+      console.error(
+        "Cotação: promoções indisponíveis, usando preço de catálogo:",
+        erro.message,
+      );
+      return [];
+    });
+
+  return items.map((item) => {
+    const produto = porId.get(String(item.product_id));
+    if (!produto) {
+      const erro = new Error(`O produto ${item.product_id} não existe.`);
+      erro.code = "PRODUTO_INEXISTENTE";
+      throw erro;
+    }
+    return {
+      product_id: produto.product_id,
+      quantity: Number(item.quantity),
+      price: precoComPromocao(produto, promocoes),
+      weight: produto.weight,
+      width: produto.width,
+      height: produto.height,
+      length: produto.length,
+    };
+  });
+}
+
 class ShippingController {
   async calculate(req, res) {
     try {
@@ -229,15 +290,32 @@ class ShippingController {
        *
        * Cupom invalido NAO derruba a cotacao: frete e frete — quem explica o
        * problema do cupom e o POST /cupons/validar. Aqui ele apenas nao
-       * desconta. E como toda esta rota, o resultado e SUGESTAO: quem decide
-       * dinheiro e o checkout, com os precos relidos do banco.
+       * desconta. E o resultado desta rota continua sendo SUGESTAO: quem decide
+       * dinheiro e o checkout, que confere estoque e trava as linhas antes de
+       * cobrar. O que mudou na F8 e que os dois agora contam a partir da MESMA
+       * base — as linhas do banco, nao a sacola do navegador.
        */
+      let itensDoBanco;
+      try {
+        itensDoBanco = await montarItensDaCotacao(items);
+      } catch (erro) {
+        if (erro.code === "PRODUTO_INEXISTENTE") {
+          return res.status(400).json({ error: erro.message });
+        }
+        throw erro;
+      }
+
       let descontoCentavos = 0;
       const codigoDeCupom = normalizarCodigo(cupom);
       if (codigoDeCupom) {
         try {
           const linha = await cuponsRepository.buscarPorCodigo(codigoDeCupom);
-          const avaliacao = avaliarCupom(linha, subtotalEmCentavos(items));
+          // O subtotal do cupom sai dos itens DO BANCO, pela mesma razão que o
+          // do frete grátis: os dois lados têm de somar sobre a mesma base.
+          const avaliacao = avaliarCupom(
+            linha,
+            subtotalEmCentavos(itensDoBanco),
+          );
           if (avaliacao.valido) descontoCentavos = avaliacao.descontoCentavos;
         } catch (erro) {
           console.error("Cupom ignorado na cotação de frete:", erro.message);
@@ -246,7 +324,7 @@ class ShippingController {
 
       const opcoes = await calcularOpcoesDeFrete({
         zipCode,
-        itens: items,
+        itens: itensDoBanco,
         descontoCentavos,
       });
       return res.json(opcoes);
@@ -262,3 +340,4 @@ class ShippingController {
 
 module.exports = new ShippingController();
 module.exports.calcularOpcoesDeFrete = calcularOpcoesDeFrete;
+module.exports.montarItensDaCotacao = montarItensDaCotacao;
