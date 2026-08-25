@@ -414,10 +414,15 @@ Em `backend/src/controllers/ShippingController.js`, adicione perto do topo:
 ```js
 const cotacaoRepository = require("../repositories/cotacaoRepository");
 const PromotionsRepository = require("../repositories/promotionsRepository");
-const { precoComPromocao, somarCentavos } = require("../utils/preco");
+const { precoComPromocao } = require("../utils/preco");
+
+// O módulo exporta a CLASSE, não uma instância — instanciar uma vez no módulo é
+// o que PaymentController.js:30 e CuponsController.js:7 já fazem.
+const promotionsRepo = new PromotionsRepository();
 ```
 
-(`somarCentavos` já é importado — não duplique o require.)
+(`somarCentavos` já é importado neste arquivo — estenda o destructuring
+existente, não duplique o require.)
 
 E a função:
 
@@ -440,7 +445,12 @@ async function montarItensDaCotacao(items) {
   const ids = items.map((i) => i.product_id);
   const porId = await cotacaoRepository.lerParaCotacao(ids);
 
-  const promocoes = await PromotionsRepository.getActivePromotions().catch(
+  // A API REAL, medida: `promotionsRepository` exporta a CLASSE, e o método é
+  // `findActivePromotionsForCheckout()`, sem argumentos. É o que
+  // `PaymentController.js:30` e `CuponsController.js:7` já fazem — instanciam
+  // uma vez no módulo e chamam. (Uma versão anterior deste plano dizia
+  // `PromotionsRepository.getActivePromotions()`. Esse método não existe.)
+  const promocoes = await promotionsRepo.findActivePromotionsForCheckout().catch(
     (erro) => {
       // Promoção indisponível NÃO derruba a cotação: sem ela o preço é o de
       // catálogo, que é mais ALTO — o lado seguro do erro para o frete grátis.
