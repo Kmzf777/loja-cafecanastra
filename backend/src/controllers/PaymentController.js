@@ -40,6 +40,19 @@ const blingPedidos = require("../services/blingPedidos");
 /** Tolerancia de centavo ao comparar o frete recalculado com o enviado. */
 const TOLERANCIA_FRETE = 0.01;
 
+/**
+ * O que o cliente lê na fatura do cartão.
+ *
+ * Sem isto sai o nome da conta Mercado Pago, e a pessoa não reconhece a
+ * compra — que é como nasce boa parte das contestações.
+ *
+ * CONSTANTE, E NÃO `LOJA_NOME`: aquela variável vale "Cafe Canastra", com
+ * espaço e 13 caracteres, e serve ao User-Agent da Melhor Envio. O descritor
+ * aceita no máximo 13 e não aceita o mesmo conjunto de caracteres — reusar a
+ * variável faria uma mudança inocente num campo virar recusa no outro.
+ */
+const DESCRITOR_NA_FATURA = "CAFECANASTRA";
+
 const FORMATO_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -807,6 +820,7 @@ class PaymentController {
          * grava em `chave_idempotencia`. Um campo, os dois lados.
          */
         external_reference: chaveIdempotencia,
+        statement_descriptor: DESCRITOR_NA_FATURA,
         payer: {
           email: formData.payer.email || userEmail,
           ...(identification && identification.number

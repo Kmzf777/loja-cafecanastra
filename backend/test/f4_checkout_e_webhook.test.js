@@ -606,3 +606,23 @@ test("checkout: external_reference liga o pagamento à linha do pedido", async (
   );
   assert.equal(rows[0].chave_idempotencia, cobranca.external_reference);
 });
+
+test("checkout: a fatura do cliente traz o nome da loja", async () => {
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-descritor" },
+      body: corpoDeCheckout(),
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  const cobranca = mp.criacoes[mp.criacoes.length - 1];
+  assert.equal(cobranca.statement_descriptor, "CAFECANASTRA");
+  assert.ok(
+    cobranca.statement_descriptor.length <= 13,
+    "o Mercado Pago corta o descritor em 13 caracteres",
+  );
+});
