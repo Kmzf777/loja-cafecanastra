@@ -135,6 +135,10 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
             "vir do banco (cotacaoRepository), nunca do navegador.",
         );
         erro.code = "ITEM_SEM_PACOTE";
+        // Campo e produto SEPARADOS da frase para o handler poder logar o que
+        // o operador precisa (qual produto, qual coluna) sem reabrir a string.
+        erro.productId = item.product_id;
+        erro.campo = campo;
         throw erro;
       }
     }
@@ -262,6 +266,22 @@ async function montarItensDaCotacao(items) {
       erro.code = "PRODUTO_ID_INVALIDO";
       throw erro;
     }
+    /**
+     * A QUANTIDADE, com a mesma régua do checkout (`PaymentController`, que
+     * confere inteiro entre 1 e 999 no mesmo laço do uuid). Aqui ela faltava, e
+     * `quantity: -3` atravessava até a Melhor Envio — além de envenenar a regra
+     * da entrega local, que zera o frete a partir de 3 unidades somadas.
+     *
+     * O princípio é o mesmo da checagem de uuid logo acima: as duas rotas têm
+     * de dizer a MESMA coisa sobre a mesma sacola ruim. Uma sacola que o
+     * checkout vai recusar não pode receber uma cotação bonita antes.
+     */
+    const quantidade = Number(item.quantity);
+    if (!Number.isInteger(quantidade) || quantidade < 1 || quantidade > 999) {
+      const erro = new Error("Quantidade inválida em um dos itens.");
+      erro.code = "QUANTIDADE_INVALIDA";
+      throw erro;
+    }
   }
 
   const ids = items.map((i) => i.product_id);
@@ -350,11 +370,13 @@ class ShippingController {
       try {
         itensDoBanco = await montarItensDaCotacao(items);
       } catch (erro) {
-        // Os dois são sacola ruim, não loja quebrada: id que nunca foi uuid
-        // (a sacola velha da Tray) e uuid de produto que saiu do catálogo.
-        // 400 nos dois, para o navegador saber que precisa limpar a sacola.
+        // Os três são sacola ruim, não loja quebrada: id que nunca foi uuid (a
+        // sacola velha da Tray), quantidade que não é quantidade, e uuid de
+        // produto que saiu do catálogo. 400 nos três, para o navegador saber
+        // que o problema está na sacola dele.
         if (
           erro.code === "PRODUTO_ID_INVALIDO" ||
+          erro.code === "QUANTIDADE_INVALIDA" ||
           erro.code === "PRODUTO_INEXISTENTE"
         ) {
           return res.status(400).json({ error: erro.message });
@@ -389,6 +411,41 @@ class ShippingController {
       if (error.code === "FRETE_INDISPONIVEL") {
         return res.status(500).json({ error: error.message });
       }
+
+      /**
+       * PRODUTO COM PACOTE INCOMPLETO — dado da LOJA errado, não da sacola.
+       *
+       * É alcançável de verdade: `numeroPositivo` (dashboardRepository) aceita
+       * zero, e não há CHECK em `peso`, então um gestor que digite 0 no campo
+       * de peso cria um produto que derruba TODA cotação que o contenha, para
+       * sempre. Sem este braço isso saía como "Falha ao calcular frete", que
+       * não nomeia nada: ninguém descobre qual produto, e a loja parece
+       * quebrada quando quem está errado é uma linha do catálogo.
+       *
+       * 422 E NÃO 500 de propósito. 500 diz "o serviço caiu": convida a tentar
+       * de novo e acorda quem está de plantão. Este erro é determinístico e
+       * permanente até alguém editar o produto — toda tentativa falha
+       * igualzinha. 422 diz o que é: a requisição está bem formada, mas tem um
+       * item que esta loja não consegue processar.
+       *
+       * O log carrega produto e coluna porque é o operador quem conserta; a
+       * frase de resposta carrega a saída que o CLIENTE tem agora (tirar o item
+       * da sacola), porque ele não pode esperar o conserto.
+       */
+      if (error.code === "ITEM_SEM_PACOTE") {
+        console.error(
+          `Cotação impossível: o produto ${error.productId} está sem "${error.campo}" ` +
+            "no catálogo. Corrija peso e dimensões no painel — toda cotação " +
+            "com este item falha até lá.",
+        );
+        return res.status(422).json({
+          error:
+            "Um dos produtos da sacola está sem peso ou medidas cadastradas, " +
+            "então não dá para calcular o frete dele. Remova o item para " +
+            "seguir, ou fale com a loja.",
+        });
+      }
+
       console.error("Erro geral no frete:", error);
       return res.status(500).json({ error: "Falha ao calcular frete" });
     }

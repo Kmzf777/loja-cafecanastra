@@ -576,6 +576,66 @@ test("uuid válido de produto morto também é 400 na rota, não 500", async () 
   assert.match(res.corpo.error, /não existe/i);
 });
 
+test("quantidade que não é quantidade é 400, a mesma régua do checkout", async () => {
+  // -3 atravessava até a Melhor Envio e ainda mexia na regra das 3 unidades da
+  // entrega local. O checkout já recusava; agora as duas rotas concordam.
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.produtos (nome, preco, peso, largura, altura, comprimento)
+     VALUES ('Café da quantidade', 50.00, 0.250, 18, 7, 24)
+     RETURNING produto_id`,
+  );
+  const id = rows[0].produto_id;
+
+  for (const quantidade of [-3, 0, 2.5, 1000, "muitos"]) {
+    const res = respostaFalsa();
+    await ShippingController.calculate(
+      {
+        body: {
+          zipCode: CEP_LOCAL,
+          items: [{ product_id: id, quantity: quantidade }],
+        },
+      },
+      res,
+    );
+    assert.equal(res.codigo, 400, `quantidade ${quantidade} deveria ser 400`);
+    assert.match(res.corpo.error, /quantidade/i);
+  }
+});
+
+/* --------------------------------------------------------------------------
+ * Produto com o pacote incompleto — dado da LOJA errado, não da sacola
+ *
+ * Alcançável de verdade: `numeroPositivo` (dashboardRepository) aceita zero e
+ * não há CHECK em `peso`, então um gestor que digite 0 no campo cria um produto
+ * que derruba toda cotação que o contenha. O que este bloco fixa é que isso sai
+ * nomeado, e não como um 500 opaco.
+ * -------------------------------------------------------------------------- */
+
+test("produto com peso 0 responde 422 com frase acionável, não 500 opaco", async () => {
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.produtos (nome, preco, peso, largura, altura, comprimento)
+     VALUES ('Café sem peso', 50.00, 0, 18, 7, 24)
+     RETURNING produto_id`,
+  );
+  const id = rows[0].produto_id;
+
+  const res = respostaFalsa();
+  await ShippingController.calculate(
+    {
+      body: { zipCode: CEP_LOCAL, items: [{ product_id: id, quantity: 1 }] },
+    },
+    res,
+  );
+
+  // 422, não 500: a requisição está bem formada, o catálogo é que não está — e
+  // tentar de novo falharia igualzinho até alguém editar o produto.
+  assert.equal(res.codigo, 422);
+  assert.match(res.corpo.error, /peso|medidas/i);
+  // A frase tem de dizer ao cliente o que ELE pode fazer agora.
+  assert.match(res.corpo.error, /remova|fale com a loja/i);
+  assert.doesNotMatch(res.corpo.error, /Falha ao calcular frete/);
+});
+
 /* --------------------------------------------------------------------------
  * A PROMOÇÃO, que é a razão de o preço vir do banco
  *
