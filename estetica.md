@@ -713,7 +713,12 @@ A fotografia responde por ~60% da percepção de qualidade do site. Sem essa pro
 | **Território** | Heróis de home e institucional | Chapadão, escarpa, terreiro de secagem, estrada de terra vermelha, porteira, cerca, neblina de manhã. Amanhecer e fim de tarde. Fotografia documental, grão visível, sem HDR. |
 | **Produto** | Segunda imagem da galeria, PLP | Pacote em contexto real (bancada, tábua, saco de juta) — não recorte em branco. Uma foto de pacote por linha, sempre com a mesma luz e o mesmo ângulo, para o grid ficar disciplinado. |
 
-**Estado do acervo (24/08/2026).** A família **Produto** existe para as três linhas principais — Clássico, Suave e Canela —, em 4:5, e é o que o card revela no hover e o que a galeria da PDP mostra como segunda imagem (`imagemEstudio` em `data/catalogo-canastra.json`). O enquadramento é estúdio com fundo de cor, não bancada: cumpre o "não recorte em branco" e a disciplina de ângulo, mas não o contexto real que a coluna pede. Microlote e Néctar de Minas seguem sem ela, e nesses dois o card não faz hover nenhum em vez de fingir um. As famílias **Sabor** e **Território** continuam por produzir — é o caminho crítico do §12.
+**Estado do acervo (24/08/2026).** A família **Produto** está fotografada para as três linhas principais — Clássico, Suave e Canela —, toda em 4:5, e são DUAS fotos por linha, ambas em `data/catalogo-canastra.json`:
+
+- `imagem` é a **capa** — pacote de frente, fundo claro. É o card em repouso, a primeira peça da galeria da PDP e a miniatura da sacola. Substituiu os packshots PNG de 500×500 tirados da arte da embalagem; do acervo quadrado sobrou só o Microlote, e é o único em que o `object-cover` ainda recorta o card 4:5.
+- `imagemEstudio` é a **segunda foto** — estúdio com fundo de cor. É o que o hover do card revela e o que fecha a galeria. Cumpre o "não recorte em branco" e a disciplina de ângulo, mas não o contexto real (bancada, tábua, juta) que a coluna pede.
+
+Microlote e Néctar de Minas não têm a segunda, e nesses dois o card não faz hover nenhum em vez de fingir um; o Néctar segue sem arte própria e acompanha a capa do Clássico, como declarado no `imagemObservacao` dele. As famílias **Sabor** e **Território** continuam por produzir — é o caminho crítico do §12.
 
 ### Especificações técnicas
 

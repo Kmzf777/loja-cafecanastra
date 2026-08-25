@@ -25,11 +25,11 @@ import { PontoTorra } from "./PontoTorra";
  * dois papeis e o hover simplesmente nao aparece, como antes.
  *
  * DUAS LIMITACOES CONHECIDAS QUE FICARAM, ambas de acervo e nao de codigo:
- *  - `fotos.sabor` e ainda um fallback do pacote (§8 pede o ingrediente da
- *    nota de degustacao, nao o pacote outra vez).
- *  - Os packshots PNG sao 1:1 e o card e 4:5 (§8). Usamos `object-cover`, o
- *    que recorta o quadrado — decisao de enquadramento provisoria, e que so
- *    vale para o repouso: a foto de estudio ja entra sem recorte.
+ *  - `fotos.sabor` e ainda a capa do pacote (§8 pede o ingrediente da nota de
+ *    degustacao para o repouso, nao o pacote outra vez).
+ *  - O que sobrou de arte quadrada — a embalagem do Microlote, em PNG 1:1 —
+ *    continua recortado pelo `object-cover` nos 4:5 deste card. Nas tres
+ *    linhas principais capa e foto de estudio ja sao 4:5 e entram inteiras.
  */
 
 export function CardCafe({

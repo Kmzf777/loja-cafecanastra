@@ -5,6 +5,7 @@ import Link from "next/link";
 import { formatarPreco, precoParaLeitor } from "@/lib/catalogo/repositorio";
 import { COR_DA_LINHA } from "@/lib/catalogo/rotulos";
 import { Botao } from "@/components/ui/Botao";
+import { dimensaoDaArte } from "@/lib/catalogo/produtos";
 import { useAdicionarNaSacola } from "@/lib/sacola/usar-adicionar";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { href } from "@/lib/i18n/rotas";
@@ -26,8 +27,8 @@ import type { ProdutoVendavel } from "@/lib/catalogo/tipos";
  *
  * A FOTO É A DA LINHA. Os SKUs não têm arte própria no acervo (§8 do
  * estetica.md segue como caminho crítico), e inventar uma seria pior que
- * reusar a real. São DUAS quando a linha foi fotografada em estúdio: o
- * packshot em repouso e a foto de estúdio no hover, o mesmo crossfade do
+ * reusar a real. São DUAS quando a linha foi fotografada em estúdio: a
+ * capa em repouso e a foto de estúdio no hover, o mesmo crossfade do
  * `<CardCafe>` — dois vocabulários de hover na mesma rolagem leriam como dois
  * sites, pelo mesmo motivo que a fita e a sombra são iguais.
  */
@@ -48,6 +49,14 @@ export function CardProduto({
   const d = dicionario(locale);
   const corDaLinha = COR_DA_LINHA[produto.linha];
   const indisponivel = produto.estoque <= 0 || produto.preco <= 0;
+
+  /**
+   * A medida real dos dois arquivos, para o `next/image` reservar a caixa.
+   * Vem de `produtos.ts`, que é quem conhece o acervo — os `500 × 500`
+   * chumbados aqui eram verdade quando todo ele era packshot quadrado.
+   */
+  const capa = dimensaoDaArte(produto.imagem);
+  const estudio = dimensaoDaArte(produto.imagemEstudio ?? produto.imagem);
 
   /**
    * O NOME NA SACOLA É EM PORTUGUÊS, SEMPRE — mesma decisão de
@@ -114,8 +123,8 @@ export function CardProduto({
             src={produto.imagem}
             alt=""
             aria-hidden
-            width={500}
-            height={500}
+            width={capa.w}
+            height={capa.h}
             sizes="(min-width: 1024px) 26vw, (min-width: 640px) 38vw, 58vw"
             className={`h-full w-full object-cover ${
               produto.imagemEstudio
@@ -129,21 +138,16 @@ export function CardProduto({
               linha sem foto de estúdio pagaria um segundo download para
               cruzar uma imagem com ela mesma — que é exatamente o que o
               `<CardCafe>` fazia enquanto `sabor` e `pacote` eram o mesmo
-              arquivo.
-
-              `fill` e não width/height: a foto de estúdio não tem medida
-              única no acervo (4:5 em duas linhas, 825×1024 na terceira) e o
-              quadrado deste card já é a caixa de layout que segura o CLS.
-              Declarar um tamanho aqui obrigaria o card a saber o tamanho do
-              arquivo — que é justamente o que `produtos.ts` centraliza. */}
+              arquivo. */}
           {produto.imagemEstudio ? (
             <Image
               src={produto.imagemEstudio}
               alt=""
               aria-hidden
-              fill
+              width={estudio.w}
+              height={estudio.h}
               sizes="(min-width: 1024px) 26vw, (min-width: 640px) 38vw, 58vw"
-              className="object-cover opacity-0 transition-opacity duration-[320ms] ease-canastra group-hover:opacity-100"
+              className="absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-[320ms] ease-canastra group-hover:opacity-100"
             />
           ) : null}
         </div>

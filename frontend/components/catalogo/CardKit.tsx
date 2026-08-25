@@ -7,7 +7,11 @@ import {
   precoParaLeitor,
 } from "@/lib/catalogo/repositorio";
 import { COR_DA_LINHA, rotuloDaEmbalagem } from "@/lib/catalogo/rotulos";
-import { nomeDoKitNaSacola, traduzirKit } from "@/lib/catalogo/produtos";
+import {
+  dimensaoDaArte,
+  nomeDoKitNaSacola,
+  traduzirKit,
+} from "@/lib/catalogo/produtos";
 import { Botao } from "@/components/ui/Botao";
 import { useAdicionarNaSacola } from "@/lib/sacola/usar-adicionar";
 import { dicionario } from "@/lib/i18n/dicionario";
@@ -84,6 +88,14 @@ export function CardKit({
   const fita = COR_DA_LINHA[kit.linha];
 
   /**
+   * A medida real do arquivo, e não `500 × 500` chumbado: a arte da linha
+   * dominante virou fotografia em 4:5 nas três principais. O CSS aqui é
+   * `aspect-square object-cover`, então a caixa não muda — o que mudaria é o
+   * srcset que o `next/image` calcula a partir de uma proporção falsa.
+   */
+  const arte = dimensaoDaArte(kit.imagem);
+
+  /**
    * A regra de compra vive em `lib/sacola/usar-adicionar.ts` desde que a home
    * passou a vender SKU avulso e o `CardProduto` precisou da mesma coisa. O
    * que era corpo deste componente virou função provável; o teste ao lado não
@@ -117,8 +129,8 @@ export function CardKit({
             src={kit.imagem}
             alt=""
             aria-hidden
-            width={500}
-            height={500}
+            width={arte.w}
+            height={arte.h}
             sizes="112px"
             className="aspect-square w-full border border-fuligem-20 object-cover"
           />

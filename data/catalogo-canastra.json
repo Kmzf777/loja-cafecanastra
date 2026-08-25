@@ -5,14 +5,14 @@
     "procedencia": {
       "captura-loja": "Screenshot da propria loja.cafecanastra.com enviado pelo dono do projeto. Evidencia primaria: preco e estado de estoque lidos da tela.",
       "pesquisa-web": "Resultado de busca que cita a pagina do produto. Confiavel para nome, URL e descricao sensorial; para preco vale menos que a captura.",
-      "embalagem": "Lido na propria arte do pacote (frontend/public/*.png).",
+      "embalagem": "Lido na propria arte do pacote (as imagens em frontend/public/).",
       "inferido": "Derivado do padrao dos outros SKUs. Marcado sempre que usado — nunca apresentado como dado da loja.",
       "material-da-marca": "Descricao de produto publicada pela propria marca no seu material comercial, entregue pelo dono do projeto. Evidencia primaria para texto sensorial, torra, intensidade e pontuacao SCA — e o que a marca de fato afirma sobre cada linha, e vence a pesquisa-web onde os dois divergem."
     },
     "acesso_direto_bloqueado": "Este ambiente nao alcanca loja.cafecanastra.com (a politica de egresso responde 403 no CONNECT), entao nada foi raspado do site. Por isso a procedencia por campo importa: quando o dominio for liberado, da para reconferir SKU a SKU pelo campo `url`.",
     "chaves_de_texto": "`rotuloChave` (em cada produto) e `marca.atributosChaves` NAO sao dado novo: sao a CHAVE ESTAVEL do texto que ja esta ao lado deles em portugues. O texto de cada idioma vive em frontend/lib/i18n/dicionario.ts, em `catalogo.embalagem` e `catalogo.atributo`, chaveado por elas — a mesma regra que ja vale para torra, formato e moagem. O portugues daqui continua sendo o oraculo: produtos.test.ts falha se o dicionario e este arquivo discordarem de uma virgula. Nada disso e lido por backend/db/seed.js, que continua enxergando exatamente os mesmos campos de antes.",
     "moeda": "precoCentavos esta em centavos de real. 3970 = R$ 39,70.",
-    "imagem_e_imagemEstudio": "`imagem` e o packshot de catalogo — pacote de frente, fundo branco, 500x500. E a arte canonica: e ela que vai para a miniatura da sacola e para o card em repouso. `imagemEstudio` e a SEGUNDA foto do pacote, em estudio com fundo de cor, e e a que aparece no hover do card e como segunda peca da galeria da PDP; so as tres linhas principais (classico, suave, canela) tem uma. Onde falta, o hover cai no proprio packshot e o crossfade simplesmente nao aparece — que e como o site inteiro se comportava antes destas fotos existirem. Procedencia: as tres foram entregues pelo dono do projeto; as de classico e canela vieram com nome de arquivo declarando geracao por IA a partir da arte real da embalagem, a de suave veio como fotografia. Nenhuma delas e dado comercial: nao muda preco, estoque nem SKU. backend/db/seed.js nao le este campo."
+    "imagem_e_imagemEstudio": "`imagem` e a CAPA — o packshot de catalogo, pacote de frente, fundo claro. E a arte canonica da linha: e ela que vai para a miniatura da sacola, para o card em repouso e para o primeiro lugar da galeria da PDP. `imagemEstudio` e a SEGUNDA foto do pacote, em estudio com fundo de cor, e e a que o hover do card revela e que fecha a galeria; so as tres linhas principais (classico, suave, canela) tem uma. Onde falta, o hover cai na propria capa e o crossfade simplesmente nao aparece — que e como o site inteiro se comportava antes destas fotos existirem. Procedencia: todas foram entregues pelo dono do projeto. As capas das tres linhas principais sao fotografia de estudio em 4:5 (1400x1738) e substituiram os packshots PNG de 500x500 que vinham da arte da embalagem. Das fotos de hover, as de classico e canela chegaram com nome de arquivo declarando geracao por IA a partir da arte real da embalagem, e a de suave como fotografia. Nenhuma delas e dado comercial: nao muda preco, estoque nem SKU. `imagem` E lido por backend/db/seed.js (vira a URL absoluta gravada em canastra.produtos, e por isso instalacao-completa.sql precisa ser regerado quando ela muda); `imagemEstudio` nao."
   },
   "marca": {
     "nome": "Café Canastra",
@@ -62,7 +62,7 @@
       ],
       "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra escura, intensidade 8. Notas caramelizadas e achocolatadas.",
       "preparoSugerido": "Ristretto e espresso",
-      "imagem": "/cafe-classico.png",
+      "imagem": "/capa-classico.jpg",
       "imagemEstudio": "/pacote-classico.jpg",
       "fonte": "material-da-marca",
       "sca": 80,
@@ -83,7 +83,7 @@
       ],
       "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra média, intensidade 7. Notas achocolatadas e finalização cítrica.",
       "preparoSugerido": "Coador, prensa francesa e aeropress",
-      "imagem": "/cafe-suave.png",
+      "imagem": "/capa-suave.jpg",
       "imagemEstudio": "/pacote-suave.jpg",
       "fonte": "material-da-marca",
       "sca": 80,
@@ -103,7 +103,7 @@
       ],
       "descricao": "100% arábica, tipo especial acima de 80 pontos SCA. Torra escura, intensidade 7. Notas caramelizadas, com canela natural moída junto ao grão.",
       "preparoSugerido": "Coador",
-      "imagem": "/cafe-canela.png",
+      "imagem": "/capa-canela.jpg",
       "imagemEstudio": "/pacote-canela.jpg",
       "fonte": "material-da-marca",
       "sca": 80,
@@ -143,8 +143,8 @@
       ],
       "descricao": "100% arábica gourmet, 75 pontos SCA. Torra escura, intensidade 8. Notas caramelizadas e achocolatadas. Marca irmã, tipo exportação, vendida na mesma loja em pacote de 1 kg em grãos.",
       "preparoSugerido": "Espresso",
-      "imagem": "/cafe-classico.png",
-      "imagemObservacao": "FALTA ARTE PROPRIA. O pacote real é preto com a marca Néctar de Minas, diferente do Clássico. Está reusando a arte do Clássico como fallback até a foto entrar em public/.",
+      "imagem": "/capa-classico.jpg",
+      "imagemObservacao": "FALTA ARTE PROPRIA. O pacote real é preto com a marca Néctar de Minas, diferente do Clássico. Está reusando a arte do Clássico como fallback até a foto entrar em public/ — e acompanhou o Clássico quando a capa dele trocou de arquivo, para o grid não misturar duas gerações de foto. NÃO tem `imagemEstudio`: sem arte própria, o hover não revelaria nada de novo.",
       "fonte": "material-da-marca",
       "sca": 75,
       "scaExata": true

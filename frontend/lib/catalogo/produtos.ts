@@ -11,14 +11,14 @@
 // dois: se a vitrine e o painel divergissem sobre o que a loja vende, o bug
 // seria invisível até alguém comparar as duas telas lado a lado.
 //
-// PROPORÇÃO DE IMAGEM — pendência de acervo PARCIALMENTE RESOLVIDA. Os
-// packshots de catálogo em public/ são 1:1 (500×500) e o card é 4:5
-// (estetica.md §8), então `object-cover` recorta o quadrado. As fotos de
-// estúdio (`imagemEstudio`, hoje nas três linhas principais) já nascem em 4:5
-// e entram no card sem recorte nenhum. Os campos w/h declaram sempre a medida
-// do ARQUIVO REAL, nunca a da caixa: declarar 4:5 num arquivo quadrado
-// distorce a imagem e estoura o CLS, que o §10 exige abaixo de 0,05.
-// `produtos.test.ts` confere arquivo por arquivo.
+// PROPORÇÃO DE IMAGEM — a pendência de acervo do §8 caiu para as três linhas
+// principais. Capa e foto de estúdio delas são fotografia em 4:5, que é a
+// proporção do `<CardCafe>`: entram sem recorte. O que resta de 1:1 (500×500)
+// é a arte de embalagem do Microlote, e nela `object-cover` ainda recorta o
+// quadrado. Os campos w/h declaram sempre a medida do ARQUIVO REAL, nunca a da
+// caixa — declarar 4:5 num arquivo quadrado distorce a imagem e estoura o CLS,
+// que o §10 exige abaixo de 0,05. `produtos.test.ts` confere arquivo por
+// arquivo, e `dimensaoDaArte()` é o único lugar que guarda a medida.
 
 import bruto from "../../../data/catalogo-canastra.json";
 import editorialTraduzido from "../../../data/catalogo-canastra.i18n.json";
@@ -183,15 +183,33 @@ const EMBALAGEM_PT = new Map(bruto.linhas.map((l) => [l.slug, l.embalagem]));
  * entrada esquecida cai no quadrado e o teste falha com o nome do arquivo.
  */
 const DIMENSAO_DA_ARTE: Record<string, { w: number; h: number }> = {
+  // As capas fotografadas das três linhas principais — 4:5, a proporção do card.
+  "/capa-classico.jpg": { w: 1400, h: 1738 },
+  "/capa-suave.jpg": { w: 1400, h: 1738 },
+  "/capa-canela.jpg": { w: 1400, h: 1738 },
+  // As fotos de estúdio, que o hover revela.
   "/pacote-classico.jpg": { w: 1000, h: 1241 },
   "/pacote-suave.jpg": { w: 825, h: 1024 },
   "/pacote-canela.jpg": { w: 1000, h: 1241 },
 };
 
-/** Os packshots de catálogo do acervo são todos 500×500. */
+/**
+ * O que sobrou de quadrado: as artes de embalagem em PNG, 500×500 — hoje só o
+ * Microlote. Era o formato de TODO o acervo, e por isso a medida vivia
+ * chumbada; virou exceção quando as capas fotografadas entraram em 4:5.
+ */
 const ARTE_QUADRADA = { w: 500, h: 500 };
 
-const dimensaoDe = (src: string) => DIMENSAO_DA_ARTE[src] ?? ARTE_QUADRADA;
+/**
+ * A medida real de uma arte de public/, para quem precisa declarar w/h.
+ *
+ * Exportada porque os cards também precisam: `<CardProduto>` e `<CardKit>`
+ * escreviam `width={500} height={500}` à mão, o que era verdade quando todo o
+ * acervo era quadrado e virou mentira na primeira capa em 4:5. Uma medida só,
+ * num lugar só, conferida contra o arquivo por `produtos.test.ts`.
+ */
+export const dimensaoDaArte = (src: string) =>
+  DIMENSAO_DA_ARTE[src] ?? ARTE_QUADRADA;
 
 function monta(linha: LinhaBruta): Lote {
   const pontoTorra = linha.pontoTorra as Lote["pontoTorra"];
@@ -260,12 +278,12 @@ function monta(linha: LinhaBruta): Lote {
       sabor: {
         src: linha.imagem,
         alt: alt("sabor", linha.embalagem, linha.nome, LOCALE_PADRAO),
-        ...dimensaoDe(linha.imagem),
+        ...dimensaoDaArte(linha.imagem),
       },
       pacote: {
         src: doPacote,
         alt: alt("pacote", linha.embalagem, linha.nome, LOCALE_PADRAO),
-        ...dimensaoDe(doPacote),
+        ...dimensaoDaArte(doPacote),
       },
     },
     variantes: variantesDa(linha),

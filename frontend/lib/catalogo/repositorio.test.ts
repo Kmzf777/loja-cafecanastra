@@ -176,7 +176,9 @@ describe("repositorio do catalogo", () => {
     // Sem API no ambiente de teste, vale o JSON versionado: R$ 109,70.
     expect(caixa?.preco).toBe(10970);
     expect(caixa?.linha).toBe("canela");
-    expect(caixa?.imagem).toBe("/cafe-canela.png");
+    // A CAPA da linha dominante, e nunca a foto de estúdio: o kit é desenhado
+    // num quadrado de 112 px, onde o pacote sobre fundo de cor some.
+    expect(caixa?.imagem).toBe("/capa-canela.jpg");
   });
 });
 

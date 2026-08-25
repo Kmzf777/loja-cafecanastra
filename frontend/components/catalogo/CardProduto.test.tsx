@@ -40,7 +40,7 @@ const CLASSICO_250: ProdutoVendavel = {
   rotuloEmbalagem: "Pacote com 250 g",
   rotuloChave: "pacote-250g",
   nome: "Café Especial Canastra Clássico em Grãos - Pacote com 250 gramas",
-  imagem: "/cafe-classico.png",
+  imagem: "/capa-classico.jpg",
   preco: 3970,
   estoque: 20,
 };

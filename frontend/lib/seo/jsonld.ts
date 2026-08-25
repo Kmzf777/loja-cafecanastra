@@ -31,7 +31,7 @@ export function centavosParaDecimal(centavos: number): string {
   return (centavos / 100).toFixed(2);
 }
 
-/** `/cafe-classico.png` → `https://loja.cafecanastra.com/cafe-classico.png`. */
+/** `/capa-classico.jpg` → `https://loja.cafecanastra.com/capa-classico.jpg`. */
 export function absoluta(caminho: string, base: string = urlDoSite()): string {
   if (/^https?:\/\//.test(caminho)) return caminho;
   return `${base}${caminho.startsWith("/") ? "" : "/"}${caminho}`;
