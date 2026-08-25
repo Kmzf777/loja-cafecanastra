@@ -16,6 +16,21 @@
  * Produto ausente do Map é produto que não existe no banco. O chamador decide o
  * que isso significa — na cotação, recusar; no checkout, "o produto não existe
  * mais". O repositório não inventa pacote.
+ *
+ * CONTRATO NUMÉRICO: `price`, `weight`, `width`, `height` e `length` chegam
+ * como STRING, não como number. As colunas são `numeric` no Postgres, e este
+ * código não registra `pg.types.setTypeParser` para o OID de `numeric` — sem
+ * esse parser, o driver devolve o texto cru em vez de arredondar para float,
+ * exatamente para não perder precisão em silêncio. `p.weight + 1` concatena em
+ * vez de somar; é a mesma classe de erro silencioso que esta extração existe
+ * para eliminar, um degrau abaixo dela.
+ *
+ * O repositório NÃO converte para Number aqui: fazer isso criaria um SEGUNDO
+ * lugar onde o contrato numérico mora, e a resposta que o resto do código já
+ * dá para esse problema (ver `precoComPromocao` em `utils/preco.js`, e o
+ * `productsPayload` de `ShippingController.js`) é converter no PONTO da conta,
+ * não na leitura. Quem chama `lerParaCotacao` converte com `Number(...)` antes
+ * de somar, multiplicar ou comparar.
  */
 
 const pool = require("../pgPool");
