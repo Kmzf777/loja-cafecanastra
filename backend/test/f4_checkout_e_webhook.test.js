@@ -31,6 +31,13 @@ const mp = {
   falhaNoGet: false,
   falhaNoCreate: false,
   criacoes: [],
+  /**
+   * O SEGUNDO argumento de `payment.create`, um por criação e no mesmo índice
+   * de `mp.criacoes`. Array separado de propósito: `mp.criacoes` guarda o
+   * `body` e é lido por asserções em dois arquivos de teste — mudar a forma
+   * dele para `{ body, requestOptions }` quebraria todas elas de uma vez.
+   */
+  opcoes: [],
 };
 
 /** E-mails que TERIAM saído; o webhook não pode enviar duas vezes. */
@@ -124,9 +131,10 @@ before(async () => {
               },
             };
           },
-          create: async ({ body }) => {
+          create: async ({ body, requestOptions }) => {
             if (mp.falhaNoCreate) throw new Error("gateway caiu");
             mp.criacoes.push(body);
+            mp.opcoes.push(requestOptions || null);
             return {
               id: 900000 + mp.criacoes.length,
               status: "pending",
@@ -547,4 +555,30 @@ test("sem o campo, o pedido passa: o checkout legado ainda não o manda", async 
     res,
   );
   assert.equal(res.codigo, 201);
+});
+
+test("checkout: a cobrança leva a chave de idempotência ao Mercado Pago", async () => {
+  /**
+   * Sem isto, o duplo clique que vence a corrida cobra DUAS vezes no gateway
+   * e a loja só descobre pelo log de "PAGAMENTO DUPLICADO", que pede estorno
+   * manual. Com a chave, o MP devolve o MESMO pagamento na segunda chamada.
+   */
+  const antes = mp.criacoes.length;
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-idem-mp" },
+      body: corpoDeCheckout(),
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  assert.equal(mp.criacoes.length, antes + 1);
+  assert.equal(
+    mp.opcoes[mp.opcoes.length - 1]?.idempotencyKey,
+    `${ANA}:clique-idem-mp`,
+    "a chave tem que ser a MESMA que a linha do pedido grava",
+  );
 });

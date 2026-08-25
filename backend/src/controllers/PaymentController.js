@@ -821,7 +821,30 @@ class PaymentController {
 
       let mpResponse;
       try {
-        mpResponse = await payment.create({ body: paymentData });
+        /**
+         * A CHAVE VAI JUNTO, e é a mesma que o pedido grava.
+         *
+         * A loja já se defendia sozinha (índice único em `chave_idempotencia`),
+         * mas a defesa era TARDIA: no duplo clique que vence a corrida, a
+         * segunda requisição só é barrada DEPOIS de ter cobrado. Com a chave
+         * no gateway, o Mercado Pago devolve o mesmo pagamento em vez de criar
+         * outro — a cobrança dupla deixa de acontecer, em vez de ser
+         * compensada.
+         *
+         * Funciona porque a chave é estável entre tentativas: o navegador
+         * manda `Idempotency-Key` (lib/sacola/checkout.ts) e reusa o valor no
+         * retry do mesmo pedido. Quando o cabeçalho não vem, cada requisição
+         * gera um uuid próprio e o gateway não tem como deduplicar — mas
+         * nesse caso a corrida de duplo clique também não existe, porque não
+         * há dois cliques com a mesma identidade.
+         *
+         * O log de PAGAMENTO DUPLICADO mais abaixo FICA: defesa de servidor
+         * não se aposenta porque apareceu uma defesa de gateway.
+         */
+        mpResponse = await payment.create({
+          body: paymentData,
+          requestOptions: { idempotencyKey: chaveIdempotencia },
+        });
       } catch (falhaNoGateway) {
         // Cobranca nao saiu: devolve o que foi reservado, senao o produto some
         // do estoque sem ninguem ter comprado. O uso do cupom volta junto —
