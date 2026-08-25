@@ -720,14 +720,17 @@ test("cotação pública e recotação do checkout fecham no MESMO par, sem 409"
   /**
    * O TESTE QUE FIXA O PROPÓSITO DESTA CORREÇÃO.
    *
-   * O QUE ELE **NÃO** É: um teste do checkout de verdade. O lado direito é
-   * `conferirFrete` sobre itens montados por `montarItensDaCotacao`, e não o
-   * `process_payment`, porque o `PaymentController` ainda carrega a própria
-   * cópia do SELECT em vez de chamar o `cotacaoRepository` (é a Task 4 que
-   * unifica). Então o que está provado aqui é que a cotação da vitrine e uma
-   * recotação A PARTIR DO BANCO fecham no mesmo par nome/preço. Quando as duas
-   * pontas passarem pelo mesmo repositório, este teste passa a cobrir o
-   * caminho inteiro sem precisar mudar.
+   * O QUE ELE **NÃO** É: um teste do `process_payment` via HTTP — não há aqui
+   * mock de requisição nem do Mercado Pago. O lado direito é `conferirFrete`
+   * sobre itens montados por `montarItensDaCotacao`, a MESMA função que a rota
+   * pública usa. E isso já basta: desde a Task 4 o `PaymentController` não
+   * carrega mais cópia própria do SELECT — `createPayment` lê pelo mesmo
+   * `cotacaoRepository.lerParaCotacao` que `montarItensDaCotacao` chama aqui.
+   * Então o que está provado aqui é que a cotação da vitrine e a recotação do
+   * checkout fecham no mesmo par nome/preço PORQUE as duas pontas leem do
+   * MESMO repositório — não sobrou um segundo SELECT para divergir, e este
+   * teste cobre o caminho inteiro sem precisar simular o processo de
+   * pagamento inteiro.
    *
    * Os números straddleiam o piso de R$ 149,00 DE PROPÓSITO, senão o teste
    * passaria sem provar nada:

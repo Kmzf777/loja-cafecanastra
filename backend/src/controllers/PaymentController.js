@@ -27,6 +27,7 @@ const { precoComPromocao, somarCentavos } = require("../utils/preco");
 const { garantirCpf } = require("../utils/cpf");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const cuponsRepository = require("../repositories/cuponsRepository");
+const cotacaoRepository = require("../repositories/cotacaoRepository");
 const promotionsRepo = new PromotionsRepository();
 const {
   sendStatusEmail,
@@ -485,20 +486,9 @@ class PaymentController {
        * usado o subtotal de milissegundos atras — e frete, e uma janela que
        * nao justifica prender a prateleira inteira.
        */
-      const { rows: leituraPrevia } = await pool.query(
-        `SELECT produto_id  AS product_id,
-                preco       AS price,
-                categoria   AS category,
-                nome        AS name,
-                peso        AS weight,
-                largura     AS width,
-                altura      AS height,
-                comprimento AS length
-           FROM canastra.produtos
-          WHERE produto_id = ANY($1::uuid[])`,
-        [itensOrdenados.map((i) => i.product_id)],
+      const previaPorId = await cotacaoRepository.lerParaCotacao(
+        itensOrdenados.map((i) => i.product_id),
       );
-      const previaPorId = new Map(leituraPrevia.map((p) => [p.product_id, p]));
 
       const itensParaCotacao = [];
       // O subtotal de CATALOGO desta leitura — a base que a vitrine exibe, sem
