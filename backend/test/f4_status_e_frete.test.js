@@ -697,8 +697,17 @@ test("promoção fora do ar DERRUBA a cotação em vez de inventar o preço", as
     "ALTER TABLE canastra.promocoes RENAME TO promocoes_fora_do_ar",
   );
   try {
-    await assert.rejects(() =>
-      montarItensDaCotacao([{ product_id: id, quantity: 1, price: 79.9 }]),
+    await assert.rejects(
+      () => montarItensDaCotacao([{ product_id: id, quantity: 1, price: 79.9 }]),
+      (erro) => {
+        // COM matcher, e não um `rejects` pelado: sem isto o teste ficaria
+        // verde com QUALQUER rejeição — um fixture que derivasse e estourasse
+        // PRODUTO_INEXISTENTE ainda "provaria" promoção fora do ar. 42P01 é
+        // undefined_table, que é a falha que estamos de fato simulando.
+        assert.equal(erro.code, "42P01");
+        assert.match(erro.message, /promocoes/);
+        return true;
+      },
     );
   } finally {
     await bd.pool.query(
@@ -709,8 +718,16 @@ test("promoção fora do ar DERRUBA a cotação em vez de inventar o preço", as
 
 test("cotação pública e recotação do checkout fecham no MESMO par, sem 409", async () => {
   /**
-   * O TESTE QUE FIXA O PROPÓSITO DESTA CORREÇÃO, e o único que exercita as duas
-   * pontas juntas.
+   * O TESTE QUE FIXA O PROPÓSITO DESTA CORREÇÃO.
+   *
+   * O QUE ELE **NÃO** É: um teste do checkout de verdade. O lado direito é
+   * `conferirFrete` sobre itens montados por `montarItensDaCotacao`, e não o
+   * `process_payment`, porque o `PaymentController` ainda carrega a própria
+   * cópia do SELECT em vez de chamar o `cotacaoRepository` (é a Task 4 que
+   * unifica). Então o que está provado aqui é que a cotação da vitrine e uma
+   * recotação A PARTIR DO BANCO fecham no mesmo par nome/preço. Quando as duas
+   * pontas passarem pelo mesmo repositório, este teste passa a cobrir o
+   * caminho inteiro sem precisar mudar.
    *
    * Os números straddleiam o piso de R$ 149,00 DE PROPÓSITO, senão o teste
    * passaria sem provar nada:
@@ -737,7 +754,8 @@ test("cotação pública e recotação do checkout fecham no MESMO par, sem 409"
   assert.ok(escolhida, "a entrega local deveria cobrir o CEP 350xx");
   assert.equal(escolhida.price, 5, "o preço promocional não atinge o piso");
 
-  // 2) O checkout monta os itens do banco e reconfere o que o cliente escolheu.
+  // 2) O lado do checkout: itens montados do banco, e a mesma conferência que
+  //    o `process_payment` faz sobre eles (ver a ressalva no topo do teste).
   const itensDoCheckout = await montarItensDaCotacao(sacolaDoNavegador);
   const conferido = await conferirFrete({
     address: { zip_code: CEP_LOCAL },

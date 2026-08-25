@@ -22,6 +22,21 @@ const promotionsRepo = new PromotionsRepository();
 const LOCAL_PREFIXES = ["350"];
 
 /**
+ * Os nomes das dimensões em PORTUGUÊS, para a frase que o operador lê.
+ *
+ * Os campos viajam em inglês porque é o contrato da Melhor Envio e são os
+ * aliases do `cotacaoRepository`. Mas quem recebe o log de "produto sem X" é o
+ * gestor da loja, e ele vai procurar "peso" no formulário do painel — não
+ * "weight". Traduzir na borda é mais barato que renomear o contrato.
+ */
+const NOME_DO_CAMPO = {
+  weight: "peso",
+  width: "largura",
+  height: "altura",
+  length: "comprimento",
+};
+
+/**
  * O piso do frete gratis, em centavos, lido de `canastra.config_loja` (0009).
  *
  * FRETE GRATIS E REGRA DE SERVIDOR (decisao 3 do plano mestre): o navegador
@@ -34,13 +49,32 @@ const LOCAL_PREFIXES = ["350"];
  * campo por engano daria frete gratis para a loja inteira — o erro caro e
  * silencioso. Quem quiser frete gratis sempre poe 1 centavo.
  *
- * O catch aqui NAO e um catch mentiroso, e a distincao esta medida nos
- * testes: falhar a leitura NAO devolve dado errado como se fosse certo —
- * devolve "sem frete gratis", com erro no log, e o cliente paga o frete real.
- * A cotacao publica nao pode cair junto com o banco (ela funciona ate sem
- * cadastro), e no checkout o banco acabou de responder o estoque, entao a
- * janela real disso e minima. O modo de falha e visivel: o navegador manda 0,
- * a recotacao vem com preco, e o checkout responde 409 "o frete mudou".
+ * O catch aqui nao devolve dado errado como se fosse certo: devolve "sem frete
+ * gratis", com erro no log, e o cliente paga o frete real.
+ *
+ * O QUE ELE COMPRAVA ACABOU NA F8, e o texto que morava aqui virou falso.
+ * Dizia que a cotacao publica nao podia cair junto com o banco, "porque ela
+ * funciona ate sem cadastro". Isso era verdade: antes da F8 esta rota inventava
+ * peso e dimensao no codigo e nao consultava produto nenhum, entao cotava ate
+ * item que o catalogo desconhecia. Hoje `calculate` COMECA por
+ * `montarItensDaCotacao`, que le produtos e promocoes — com o banco fora, a
+ * requisicao morre la e esta funcao nem chega a ser chamada; e product_id que o
+ * catalogo nao conhece agora e 400, nao uma cotacao com default.
+ *
+ * O QUE ELE AINDA ABSORVE e so uma falha ISOLADA em `config_loja`: o banco de
+ * pe, produtos e promocoes ja respondidos, e so esta leitura falhando. E
+ * absorver isso NAO e de graca. Sem o piso, a cotacao devolve frete com preco;
+ * se no checkout a leitura funcionar, o subtotal cruza o piso, a opcao vira
+ * zero, o par nome/preco nao casa e sai 409 "o frete mudou". E o mesmo 409 do
+ * fallback de promocoes que a F8 removeu (ver `montarItensDaCotacao`), so que
+ * na direcao oposta — prometer de MENOS quebra igual, porque o casamento e
+ * exato.
+ *
+ * ENTAO POR QUE ELE CONTINUA AQUI: por ESCOPO, nao por mecanismo. Este catch e
+ * anterior a F8, e nenhum teste fixa o caminho de falha dele — o que torna
+ * remove-lo facil demais para se fazer de passagem, junto de outra correcao.
+ * Pelo argumento acima ele provavelmente deveria sair; isso e decisao de quem
+ * cuida do frete gratis, com um teste que fixe a escolha.
  */
 async function freteGratisMinimoCentavos() {
   try {
@@ -107,12 +141,14 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
   }
 
   /**
-   * SEM DEFAULT: item sem pacote completo é recusa, não um 0,3 kg inventado.
+   * SEM DEFAULT: item sem pacote completo é recusa, não pacote inventado.
    *
-   * Quem chama traz peso e dimensões do banco — `montarItensDaCotacao` na rota
-   * pública, a leitura prévia do `PaymentController` no checkout. Esta função
-   * não tem de onde adivinhar, e adivinhar era o bug (a história completa está
-   * na docstring do `cotacaoRepository`).
+   * O default antigo era 0,3 kg e 20×5×20 cm, que não é nenhum produto do
+   * catálogo — os reais pesam de 0,250 a 2,000 kg e medem 18×7×24 ou 24×10×32.
+   *
+   * Quem chama traz peso e dimensões do banco: `montarItensDaCotacao` na rota
+   * pública, a leitura prévia do `PaymentController` no checkout. POR QUE os
+   * dois têm de ler o mesmo, está na docstring do `cotacaoRepository`.
    */
   const productsPayload = itens.map((item) => {
     const dimensoes = {
@@ -305,12 +341,16 @@ async function montarItensDaCotacao(items) {
    * verdade não é "errar para o lado bom": é NÃO DIVERGIR. Com as promoções
    * mudas, a única forma de não divergir é não responder.
    *
-   * POR QUE ISTO NÃO CONTRADIZ `freteGratisMinimoCentavos` (bem acima), que
-   * TEM catch e assume o mesmo risco de 409 de olhos abertos: lá o catch
-   * compra uma coisa que aqui não existe — a cotação da vitrine continuar de
-   * pé com o BANCO fora do ar. Aqui o banco acabou de responder: o
-   * `lerParaCotacao` deste mesmo carrinho está na linha de cima. Não há
-   * vitrine a salvar, só um número que o checkout não vai confirmar.
+   * O CATCH DE `freteGratisMinimoCentavos` (bem acima) NÃO É PRECEDENTE para
+   * um catch aqui, e a razão não é uma diferença de mecanismo — é datada. Ele
+   * é um sobrevivente da rota PRÉ-F8, quando esta cotação realmente rodava sem
+   * banco nenhum, com peso e dimensão vindos de defaults do código. Hoje
+   * `calculate` começa lendo produtos e promoções: com o banco fora, a
+   * requisição morre antes e aquele catch nem é alcançado. O que ele ainda
+   * absorve é uma falha isolada em `config_loja` — e absorvê-la produz
+   * exatamente o 409 desta conta na direção oposta (cotação com preço,
+   * checkout com grátis). Pelo argumento acima, ele também não é seguro;
+   * continua no lugar por ESCOPO, não por mérito, e a docstring dele explica.
    *
    * O checkout também não protege esta leitura (`PaymentController`): lá uma
    * falha de promoção já é 500. Um catch só deste lado deixaria os dois
@@ -431,10 +471,11 @@ class ShippingController {
        * da sacola), porque ele não pode esperar o conserto.
        */
       if (error.code === "ITEM_SEM_PACOTE") {
+        const campoEmPortugues = NOME_DO_CAMPO[error.campo] || error.campo;
         console.error(
-          `Cotação impossível: o produto ${error.productId} está sem "${error.campo}" ` +
-            "no catálogo. Corrija peso e dimensões no painel — toda cotação " +
-            "com este item falha até lá.",
+          `Cotação impossível: o produto ${error.productId} está sem ` +
+            `${campoEmPortugues} no catálogo. Corrija peso e dimensões no ` +
+            "painel — toda cotação com este item falha até lá.",
         );
         return res.status(422).json({
           error:
