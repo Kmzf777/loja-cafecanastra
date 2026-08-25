@@ -450,14 +450,35 @@ async function montarItensDaCotacao(items) {
   // `PaymentController.js:30` e `CuponsController.js:7` já fazem — instanciam
   // uma vez no módulo e chamam. (Uma versão anterior deste plano dizia
   // `PromotionsRepository.getActivePromotions()`. Esse método não existe.)
-  const promocoes = await promotionsRepo.findActivePromotionsForCheckout().catch(
-    (erro) => {
-      // Promoção indisponível NÃO derruba a cotação: sem ela o preço é o de
-      // catálogo, que é mais ALTO — o lado seguro do erro para o frete grátis.
-      console.error("Cotação: promoções indisponíveis, usando preço de catálogo:", erro.message);
-      return [];
-    },
-  );
+  /**
+   * SEM `.catch`, E ISTO FOI UM ERRO CORRIGIDO — leia antes de "melhorar".
+   *
+   * Uma versão anterior deste plano mandava `.catch(() => [])` aqui, com o
+   * comentário "sem promoção o preço é o de catálogo, que é mais ALTO — o lado
+   * seguro do erro". O raciocínio está INVERTIDO, e a revisão de código o pegou:
+   *
+   *   cotação, promoções fora do ar  → preço de catálogo R$ 109,90
+   *                                  → subtotal 10990 ≥ piso 10000
+   *                                  → FRETE GRÁTIS prometido ao cliente
+   *   checkout, 30 s depois, no ar   → preço promocional R$ 87,92
+   *                                  → subtotal 8792 < piso
+   *                                  → PAC volta a custar R$ 24,90
+   *                                  → `conferirFrete` → 409 "o frete mudou"
+   *
+   * É exatamente o bug que esta fase existe para matar, reintroduzido pela linha
+   * escrita para protegê-lo.
+   *
+   * E NÃO EXISTE LADO SEGURO PARA CAIR: `conferirFrete` casa NOME E PREÇO
+   * (PaymentController.js:129-134), então qualquer divergência dá 409 — prometer
+   * de menos erra igual a prometer de mais. Só NÃO DIVERGIR serve.
+   *
+   * Some com isso o assimetria que havia: o checkout NÃO captura
+   * (PaymentController.js:464-465), então lá a falha de promoções já era um 500.
+   * Aqui ela passa a ser um erro visível também. Cotação que falha é um aviso na
+   * tela, que o cliente tenta de novo; 409 no pagamento é venda perdida que
+   * parece propaganda enganosa.
+   */
+  const promocoes = await promotionsRepo.findActivePromotionsForCheckout();
 
   return items.map((item) => {
     const produto = porId.get(String(item.product_id));
@@ -625,8 +646,40 @@ git commit -m "docs(frete): o CEP de despacho precisa casar com a conta"
 ---
 
 **Fim da Fase 1.** Critério de pronto: suíte verde com `--test-concurrency=1`, e
-`grep -rn "0.3\|20, 5, 20" backend/src/controllers/ShippingController.js` sem
-resultado de default de pacote.
+um teste que cota um carrinho pela rota pública, roda `conferirFrete` no MESMO
+carrinho e prova que não dá 409. Esse teste é o critério de verdade — é a
+regressão que a fase inteira existe para impedir.
+
+> **O `grep` por `0.3` em `ShippingController.js` NÃO é critério de pronto**, e a
+> primeira versão deste plano dizia que era. A revisão de código mostrou por quê:
+> os mesmos números sobrevivem em dois outros lugares.
+
+---
+
+### Lacuna conhecida e NÃO fechada nesta fase: o pacote fantasma no schema
+
+Os mesmos `0.3 / 20 / 5 / 20` continuam em dois lugares fora do controller:
+
+| Onde | O quê |
+|---|---|
+| `backend/db/migrations/0003_catalogo.sql:26-29` | `peso NOT NULL DEFAULT 0.3`, `largura DEFAULT 20`, `altura DEFAULT 5`, `comprimento DEFAULT 20` |
+| `backend/src/repositories/dashboardRepository.js:75-78` | `numeroPositivo(corpo.weight, 0.3)` e os três irmãos, no cadastro de produto pelo painel |
+
+Consequência: **um produto cadastrado sem peso é gravado com o pacote fantasma**,
+e como as duas pontas agora leem do banco, as duas concordam — no número errado.
+
+**Isto NÃO é o bug 409, e por isso não entra nesta fase.** O 409 está fechado: a
+vitrine e o checkout somam sobre a mesma base. O que sobra é outro problema, com
+outro sintoma e outro custo — postagem cobrada errada pela transportadora, item a
+item, sem ninguém ver. Fechá-lo exige decidir se o painel passa a EXIGIR peso e o
+que fazer com os produtos já cadastrados, e isso é decisão do dono da loja, não
+uma linha de código.
+
+Pior ainda: `numeroPositivo` aceita `0` (devolve `n` quando `n >= 0`) e não há
+`CHECK` em `peso`. Um admin que digitar 0 no campo cria um produto que derruba
+**toda** cotação que o contiver.
+
+Registrado aqui para não se perder. Levado ao dono da loja em 25/08/2026.
 
 ---
 
