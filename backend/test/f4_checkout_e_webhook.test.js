@@ -626,3 +626,38 @@ test("checkout: a fatura do cliente traz o nome da loja", async () => {
   );
   assert.equal(cobranca.statement_descriptor, "CAFECANASTRA");
 });
+
+test("checkout: additional_info leva itens, destinatário e IP ao antifraude", async () => {
+  // Repõe o estoque: este é o teste mais no fim do arquivo, e os checkouts de
+  // sucesso anteriores (2 unidades cada) já esgotaram as 10 iniciais. O que
+  // se confere aqui é o corpo mandado ao Mercado Pago, não o estoque.
+  await bd.pool.query(
+    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
+    [PRODUTO],
+  );
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-info" },
+      body: corpoDeCheckout(),
+      ip: "203.0.113.7",
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  const cobranca = mp.criacoes[mp.criacoes.length - 1];
+
+  // O nome sai de canastra.clientes; o before() cadastrou Ana sem sobrenome.
+  assert.equal(cobranca.payer.first_name, "Ana");
+
+  const info = cobranca.additional_info;
+  assert.equal(info.items.length, 1);
+  assert.equal(info.items[0].id, PRODUTO);
+  assert.equal(info.items[0].quantity, 2);
+  assert.equal(info.items[0].title, "Café do Teste");
+  assert.equal(info.ip_address, "203.0.113.7");
+  assert.equal(info.shipments.receiver_address.zip_code, "35012345");
+});

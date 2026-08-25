@@ -439,6 +439,18 @@ class PaymentController {
         }
       }
 
+      /**
+       * O nome do titular, para o `payer` que vai ao antifraude.
+       *
+       * CONSULTA PRÓPRIA, e não um campo a mais no retorno de `garantirCpf`:
+       * o contrato daquela função (`Promise<string | null>`) está documentado
+       * por extenso em utils/cpf.js e é COMPARTILHADO com a adesão do Clube.
+       * Alargar o retorno para servir a este caso mudaria o contrato dos dois
+       * chamadores por causa de um campo — exatamente o que o comentário de lá
+       * avisa para não fazer. O custo é uma ida a mais ao banco, fora da
+       * transação e antes da cobrança.
+       */
+      let nomeDoCliente = "";
       if (userId) {
         const cpf = await garantirCpf(userId, formData?.payer?.identification);
         if (!cpf) {
@@ -448,6 +460,11 @@ class PaymentController {
               "É necessário informar o CPF para prosseguir com a entrega.",
           });
         }
+        const { rows: linhasDoCliente } = await pool.query(
+          "SELECT nome FROM canastra.clientes WHERE user_id = $1::uuid",
+          [userId],
+        );
+        nomeDoCliente = String(linhasDoCliente[0]?.nome || "").trim();
       }
 
       if (!Array.isArray(items) || items.length === 0) {
@@ -802,6 +819,29 @@ class PaymentController {
 
       const webhookUrl = process.env.WEBHOOK_URL;
 
+      /**
+       * O nome quebrado em dois, porque é assim que o Mercado Pago pede.
+       *
+       * `canastra.clientes.nome` é um campo só e aceita "Ana" tanto quanto
+       * "Ana Maria de Souza". A primeira palavra é o nome; o resto, quando
+       * existe, é o sobrenome. Nome de uma palavra só NÃO manda `last_name`
+       * vazio: campo vazio é pior que campo ausente para o motor de risco.
+       */
+      const partesDoNome = nomeDoCliente.split(/\s+/).filter(Boolean);
+      const primeiroNome = partesDoNome[0] || "";
+      const sobrenome = partesDoNome.slice(1).join(" ");
+
+      /**
+       * O ENDEREÇO NO FORMATO DO MERCADO PAGO. O `address` do pedido usa os
+       * nomes da loja (`zip_code`/`cep`, `street`/`rua`), e as duas grafias
+       * circulam porque o corpo vem do navegador. Normaliza aqui, uma vez.
+       */
+      const enderecoParaOMp = {
+        zip_code: address?.zip_code || address?.zipCode || address?.cep || "",
+        street_name: address?.street || address?.rua || "",
+        street_number: String(address?.number || address?.numero || ""),
+      };
+
       const paymentData = {
         transaction_amount: finalAmountToCharge,
         token: formData?.token,
@@ -823,6 +863,9 @@ class PaymentController {
         statement_descriptor: DESCRITOR_NA_FATURA,
         payer: {
           email: formData.payer.email || userEmail,
+          ...(primeiroNome ? { first_name: primeiroNome } : {}),
+          ...(sobrenome ? { last_name: sobrenome } : {}),
+          ...(enderecoParaOMp.zip_code ? { address: enderecoParaOMp } : {}),
           ...(identification && identification.number
             ? {
                 identification: {
@@ -831,6 +874,31 @@ class PaymentController {
                 },
               }
             : {}),
+        },
+        /**
+         * O QUE O ANTIFRAUDE LÊ. Pedido sem `additional_info` é pedido cego
+         * para o motor de risco do Mercado Pago: ele não vê o que foi
+         * comprado, por quem, nem para onde vai. É o principal insumo de
+         * aprovação de cartão, e é item pontuado na Qualidade da integração.
+         *
+         * Tudo aqui já está em mãos — `validatedItems` veio do banco e o
+         * endereço já foi conferido. Nenhuma consulta nova.
+         */
+        additional_info: {
+          items: validatedItems.map((item) => ({
+            id: String(item.product_id),
+            title: item.name,
+            quantity: item.quantity,
+            unit_price: item.price,
+          })),
+          payer: {
+            ...(primeiroNome ? { first_name: primeiroNome } : {}),
+            ...(sobrenome ? { last_name: sobrenome } : {}),
+          },
+          ...(enderecoParaOMp.zip_code
+            ? { shipments: { receiver_address: enderecoParaOMp } }
+            : {}),
+          ...(req.ip ? { ip_address: req.ip } : {}),
         },
       };
 
