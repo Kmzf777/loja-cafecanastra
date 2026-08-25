@@ -42,6 +42,19 @@
 # a causa. Com o corpo todo dentro de uma funcao e a chamada na ultima linha,
 # o bash precisa ter lido e analisado o arquivo INTEIRO antes de executar
 # qualquer coisa. Nao mova o `main "$@"` para o meio do arquivo.
+#
+# A ULTIMA LINHA E UM GRUPO, `{ main "$@"; exit $?; }`, e o motivo e o caso
+# que a nota acima nao cobre: quando um commit deixa este script MAIOR do que
+# a copia em execucao, sobra conteudo no arquivo depois do deslocamento em
+# bytes onde o bash parou de ler. Se ele voltasse ali, executaria um pedaco de
+# linha do arquivo novo. O grupo fecha essa porta sem depender de saber se o
+# bash volta: ele le o grupo inteiro antes de executar, entao o `exit` ja esta
+# analisado quando main() comeca, e o processo sai de dentro dele.
+#
+# HONESTIDADE SOBRE A PROVA: em experimento local (bash 5, arquivo de 32 KB
+# reescrito por outro no meio da execucao) o bash NAO voltou a ler o arquivo
+# nem sem o grupo. Ou seja, o risco e teorico aqui e nao foi reproduzido — o
+# grupo fica porque custa uma linha e nao depende de qual bash roda na VPS.
 
 set -euo pipefail
 
@@ -170,19 +183,66 @@ conferir() {
     sleep 10
   done
 
-  local codigo
-  codigo=$(curl -s -o /dev/null -w '%{http_code}' \
-    --resolve loja.canastrainteligencia.com:443:127.0.0.1 \
-    https://loja.canastrainteligencia.com/ --max-time 30)
-  echo "vitrine respondeu HTTP $codigo"
-  [ "$codigo" = "200" ] || { echo "ERRO: esperava HTTP 200"; return 1; }
+  # O CONTAINER QUE ESTA SERVINDO AGORA. `status=running` e o `head -1` estao
+  # aqui porque no meio de um rolling update existem DOIS por um instante, e um
+  # `docker exec` com duas linhas de id nao roda.
+  local cid
+  cid=$(docker ps -q --filter name=loja_web --filter status=running | head -1)
+  [ -n "$cid" ] || { echo "ERRO: nenhum container de loja_web rodando"; return 1; }
 
-  # HTTP 200 NAO PROVA que a versao nova subiu: o container velho tambem
-  # responde 200. Confere o projeto Supabase assado no bundle — se o container
-  # fosse o antigo, esta contagem daria zero.
+  # A PROVA DE VIDA E POR DENTRO DO CONTAINER, e este foi o conserto de um
+  # deploy que falhava DEPOIS de ja ter publicado tudo.
+  #
+  # Aqui havia `curl --resolve loja...:443:127.0.0.1`. O stack nao publica
+  # porta nenhuma (ver stack.swarm.yml): quem tem a 443 e o Traefik, que e
+  # externo a ele. Chegar no Traefik pelo loopback DO PROPRIO HOST depende de
+  # como ELE publica a porta — em modo ingress do Swarm, conexao que nasce no
+  # proprio host costuma pendurar. Foi o que aconteceu em 25/08/2026: o curl
+  # estourou o --max-time e saiu 28, o `set -e` matou o script na atribuicao
+  # crua (a armadilha que o cabecalho deste arquivo descreve) e o workflow
+  # apareceu vermelho com a loja no ar, servindo a versao nova.
+  #
+  # A pergunta aqui e outra, e nao passa pela rede do host: o processo que
+  # acabou de subir responde 200 na porta dele? E o mesmo `fetch` do
+  # HEALTHCHECK da imagem (frontend/Dockerfile), que ja e sabido funcionar
+  # dentro dela — a imagem e node:22-slim e nao tem curl.
+  echo "== provando a vitrine por dentro do container =="
+  local tentativa codigo=""
+  for tentativa in 1 2 3 4 5; do
+    codigo=$(docker exec "$cid" node -e \
+      "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/').then(r=>console.log(r.status),()=>console.log('sem-resposta'))" \
+      2>/dev/null || echo "exec-falhou")
+    echo "  tentativa $tentativa: $codigo"
+    [ "$codigo" = "200" ] && break
+    sleep 5
+  done
+  [ "$codigo" = "200" ] || {
+    echo "ERRO: a vitrine nao respondeu 200 por dentro do container"
+    docker service ps loja_web --no-trunc
+    return 1
+  }
+
+  # A PROVA POR FORA VIRA AVISO. Ela atravessa Traefik e TLS, que e o caminho
+  # que a pessoa de fato percorre, e por isso continua valendo a pena tentar —
+  # mas o deploy nao pode virar falha por uma limitacao de rede do host quando
+  # a vitrine ja respondeu. Quando nao passa, o que interessa e o codigo de
+  # saida do curl: 7 e porta fechada, 28 e pacote engolido.
+  local externo="" saida=0
+  externo=$(curl -s -o /dev/null -w '%{http_code}' \
+    --resolve loja.canastrainteligencia.com:443:127.0.0.1 \
+    https://loja.canastrainteligencia.com/ --max-time 15) || saida=$?
+  if [ "$saida" = "0" ] && [ "$externo" = "200" ]; then
+    echo "traefik respondeu HTTP $externo"
+  else
+    echo "AVISO: a prova por fora nao passou — curl saiu $saida, HTTP ${externo:-nenhum}."
+    echo "AVISO: nao derruba o deploy; a vitrine ja respondeu 200 por dentro."
+  fi
+
+  # 200 NAO PROVA que a versao nova subiu: o container velho tambem responde
+  # 200. Confere o projeto Supabase assado no bundle — se o container fosse o
+  # antigo, esta contagem daria zero.
   if [ "$construiu_web" = "true" ]; then
-    local cid achou
-    cid=$(docker ps -qf name=loja_web)
+    local achou
     achou=$(docker exec "$cid" sh -c \
       "grep -rl hmxbdpmgwmbygwmngusy .next/static 2>/dev/null | wc -l")
     echo "arquivos do bundle apontando para o projeto cloud: $achou"
@@ -190,5 +250,5 @@ conferir() {
   fi
 }
 
-# NAO MOVA ESTA LINHA. Ver o cabecalho: o git reset reescreve este arquivo.
-main "$@"
+# NAO MOVA ESTA LINHA, E NAO TIRE O GRUPO NEM O `exit` — ver o cabecalho.
+{ main "$@"; exit $?; }
