@@ -835,11 +835,28 @@ class PaymentController {
        * O ENDEREÇO NO FORMATO DO MERCADO PAGO. O `address` do pedido usa os
        * nomes da loja (`zip_code`/`cep`, `street`/`rua`), e as duas grafias
        * circulam porque o corpo vem do navegador. Normaliza aqui, uma vez.
+       *
+       * `street_number` É INTEIRO no contrato do Mercado Pago (`payer.address`
+       * e `additional_info.shipments.receiver_address`), e a API valida isso.
+       * `canastra.enderecos.numero` é opcional (migração 0004) e nada no
+       * checkout obriga a informar um — endereço sem número existe de
+       * verdade (zona rural, "S/N"). Sem número, ou com um número que não é
+       * número ("S/N", "120A"), A CHAVE SOME do payload em vez de virar ""
+       * ou NaN: mandar lixo faria uma cobrança de cartão legítima levar 400
+       * do gateway por causa de um campo que só existe para enriquecer o
+       * antifraude — o mesmo raciocínio do `last_name` omitido ali em cima.
        */
+      const numeroBruto = address?.number ?? address?.numero;
+      const numeroConvertido = Number(numeroBruto);
+      const numeroValido =
+        numeroBruto !== null &&
+        numeroBruto !== undefined &&
+        String(numeroBruto).trim() !== "" &&
+        Number.isFinite(numeroConvertido);
       const enderecoParaOMp = {
         zip_code: address?.zip_code || address?.zipCode || address?.cep || "",
         street_name: address?.street || address?.rua || "",
-        street_number: String(address?.number || address?.numero || ""),
+        ...(numeroValido ? { street_number: numeroConvertido } : {}),
       };
 
       const paymentData = {

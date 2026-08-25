@@ -652,12 +652,66 @@ test("checkout: additional_info leva itens, destinatário e IP ao antifraude", a
 
   // O nome sai de canastra.clientes; o before() cadastrou Ana sem sobrenome.
   assert.equal(cobranca.payer.first_name, "Ana");
+  // AUSENTE de verdade, não `undefined` explícito: campo vazio é pior que
+  // campo ausente para o motor de risco, e `=== undefined` passaria também
+  // se o código mandasse `last_name: undefined`.
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(cobranca.payer, "last_name"),
+    false,
+    "Ana não tem sobrenome cadastrado: last_name não pode nem existir na chave",
+  );
 
   const info = cobranca.additional_info;
   assert.equal(info.items.length, 1);
   assert.equal(info.items[0].id, PRODUTO);
   assert.equal(info.items[0].quantity, 2);
   assert.equal(info.items[0].title, "Café do Teste");
+  assert.equal(info.payer.first_name, "Ana");
   assert.equal(info.ip_address, "203.0.113.7");
   assert.equal(info.shipments.receiver_address.zip_code, "35012345");
+});
+
+test("checkout: endereço sem número não quebra a cobrança nem manda lixo ao Mercado Pago", async () => {
+  // Mesmo motivo do teste anterior: cada checkout de sucesso consome 2
+  // unidades, e este é mais um checkout de sucesso no fim do arquivo.
+  await bd.pool.query(
+    "UPDATE canastra.produtos SET quantidade = 10 WHERE produto_id = $1",
+    [PRODUTO],
+  );
+
+  const corpo = corpoDeCheckout();
+  // Endereço sem número existe de verdade (zona rural, "S/N") — e
+  // `canastra.enderecos.numero` é opcional (migração 0004), nada no checkout
+  // obriga a informar um.
+  delete corpo.address.number;
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-sem-numero" },
+      body: corpo,
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201, "endereço sem número não pode derrubar o checkout");
+  const cobranca = mp.criacoes[mp.criacoes.length - 1];
+
+  // `street_number` é Integer no contrato do Mercado Pago e a API valida:
+  // mandar "" ou NaN faria uma cobrança legítima levar 400 do gateway. A
+  // chave tem que estar AUSENTE, não `undefined` explícito.
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(cobranca.payer.address, "street_number"),
+    false,
+    "payer.address.street_number não pode existir sem número",
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      cobranca.additional_info.shipments.receiver_address,
+      "street_number",
+    ),
+    false,
+    "additional_info.shipments.receiver_address.street_number não pode existir sem número",
+  );
 });
