@@ -325,7 +325,7 @@ export async function chamarApi(
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix frontend run test -- lib/painel/transporte`
-Expected: PASS, 11 casos.
+Expected: PASS, 12 casos.
 
 - [ ] **Step 5: `legacy/api.js` passa a reexportar**
 
@@ -474,7 +474,7 @@ export function fraseDeErro(status: number, corpo: CorpoDeErro): string {
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix frontend run test -- lib/painel/resposta`
-Expected: PASS, 8 casos.
+Expected: PASS, 7 casos.
 
 - [ ] **Step 5: Commit**
 
@@ -506,12 +506,31 @@ import {
   centavosParaReais,
 } from "./dinheiro";
 
+/**
+ * O REAL É ESCRITO COM ESPAÇO NÃO SEPARÁVEL, E ISSO NÃO É ACIDENTE.
+ *
+ * `Intl.NumberFormat("pt-BR", { currency: "BRL" })` põe U+00A0 entre "R$" e o
+ * número, seguindo o CLDR — tipografia correta, que impede o símbolo da moeda
+ * de ficar órfão no fim da linha.
+ *
+ * Constante nomeada com escape EXPLÍCITO, e não um caractere invisível colado
+ * num literal, porque um `"R$ 149,00"` digitado com espaço comum falha com a
+ * mensagem mais inútil que o Vitest sabe produzir: `expected 'R$ 149,00' to be
+ * 'R$ 149,00'` — duas strings visualmente idênticas.
+ *
+ * A vitrine já emite o mesmo NBSP em `lib/catalogo/repositorio.ts:308`
+ * (`formatarPreco`). Normalizar para espaço comum aqui faria o painel e a loja
+ * escreverem preço de dois jeitos diferentes.
+ */
+const NBSP = "\u00A0";
+const reais = (texto: string) => `R$${NBSP}${texto}`;
+
 describe("formatarCentavos", () => {
   it("formata inteiro de centavos", () => {
-    expect(formatarCentavos(14900)).toBe("R$ 149,00");
+    expect(formatarCentavos(14900)).toBe(reais("149,00"));
   });
   it("formata zero sem virar traço", () => {
-    expect(formatarCentavos(0)).toBe("R$ 0,00");
+    expect(formatarCentavos(0)).toBe(reais("0,00"));
   });
   it("devolve traço para ausência, que é diferente de zero", () => {
     expect(formatarCentavos(null)).toBe("—");
@@ -520,13 +539,16 @@ describe("formatarCentavos", () => {
 
 describe("formatarReais", () => {
   it("aceita a STRING que o pg devolve para numeric", () => {
-    expect(formatarReais("149.00")).toBe("R$ 149,00");
+    expect(formatarReais("149.00")).toBe(reais("149,00"));
   });
   it("aceita número", () => {
-    expect(formatarReais(59.9)).toBe("R$ 59,90");
+    expect(formatarReais(59.9)).toBe(reais("59,90"));
   });
   it("devolve traço para ausência", () => {
     expect(formatarReais(null)).toBe("—");
+  });
+  it("escreve o preço igualzinho ao formatador de centavos", () => {
+    expect(formatarReais("59.90")).toBe(formatarCentavos(5990));
   });
 });
 
@@ -756,7 +778,7 @@ export function tomDoStatus(valor: string): TomDeStatus {
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix frontend run test -- lib/painel/status`
-Expected: PASS, 8 casos.
+Expected: PASS, 7 casos.
 
 - [ ] **Step 5: Commit**
 
