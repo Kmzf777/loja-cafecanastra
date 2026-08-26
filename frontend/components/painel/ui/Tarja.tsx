@@ -7,7 +7,10 @@ type Tom = "erro" | "alerta" | "sucesso" | "aviso";
 
 const TONS: Record<Tom, { borda: string; texto: string; papel: "alert" | "status" }> = {
   erro: { borda: "border-vermelho", texto: "text-vermelho", papel: "alert" },
-  alerta: { borda: "border-alerta", texto: "text-alerta", papel: "status" },
+  // Filete no ocre da marca, texto no tom escuro: `--color-alerta` sobre
+  // cal-puro dá 3,60:1, que passa na WCAG 1.4.11 (3:1, elemento não-textual)
+  // e reprova na 1.4.3 (4,5:1, texto pequeno). `--color-alerta-esc` dá 4,87:1.
+  alerta: { borda: "border-alerta", texto: "text-alerta-esc", papel: "status" },
   sucesso: { borda: "border-sucesso", texto: "text-sucesso", papel: "status" },
   aviso: { borda: "border-fuligem-20", texto: "text-fuligem-55", papel: "status" },
 };

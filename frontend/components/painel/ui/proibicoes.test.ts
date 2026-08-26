@@ -130,3 +130,76 @@ describe("as proibições do painel", () => {
     expect(comVermelho).toEqual(["Botao.tsx", "Campo.tsx", "Selo.tsx", "Tarja.tsx"]);
   });
 });
+
+/**
+ * O contraste dos tokens, medido do próprio `globals.css`.
+ *
+ * ISTO EXISTE PORQUE A CORREÇÃO SE DESFAZ SOZINHA. `--color-alerta` (#B87514,
+ * o ocre da marca) dá 3,60:1 sobre cal-puro: passa na WCAG 1.4.11 (3:1, filete
+ * e outros elementos não-textuais) e REPROVA na 1.4.3 (4,5:1, texto pequeno).
+ * A saída foi o par `--color-alerta-esc`, igual ao que `--color-vermelho` já
+ * tinha — filete no tom da marca, texto no tom escuro.
+ *
+ * Sem este teste, alguém "simplifica" `text-alerta-esc` de volta para
+ * `text-alerta` num arquivo qualquer, a tela continua bonita, e o selo de
+ * "pendente" em 11px vira ilegível para quem enxerga pouco. Contraste é
+ * exatamente o tipo de defeito que ninguém vê olhando — por isso quem olha é o
+ * teste.
+ *
+ * A leitura é do CSS, e não de uma cópia dos valores aqui: um token trocado no
+ * `globals.css` fica vermelho aqui na hora.
+ */
+describe("contraste dos tokens semânticos", () => {
+  const CSS = readFileSync(
+    join(__dirname, "..", "..", "..", "app", "globals.css"),
+    "utf8",
+  );
+
+  function token(nome: string): string {
+    const achado = CSS.match(new RegExp(`--color-${nome}:\\s*(#[0-9A-Fa-f]{6})`));
+    if (!achado) throw new Error(`token --color-${nome} não encontrado`);
+    return achado[1];
+  }
+
+  /** Luminância relativa da WCAG 2.x (sRGB → linear, pesos 0.2126/0.7152/0.0722). */
+  function luminancia(hex: string): number {
+    const canais = [1, 3, 5]
+      .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+    return 0.2126 * canais[0] + 0.7152 * canais[1] + 0.0722 * canais[2];
+  }
+
+  function razao(a: string, b: string): number {
+    const [claro, escuro] = [luminancia(a), luminancia(b)].sort((x, y) => y - x);
+    return (claro + 0.05) / (escuro + 0.05);
+  }
+
+  const FUNDO = () => token("cal-puro");
+
+  it.each([
+    ["fuligem"],
+    ["fuligem-55"],
+    ["vermelho"],
+    ["sucesso"],
+    ["alerta-esc"],
+    ["barro"],
+  ])("--color-%s serve de TEXTO sobre cal-puro (≥ 4,5:1)", (nome) => {
+    expect(razao(token(nome), FUNDO())).toBeGreaterThanOrEqual(4.5);
+  });
+
+  /**
+   * O ocre claro fica, e o teste registra POR QUE ele fica: como filete, 3:1
+   * basta, e ele passa. Apagá-lo do sistema por causa do texto seria jogar fora
+   * uma cor de marca por um uso que ela nunca teve.
+   */
+  it("--color-alerta serve de FILETE (≥ 3:1) e não de texto (< 4,5:1)", () => {
+    const r = razao(token("alerta"), FUNDO());
+    expect(r).toBeGreaterThanOrEqual(3);
+    expect(r).toBeLessThan(4.5);
+  });
+
+  it("a tarja de alerta escreve com o tom escuro, não com o da marca", () => {
+    const tarja = readFileSync(join(__dirname, "Tarja.tsx"), "utf8");
+    expect(tarja).toMatch(/texto:\s*"text-alerta-esc"/);
+  });
+});
