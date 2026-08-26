@@ -3632,6 +3632,52 @@ INSERT INTO canastra.migracoes (versao) VALUES ('0030_vitrine')
 REVOKE UPDATE ON canastra.clientes FROM authenticated;
 GRANT UPDATE (nome, telefone) ON canastra.clientes TO authenticated;
 
+/* ------------------------------------------------------------------------- *
+ * 2. `config_loja`: o DELETE que leva o token do Bling junto
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A OPERACAO QUE ESCAPOU DO RECORTE DE 0012.
+ *
+ * 0012 guardou o `bling_refresh_token` na linha unica de `config_loja` e o
+ * protegeu com privilegio de COLUNA: `REVOKE SELECT/INSERT/UPDATE` e a lista
+ * explicita de volta, todas as colunas MENOS o token. Nem a admin le, nem a
+ * admin escreve o token pelo PostgREST — so o servico Node, que conecta como
+ * dono.
+ *
+ * O DELETE ficou de fora daquele recorte, porque naquele momento ele nao era
+ * uma forma de ler nem de escrever coluna nenhuma. E nao e mesmo: e a unica
+ * operacao que LEVA a coluna sem nunca a ter tocado. `DELETE FROM config_loja`
+ * apaga o token junto com o resto da configuracao, e o refresh token do Bling e
+ * ROTATIVO (0012:75) — nao existe copia em lugar nenhum, e recuperar exige
+ * refazer o OAuth a mao. A politica `config_loja_admin_escreve` (0006:438) e
+ * `FOR ALL`, entao ela autoriza a linha; o privilegio de DELETE veio do GRANT
+ * de tabela de 0006:271. Duas camadas concordando com um comando que ninguem
+ * precisa dar.
+ *
+ * NINGUEM PRECISA DELE, e isso e verificavel e nao opinativo: a tabela e de UMA
+ * linha (o CHECK de 0005), o caminho de mudar configuracao e UPDATE, e os dois
+ * modulos do servico que escrevem ali (`src/repositories/configRepository.js` e
+ * `src/services/blingClient.js`) fazem `INSERT ... ON CONFLICT (id) DO NOTHING`
+ * e UPDATE — nenhum DELETE em `canastra.config_loja` existe no repositorio.
+ *
+ * POR QUE E REVOKE E NAO UMA POLITICA, pela regra do cabecalho: uma politica de
+ * DELETE ausente ja recusaria, mas ausencia de politica e propriedade que um
+ * `CREATE POLICY ... FOR ALL` distraido apaga sem querer — e `FOR ALL` e
+ * exatamente o formato que esta tabela ja usa. O privilegio nao se perde assim.
+ * E o mesmo argumento que 0006:301 usou para `clientes` e `pedidos`.
+ *
+ * `INSERT` NAO ENTRA NESTE REVOKE, e a distincao e proposital: o DELETE tira
+ * algo que nao volta, o INSERT nao tira nada — o CHECK `id = 1` de 0005 ja
+ * impede uma segunda linha, e um INSERT contra a linha existente bate na chave
+ * primaria. Ele hoje nao tem chamador pelo navegador (quem cria a linha e o
+ * servico, com `ON CONFLICT (id) DO NOTHING`, conectado como dono), entao
+ * revoga-lo tambem seria defensavel — mas e uma decisao de outra tarefa, e
+ * misturar "fechar um caminho destrutivo" com "podar privilegio sem uso" numa
+ * migracao so tira a clareza do diff que fecha o buraco.
+ */
+REVOKE DELETE ON canastra.config_loja FROM authenticated;
+
 -- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
 -- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
 -- primeiro CREATE de objeto ja existente.

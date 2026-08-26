@@ -266,9 +266,11 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
   // tabela ja NAO barra a Estranha, e quem barra e so a politica. Este teste e
   // quem prova que a troca foi paga.
   //
-  // Repare nos DOIS desfechos, que sao diferentes e os dois sao recusa:
+  // Repare nos TRES desfechos, que sao diferentes e os tres sao recusa:
   //   INSERT ........... 42501, o WITH CHECK barra a linha nova
   //   UPDATE / DELETE .. 0 linhas afetadas, SEM erro — o USING nao casa nada
+  //   DELETE em `config_loja` .. 42501 desde 0031, porque ali a recusa deixou
+  //     de ser de politica e passou a ser de privilegio (ver o fim do teste)
   await exigeRecusa(
     SESSAO_ESTRANHA,
     "INSERT INTO canastra.produtos (nome, preco) VALUES ('Invasor', 0.01)",
@@ -294,7 +296,6 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
     "DELETE FROM canastra.produto_opcoes",
     "UPDATE canastra.promocoes SET titulo = 'Invasor'",
     "UPDATE canastra.config_loja SET titulo_site = 'Invadido'",
-    "DELETE FROM canastra.config_loja",
   ];
   for (const sql of SILENCIOSOS) {
     const afetadas = await comoPapel(bd.pool, SESSAO_ESTRANHA, async (cliente) => {
@@ -303,6 +304,18 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
     });
     assert.equal(afetadas, 0, `nao deveria afetar linha nenhuma: ${sql}`);
   }
+
+  // O SEXTO ITEM DAQUELA LISTA MUDOU DE DESFECHO EM 0031, e a mudanca e a
+  // melhora: `DELETE FROM canastra.config_loja` era recusa calada de politica
+  // (0 linhas) e agora e recusa de PRIVILEGIO, que erra. Vale para ela, para o
+  // cliente e para a admin — quem apaga aquela linha unica leva junto o
+  // `bling_refresh_token` (0012), e "sucesso, 0 linhas" nao avisa ninguem disso.
+  await exigeRecusa(
+    SESSAO_ESTRANHA,
+    "DELETE FROM canastra.config_loja",
+    [],
+    "intrusa apagando a configuracao",
+  );
 
   // E o catalogo continua de pe, o que e a pergunta que realmente importa.
   const { rows } = await bd.pool.query(`
@@ -739,6 +752,59 @@ test("DORA NAO reescreve o valor da venda — a trava e de COLUNA, nao de linha"
   for (const [coluna, sql] of PROIBIDOS) {
     await exigeRecusa(SESSAO_DORA, sql, [PED_ANA], `admin escrevendo ${coluna}`);
   }
+});
+
+test("NEM A ADMIN apaga a linha unica de `config_loja` — mas continua editando", async () => {
+  // O QUE UM DELETE AQUI LEVA JUNTO, e nao esta no nome do comando: 0012 guardou
+  // o `bling_refresh_token` NESTA linha e o protegeu com privilegio de COLUNA —
+  // nem a admin le, nem a admin escreve o token pelo PostgREST. So que aquele
+  // recorte cobriu SELECT, INSERT e UPDATE; o DELETE de tabela que 0006:271
+  // concedeu ficou de pe. E o DELETE e a unica operacao que leva a coluna sem
+  // nunca a ter lido: apagar a linha apaga o token, que e rotativo e so volta
+  // refazendo o OAuth do Bling a mao.
+  //
+  // E ninguem precisa dele. `config_loja` e tabela de UMA linha (o CHECK de
+  // 0005), o caminho legitimo de mudar configuracao e UPDATE, e o servico Node
+  // (`configRepository`, `blingClient`) so faz INSERT ... ON CONFLICT DO NOTHING
+  // e UPDATE. Um DELETE aqui e sempre acidente — e o pior tipo, o que responde
+  // "sucesso".
+  for (const [quem, sessao] of [
+    ["administradora", SESSAO_DORA],
+    ["cliente", SESSAO_ANA],
+    ["intrusa", SESSAO_ESTRANHA],
+  ]) {
+    await exigeRecusa(
+      sessao,
+      "DELETE FROM canastra.config_loja WHERE id = 1",
+      [],
+      `${quem} apagando a configuracao`,
+    );
+    // A variante sem WHERE, que e a que um cliente PostgREST distraido manda.
+    await exigeRecusa(
+      sessao,
+      "DELETE FROM canastra.config_loja",
+      [],
+      `${quem} apagando a configuracao sem WHERE`,
+    );
+  }
+
+  // E o que o painel realmente faz continua funcionando — senao o conserto
+  // teria trocado um acidente raro por uma tela morta todo dia.
+  const editado = await comoPapel(bd.pool, SESSAO_DORA, async (cliente) => {
+    const r = await cliente.query(
+      "UPDATE canastra.config_loja SET titulo_site = 'Cafe Canastra', atualizado_em = now() WHERE id = 1",
+    );
+    return r.rowCount;
+  });
+  assert.equal(editado, 1);
+
+  // A linha continua la depois de tudo (o ROLLBACK do harness devolveria uma
+  // linha apagada, entao esta contagem so vale por causa dos REVOKEs acima —
+  // ela e a rede que pega um DELETE que passasse FORA de `comoPapel`).
+  const { rows: sobrou } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.config_loja",
+  );
+  assert.equal(sobrou[0].n, 1);
 });
 
 test("NINGUEM insere pedido pelo PostgREST — so o service_role", async () => {
