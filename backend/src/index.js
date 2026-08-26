@@ -21,6 +21,7 @@ const { newsletterRoutes } = require("./routes/newsletter.routes");
 const { lgpdRoutes } = require("./routes/lgpd.routes");
 const blingRoutes = require("./routes/bling.routes");
 const clubeRoutes = require("./routes/clube.routes");
+const vitrineRoutes = require("./routes/vitrine.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 
@@ -181,6 +182,13 @@ app.use("/bling", blingRoutes);
 // Clube: /clube/* (cliente), /admin/assinaturas (admin) e o webhook proprio de
 // assinaturas (/webhook/mercadopago/assinaturas, rate limit dentro do router).
 app.use(clubeRoutes);
+// Vitrine: GET /vitrine e PUBLICO (a home o le antes de qualquer login), PUT e
+// so de admin — os guardas estao no proprio router. ACRESCENTADO NO FIM DE
+// PROPOSITO: ordem de registro e load-bearing aqui (tres pares ja quebram se
+// invertidos: /dashboard/summary antes de /dashboard/:id, /admin/orders/export
+// antes de /admin/orders/:id, /users/me antes de /users/:id). `/vitrine` nao
+// tem `:id` e nao forma par com nada, entao entra sem mexer em nada acima.
+app.use("/vitrine", vitrineRoutes);
 
 /**
  * Carrinho abandonado: cron de hora em hora, DESLIGADO por padrao (decisao 5
