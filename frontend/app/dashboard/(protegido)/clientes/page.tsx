@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { Cabecalho } from "@/components/painel/casca/Cabecalho";
+import { BuscaDaLista } from "@/components/painel/ui/BuscaDaLista";
 import { ChipsDeFiltro } from "@/components/painel/ui/ChipsDeFiltro";
 import { EstadoDaTela } from "@/components/painel/ui/EstadoDaTela";
 import { Ficha } from "@/components/painel/ui/Ficha";
@@ -23,8 +24,6 @@ import {
 } from "@/lib/painel/clientes/clientes.logica";
 import { totalDePaginas } from "@/lib/painel/paginacao";
 import { lerAcessoDoPainel } from "@/lib/conta/painel-servidor";
-
-import { BuscaDeClientes } from "./BuscaDeClientes";
 
 /**
  * `/dashboard/clientes` — a lista de quem compra na loja.
@@ -156,7 +155,19 @@ export default async function PaginaDeClientes({
           tabela no estado de erro do <EstadoDaTela>, e o gestor ficaria sem o
           controle de que precisa justamente para tentar outra coisa.
         */}
-        <BuscaDeClientes buscaAtual={estado.busca} />
+        <BuscaDaLista
+          base={ROTA_DE_CLIENTES}
+          buscaAtual={estado.busca}
+          rotulo="Buscar cliente"
+          placeholder="Nome, e-mail, telefone ou CPF"
+          /*
+            A AJUDA DIZ O QUE A BUSCA FAZ COM O CPF, e ela existe porque a
+            normalização (em `clientes.logica.ts`) é invisível: quem cola um CPF
+            pontuado precisa saber que vai funcionar, senão testa uma vez, não
+            acha e nunca mais tenta.
+          */
+          ajuda="O CPF pode ir com ou sem pontuação."
+        />
         <ChipsDeFiltro chips={chips} hrefLimpar={ROTA_DE_CLIENTES} />
 
         <EstadoDaTela

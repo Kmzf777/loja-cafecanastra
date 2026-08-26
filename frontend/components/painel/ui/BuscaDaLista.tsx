@@ -3,25 +3,26 @@
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
-import { Botao } from "@/components/painel/ui/Botao";
-import { Campo } from "@/components/painel/ui/Campo";
-import { ETIQUETA } from "@/components/painel/ui/estilos";
-import { urlDaTela } from "@/lib/painel/clientes/clientes.logica";
+import { montarUrl } from "@/lib/painel/filtros";
+import { Botao } from "./Botao";
+import { Campo } from "./Campo";
+import { ETIQUETA } from "./estilos";
 
 /**
- * A caixa de busca — a ÚNICA ilha de cliente desta tela.
+ * A caixa de busca de uma lista do painel — R1, e a ÚNICA ilha de cliente das
+ * telas de lista.
  *
- * TUDO O MAIS É SERVIDOR: a tabela, os chips, a paginação e o rodapé de
- * contagem são HTML renderizado com os dados dentro, e os controles de filtro
- * são `<a href>`. Só a busca precisa de JavaScript, e precisa por uma razão
- * concreta: o campo tem estado enquanto se digita, e o que se digita não deve
- * virar navegação a cada tecla.
+ * TUDO O MAIS É SERVIDOR: tabela, chips, abas de status e paginação são HTML
+ * renderizado com os dados dentro, e todo controle de filtro é um `<a href>`.
+ * Só a busca precisa de JavaScript, e precisa por uma razão concreta: o campo
+ * tem estado enquanto se digita, e o que se digita não deve virar navegação a
+ * cada tecla.
  *
  * POR QUE NÃO UM `<form method="GET">` PURO, QUE DISPENSARIA A ILHA. Ele
  * funcionaria — e faria um recarregamento COMPLETO da página a cada busca,
  * perdendo a posição de rolagem e o cache de rota do Next. `router.push` navega
- * pelo App Router, que troca só o conteúdo. É a diferença entre uma tela de
- * trabalho e um site de 2005 para quem busca vinte vezes por dia (R1: "um
+ * pelo App Router, que troca só o conteúdo. É a diferença entre uma ferramenta
+ * de trabalho e um site de 2005 para quem busca vinte vezes por dia (R1: "um
  * clique extra 200× por dia é imposto diário" — e um recarregamento é pior que
  * um clique).
  *
@@ -29,10 +30,40 @@ import { urlDaTela } from "@/lib/painel/clientes/clientes.logica";
  * debounce dispara uma requisição por letra; com debounce, dispara navegação
  * enquanto a pessoa ainda está formando a palavra, e o histórico do navegador
  * enche de estados intermediários — o botão Voltar passa a andar letra por
- * letra. No painel, onde a busca é por nome inteiro e por CPF colado, o Enter é
- * o gesto certo.
+ * letra. No painel, onde se busca por nome inteiro e por documento colado, o
+ * Enter é o gesto certo.
+ *
+ * ELA É GENÉRICA, E A GENERALIDADE TEM UM LIMITE PRECISO: a ilha monta a URL
+ * sozinha, então precisa receber o resto do estado da tela como DADO
+ * (`outrosParametros`), nunca como função. Props de Server Component para
+ * Client Component atravessam serializadas — um `href: (q) => string` daria o
+ * erro mais confuso do App Router ("Functions cannot be passed directly to
+ * Client Components"), e o conserto seria justamente este.
  */
-export function BuscaDeClientes({ buscaAtual }: { buscaAtual: string }) {
+export function BuscaDaLista({
+  base,
+  buscaAtual,
+  outrosParametros = {},
+  rotulo,
+  placeholder,
+  ajuda,
+}: {
+  /** A rota da lista, sem query string. */
+  base: string;
+  /** O `?q=` que está na URL agora. */
+  buscaAtual: string;
+  /**
+   * O resto do estado que precisa SOBREVIVER à busca — status, aba, o que for.
+   *
+   * A PÁGINA NÃO ENTRA AQUI, E ISSO É DELIBERADO: buscar estando na página 4 e
+   * continuar na 4 é o jeito mais rápido de uma busca com resultados parecer
+   * vazia. Quem chama simplesmente não passa `pagina`, e ela volta para 1.
+   */
+  outrosParametros?: Record<string, string | undefined>;
+  rotulo: string;
+  placeholder?: string;
+  ajuda?: string;
+}) {
   const router = useRouter();
 
   /**
@@ -59,9 +90,9 @@ export function BuscaDeClientes({ buscaAtual }: { buscaAtual: string }) {
 
   function buscar(evento: FormEvent<HTMLFormElement>) {
     evento.preventDefault();
-    // A PÁGINA VOLTA PARA 1. Buscar estando na página 4 e continuar na 4 é o
-    // jeito mais rápido de uma busca com resultados parecer vazia.
-    router.push(urlDaTela({ busca: digitado, pagina: 1 }));
+    router.push(
+      montarUrl(base, { ...outrosParametros, q: digitado.trim() || undefined }),
+    );
   }
 
   return (
@@ -70,33 +101,23 @@ export function BuscaDeClientes({ buscaAtual }: { buscaAtual: string }) {
       submete de graça (comportamento do HTML, não código nosso), e o leitor de
       tela ganha um marco de navegação "busca" para saltar direto até aqui.
     */
-    <form
-      role="search"
-      onSubmit={buscar}
-      className="flex flex-wrap items-start gap-3"
-    >
+    <form role="search" onSubmit={buscar} className="flex flex-wrap items-start gap-3">
       <Campo
         /*
           R1: A BUSCA É SEMPRE VISÍVEL, NUNCA ATRÁS DE UM ÍCONE. É a ação mais
-          frequente desta tela — é por ela que se chega ao cliente que está no
+          frequente de uma tela de lista — é por ela que se chega a quem está no
           telefone —, e escondê-la atrás de uma lupa que abre um campo cobra um
           clique a cada uso.
         */
-        rotulo="Buscar cliente"
+        rotulo={rotulo}
         // `type="search"` e não `text`: o navegador oferece o "x" de limpar
         // nativo e o teclado do celular traz a tecla de busca.
         type="search"
         name="q"
         value={digitado}
         onChange={(evento) => setDigitado(evento.target.value)}
-        placeholder="Nome, e-mail, telefone ou CPF"
-        /*
-          A AJUDA DIZ O QUE A BUSCA FAZ COM O CPF, e ela existe porque a
-          normalização (em `clientes.logica.ts`) é invisível: quem cola um CPF
-          pontuado precisa saber que vai funcionar, senão testa uma vez, não
-          acha e nunca mais tenta.
-        */
-        ajuda="O CPF pode ir com ou sem pontuação."
+        placeholder={placeholder}
+        ajuda={ajuda}
         className="min-w-0 flex-1 basis-72"
       />
       {/*

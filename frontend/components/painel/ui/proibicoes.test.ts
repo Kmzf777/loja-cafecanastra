@@ -167,6 +167,7 @@ describe("as proibições do painel", () => {
       // Os módulos puros de `lib/painel/` — ver o comentário de
       // MODULOS_DO_PAINEL para o porquê de eles entrarem na varredura.
       "logica/api-servidor.ts",
+      "logica/assinaturas/assinaturas.logica.ts",
       "logica/bling/contrato.ts",
       "logica/clientes/clientes.logica.ts",
       "logica/data.ts",
@@ -182,7 +183,7 @@ describe("as proibições do painel", () => {
       // para esta lista uma vez. É o mesmo mecanismo do teste de estrutura em
       // `lib/conta/painel-servidor.test.ts` — a onda seguinte não nasce fora da
       // varredura por distração.
-      "tela/clientes/BuscaDeClientes.tsx",
+      "tela/assinaturas/page.tsx",
       "tela/clientes/page.tsx",
       "tela/layout.tsx",
       "tela/legado/[[...rota]]/PainelLegado.tsx",
@@ -193,6 +194,7 @@ describe("as proibições do painel", () => {
       "tela/vitrine/acoes.ts",
       "tela/vitrine/page.tsx",
       "ui/Botao.tsx",
+      "ui/BuscaDaLista.tsx",
       "ui/Campo.tsx",
       "ui/ChipsDeFiltro.tsx",
       "ui/EstadoDaTela.tsx",
