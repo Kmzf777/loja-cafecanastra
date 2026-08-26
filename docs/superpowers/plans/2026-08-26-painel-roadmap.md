@@ -3,19 +3,20 @@
 > Spec: `docs/superpowers/specs/2026-08-26-painel-de-gestao-design.md`
 > Riscos e checklist de paridade: `docs/pesquisa/2026-08-26-riscos-da-reescrita.md`
 
-A reescrita é grande demais para um plano só. São seis ondas, cada uma produzindo software que
+A reescrita é grande demais para um plano só. São sete ondas, cada uma produzindo software que
 funciona e é testável por conta própria, na ordem que minimiza retrabalho. Cada onda ganha seu
 próprio plano detalhado, escrito **antes** de ser executada e **depois** de a anterior estar verde —
-escrever os seis de uma vez seria planejar contra um repositório que ainda vai mudar.
+escrever os sete de uma vez seria planejar contra um repositório que ainda vai mudar.
 
 | Onda | Plano | Entrega | Depende de |
 |---|---|---|---|
 | **1 · Fundação** | `2026-08-26-painel-onda-1-fundacao.md` | O núcleo verde: contrato tipado, transporte, lógica portada do legado, infra de teste, anel de acesso fechado, sistema de componentes e o esqueleto do painel navegável | — |
-| **2 · Migrações** | `…-onda-2-migracoes.md` | `0030`–`0035`: motor de promoção, vitrine, marketing, produto fiscal, auditoria, correções de privilégio — com teste de RLS por papel | 1 |
-| **3 · Backend** | `…-onda-3-backend.md` | Motor de promoção calculando, rotas do painel que faltam (`GET /admin/orders/:id`, filtros, busca, `PATCH` de estoque, custo, avaliações, administradores), **e o conserto do `conferirSubtotal`** | 2 |
-| **4 · Telas** | `…-onda-4-telas.md` | As 14 telas, na ordem leitura-pura → pedidos → bling → produtos → vitrine → descontos → marketing → relatórios → avaliações → administradores | 1, 3 |
-| **5 · Vitrine** | `…-onda-5-vitrine.md` | Preço "de/por" nos dois vocabulários de card, herói e barra de aviso vindos do banco, captura de UTM | 3, 4 |
-| **6 · Corte** | `…-onda-6-corte.md` | Apagar `frontend/legacy/`, remover `styled-components`/`react-router-dom`/`sass`, **fechar o CSP** | 4, 5 |
+| **2 · Vitrine** | `2026-08-26-painel-onda-2-vitrine.md` | `0030_vitrine.sql`, `GET`/`PUT /vitrine`, a tela `/dashboard/vitrine` com prévia ao vivo, e a home lendo do banco com fallback | 1 |
+| **3 · Migrações** | `…-onda-3-migracoes.md` | `0031`–`0035`: motor de promoção, marketing, produto fiscal, auditoria, correções de privilégio — com teste de RLS por papel | 1 |
+| **4 · Backend** | `…-onda-4-backend.md` | Motor de promoção calculando, rotas do painel que faltam (`GET /admin/orders/:id`, filtros, busca, `PATCH` de estoque, custo, avaliações, administradores), **e o conserto do `conferirSubtotal`** | 3 |
+| **5 · Telas** | `…-onda-5-telas.md` | As demais telas, na ordem leitura-pura → pedidos → bling → produtos → descontos → marketing → relatórios → avaliações → administradores | 1, 4 |
+| **6 · Preço e atribuição** | `…-onda-6-preco.md` | Preço "de/por" nos dois vocabulários de card, e captura de UTM | 4, 5 |
+| **7 · Corte** | `…-onda-7-corte.md` | Apagar `frontend/legacy/`, remover `styled-components`/`react-router-dom`/`sass`, **fechar o CSP** | 5, 6 |
 
 ## Por que esta ordem
 
@@ -28,11 +29,14 @@ quebra no deploy; tela escrita contra rota que não existe é reescrita duas vez
 `GET /admin/orders/:id` nem filtro em `/admin/orders` — sem isso, ou a tela de Pedidos não tem
 deep-link, ou tem um filtro que mente sobre 100 linhas.
 
-**A vitrine por último entre as construtivas**, porque exibir preço promocional é o item de maior
-risco da spec inteira: `conferirSubtotal` compara com tolerância zero o subtotal **sem** promoção, e
-no dia em que a vitrine exibir e declarar o preço promocional, toda venda com promoção ativa vira
-409 `PRECO_MUDOU` e a loja para de vender. O conserto é da Onda 3; a exibição é da Onda 5. Nunca ao
-contrário.
+**Mas a vitrine editável foi para a frente, e o preço promocional ficou para trás — são coisas
+diferentes.** Trocar o herói da home é uma fatia VERTICAL e independente: atravessa migração, RLS,
+rota, tela e consumo, sem depender do motor de promoção. Fazer uma fatia fina de ponta a ponta antes
+de uma camada grossa prova que as junções funcionam enquanto ainda é barato descobrir que não. Já
+**exibir preço promocional é o item de maior risco da spec inteira**: `conferirSubtotal` compara com
+tolerância zero o subtotal **sem** promoção, e no dia em que a vitrine exibir e declarar o preço
+promocional, toda venda com promoção ativa vira 409 `PRECO_MUDOU` e a loja para de vender. O
+conserto é da Onda 4; a exibição é da Onda 6. Nunca ao contrário.
 
 **O corte por último e não antes**, porque apagar `frontend/legacy/` leva junto os únicos testes que
 cobrem regra que o painel novo reimplementa: 21 casos de `blingContrato.test.ts` e 11 de
