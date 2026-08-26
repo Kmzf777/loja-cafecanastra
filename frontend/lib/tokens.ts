@@ -43,6 +43,11 @@ export const CORES = {
   // — Semanticas —
   sucesso: "#3F6B45",
   alerta: "#B87514",
+  // O par do `vermelho`/`vermelho-esc`, pelo mesmo motivo e medido: o ocre da
+  // marca da 3,60:1 sobre cal-puro — passa na WCAG 1.4.11 (3:1, filete) e
+  // reprova na 1.4.3 (4,5:1, texto pequeno). Filete no tom da marca, TEXTO no
+  // tom escuro, que da 4,87:1.
+  "alerta-esc": "#9A620F",
 } as const;
 
 export type NomeCor = keyof typeof CORES;
