@@ -393,6 +393,179 @@ test("validar: pedido mínimo é conferido contra o subtotal do servidor", async
   });
 });
 
+/* --------------------------------------------------------------------------
+ * POST /cupons/validar TAMBÉM CONHECE O MOTOR (0032)
+ *
+ * O defeito que estes testes fecham: um código de `promocao_codigos` respondia
+ * `valido: false` na tela e era ACEITO no checkout. Não cobrava a mais — o
+ * `process_payment` já falava com o motor —, mas a tela MENTIA para o cliente,
+ * que é o pior lugar para uma divergência entre duas cópias da mesma regra.
+ * -------------------------------------------------------------------------- */
+
+const PROMO_CODIGO = "22222222-0000-0000-0000-0000000000c1";
+const PROMO_MINIMO = "22222222-0000-0000-0000-0000000000c2";
+const PROMO_FRETE = "22222222-0000-0000-0000-0000000000c3";
+const PROMO_ESCOPO = "22222222-0000-0000-0000-0000000000c4";
+
+/** As campanhas do motor com código — semeadas uma vez, no primeiro uso. */
+let motorSemeado = false;
+async function semearMotor() {
+  if (motorSemeado) return;
+  motorSemeado = true;
+
+  await bd.pool.query(
+    `INSERT INTO canastra.promocoes
+       (id, nome, metodo, classe, mecanica, valor, minimo_tipo, minimo_valor,
+        prioridade, habilitada)
+     VALUES
+       ($1, 'Serra 15%',        'codigo', 'pedido',  'percentual',   15, 'nenhum', NULL, 0, true),
+       ($2, 'Serra 20% minimo', 'codigo', 'pedido',  'percentual',   20, 'subtotal', 30000, 0, true),
+       ($3, 'Frete por conta',  'codigo', 'frete',   'frete_gratis', NULL, 'nenhum', NULL, 0, true),
+       ($4, 'So no Cafe Caro',  'codigo', 'produto', 'percentual',   10, 'nenhum', NULL, 0, true)`,
+    [PROMO_CODIGO, PROMO_MINIMO, PROMO_FRETE, PROMO_ESCOPO],
+  );
+  await bd.pool.query(
+    `INSERT INTO canastra.promocao_codigos (promocao_id, codigo) VALUES
+       ($1,'SERRA15'), ($2,'SERRA20'), ($3,'FRETEGRATIS'), ($4,'SOCARO')`,
+    [PROMO_CODIGO, PROMO_MINIMO, PROMO_FRETE, PROMO_ESCOPO],
+  );
+  // Escopo por SKU: o código só alcança o Café Caro (P3).
+  await bd.pool.query(
+    `INSERT INTO canastra.promocao_escopo (promocao_id, tipo, alvo, incluir)
+     VALUES ($1, 'sku', 'F6-P3', true)`,
+    [PROMO_ESCOPO],
+  );
+}
+
+test("validar: um código do MOTOR responde válido, com o desconto que o checkout aplicaria", async () => {
+  await semearMotor();
+  const res = respostaFalsa();
+  await CuponsController.validar(
+    reqDeValidacao("serra15", [{ productId: P1, quantity: 2 }]),
+    res,
+  );
+
+  assert.equal(res.codigo, 200);
+  assert.equal(res.corpo.valido, true, "o código existe em promocao_codigos");
+  assert.equal(res.corpo.codigo, "SERRA15");
+  // 2 × R$ 50,00 = 10000 centavos; 15% = 1500 — a MESMA conta do motor no
+  // checkout, porque é o mesmo `calcularDescontos`.
+  assert.equal(res.corpo.descontoCentavos, 1500);
+  assert.equal(res.corpo.tipo, "percent");
+  assert.equal(Number(res.corpo.valor), 15);
+  assert.equal(res.corpo.descricao, "Serra 15%");
+});
+
+test("validar: código do motor com mínimo não atingido recusa com a frase de mínimo", async () => {
+  await semearMotor();
+  const res = respostaFalsa();
+  await CuponsController.validar(
+    reqDeValidacao("SERRA20", [{ productId: P1, quantity: 2 }]),
+    res,
+  );
+  // 10000 < 30000: a MESMA frase do cupom legado, com o valor em reais.
+  assert.deepEqual(res.corpo, {
+    valido: false,
+    motivo: "Pedido mínimo de R$ 300,00",
+  });
+});
+
+test("validar: código do motor fora do escopo do carrinho não vira desconto de zero", async () => {
+  // O código existe e está vigente, mas nenhuma linha deste carrinho está no
+  // escopo dele. Responder `valido: true, descontoCentavos: 0` faria a tela
+  // dizer "cupom aplicado" e mostrar zero de desconto — a mesma mentira pela
+  // porta oposta.
+  await semearMotor();
+  const res = respostaFalsa();
+  await CuponsController.validar(
+    reqDeValidacao("SOCARO", [{ productId: P1, quantity: 1 }]),
+    res,
+  );
+  assert.equal(res.corpo.valido, false);
+  assert.match(res.corpo.motivo, /carrinho/i);
+
+  // E com o produto certo na sacola, ele vale.
+  const comCaro = respostaFalsa();
+  await CuponsController.validar(
+    reqDeValidacao("SOCARO", [{ productId: P3, quantity: 1 }]),
+    comCaro,
+  );
+  assert.equal(comCaro.corpo.valido, true);
+  assert.equal(comCaro.corpo.descontoCentavos, 800); // 10% de R$ 80,00
+});
+
+test("validar: código de FRETE grátis vale, mesmo sem frete cotado ainda", async () => {
+  // A classe `frete` do motor depende da modalidade cotada, e a validação
+  // acontece ANTES de haver frete. Recusar aqui diria "cupom inválido" para um
+  // código que o checkout vai honrar; prometer um número seria inventá-lo.
+  await semearMotor();
+  const res = respostaFalsa();
+  await CuponsController.validar(
+    reqDeValidacao("FRETEGRATIS", [{ productId: P1, quantity: 1 }]),
+    res,
+  );
+  assert.equal(res.corpo.valido, true);
+  assert.equal(res.corpo.descontoCentavos, 0, "o desconto é no frete, ainda não cotado");
+  assert.equal(res.corpo.descricao, "Frete por conta");
+});
+
+test("validar: código do motor DESABILITADO responde a frase certa, não 'não encontrado'", async () => {
+  // "Não encontrado" manda a pessoa procurar erro de digitação num código que
+  // ela copiou certo do anúncio. `diagnosticarCodigo` custa UMA consulta e só
+  // roda no caminho da recusa.
+  await semearMotor();
+  await bd.pool.query("UPDATE canastra.promocoes SET habilitada = false WHERE id = $1", [
+    PROMO_CODIGO,
+  ]);
+  try {
+    const res = respostaFalsa();
+    await CuponsController.validar(
+      reqDeValidacao("SERRA15", [{ productId: P1, quantity: 2 }]),
+      res,
+    );
+    assert.deepEqual(res.corpo, { valido: false, motivo: "Cupom inativo" });
+  } finally {
+    await bd.pool.query("UPDATE canastra.promocoes SET habilitada = true WHERE id = $1", [
+      PROMO_CODIGO,
+    ]);
+  }
+});
+
+test("validar: o cupom LEGADO continua ganhando do motor quando o código existe nos dois", async () => {
+  // A ponte da transição (`semSobreposicaoComOLegado` no PaymentController): a
+  // 0032 COPIOU o legado para `promocoes` reaproveitando o id, e enquanto os
+  // dois caminhos convivem uma campanha migrada seria aplicada DUAS VEZES. Quem
+  // aplica é o caminho legado, e a validação tem de dizer o mesmo.
+  await semearMotor();
+  const { rows } = await bd.pool.query(
+    `INSERT INTO canastra.promocoes
+       (nome, metodo, classe, mecanica, valor, prioridade, habilitada)
+     VALUES ('Sombra do CAFE10', 'codigo', 'pedido', 'percentual', 90, 99, true)
+     RETURNING id`,
+  );
+  await bd.pool.query(
+    "INSERT INTO canastra.promocao_codigos (promocao_id, codigo) VALUES ($1,'CAFE10')",
+    [rows[0].id],
+  );
+
+  try {
+    const res = respostaFalsa();
+    await CuponsController.validar(
+      reqDeValidacao("CAFE10", [{ productId: P1, quantity: 2 }]),
+      res,
+    );
+    // 10% do legado, e NÃO os 90% da sombra nem a soma dos dois.
+    assert.equal(res.corpo.valido, true);
+    assert.equal(res.corpo.descontoCentavos, 1000);
+    assert.equal(res.corpo.descricao, "Dez por cento");
+  } finally {
+    await bd.pool.query("DELETE FROM canastra.promocao_codigos WHERE promocao_id = $1", [
+      rows[0].id,
+    ]);
+    await bd.pool.query("DELETE FROM canastra.promocoes WHERE id = $1", [rows[0].id]);
+  }
+});
+
 test("validar: corpo sem itens ou com itens tortos é 400", async () => {
   let res = respostaFalsa();
   await CuponsController.validar({ body: { codigo: "CAFE10" } }, res);
