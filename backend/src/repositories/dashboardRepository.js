@@ -329,6 +329,20 @@ class DashboardRepository {
   async editProduct(request, response) {
     const { id } = request.params;
 
+    // MALFORMADO NÃO É INEXISTENTE, e aqui a guarda precede até a leitura da
+    // linha atual (que é quem traz os padrões de peso e dimensão desta edição).
+    //
+    // A chave da resposta é `error`, como nas outras duas guardas de id, e não
+    // o `message` que a validação de campos usa logo abaixo: o formulário
+    // legado lê `corpo.message || corpo.error` (Form.jsx:207), então as duas
+    // chegam à tela — e manter as três guardas de id iguais entre si vale mais
+    // que casar com o vizinho de dentro deste método.
+    if (!ehUuid(id)) {
+      return response
+        .status(400)
+        .json({ error: "Identificador de produto inválido." });
+    }
+
     try {
       const existing = await pool.query(
         `SELECT imagem, sku, peso, largura, altura, comprimento
@@ -395,6 +409,17 @@ class DashboardRepository {
 
   async getProductById(request, response) {
     const { id } = request.params;
+
+    // MALFORMADO NÃO É INEXISTENTE — o mesmo defeito de `deleteProduct`, e esta
+    // é a rota PÚBLICA do trio (products.routes.js não põe `isAuthenticated`
+    // nela): qualquer visitante alcança digitando na barra de endereço, e cada
+    // tentativa virava um 22P02 no log parecendo incidente de banco.
+    if (!ehUuid(id)) {
+      return response
+        .status(400)
+        .json({ error: "Identificador de produto inválido." });
+    }
+
     try {
       const { rows } = await pool.query(
         `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.produtos

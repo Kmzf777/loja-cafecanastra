@@ -572,6 +572,31 @@ test("produto: DELETE com :id malformado é 400 com frase, não 500", async () =
   }
 });
 
+test("produto: GET e PUT com :id malformado são 400 com frase, não 500", async () => {
+  // As DUAS IRMÃS das rotas acima, no mesmo arquivo e com o mesmo defeito.
+  // `GET /dashboard/:id` é pública (sem `isAuthenticated`), então ela é a que
+  // qualquer visitante alcança digitando na barra de endereço — e era a que
+  // mais barato enchia o log de 22P02 parecendo incidente de banco.
+  const repo = new DashboardRepository();
+
+  for (const [nome, id] of IDS_MALFORMADOS) {
+    const leitura = respostaFalsa();
+    await repo.getProductById({ params: { id } }, leitura);
+    assert.equal(leitura.codigo, 400, `GET ${nome}`);
+    assert.notEqual(leitura.corpo.message, "Erro ao buscar produto.", nome);
+    assert.match(leitura.corpo.error, /identificador/i, `GET ${nome}`);
+
+    const edicao = respostaFalsa();
+    await repo.editProduct(
+      { params: { id }, body: { name: "Qualquer", price: 10, quantity: 1 } },
+      edicao,
+    );
+    assert.equal(edicao.codigo, 400, `PUT ${nome}`);
+    assert.notEqual(edicao.corpo.message, "Erro ao editar produto.", nome);
+    assert.match(edicao.corpo.error, /identificador/i, `PUT ${nome}`);
+  }
+});
+
 test("o :id malformado nem chega ao banco — a recusa é anterior à consulta", async () => {
   // Sem esta asserção, um `catch (err) { if (err.code === '22P02') 400 }` também
   // passaria nos dois testes acima — e aí o lixo teria ido ao banco, gasto uma
@@ -592,6 +617,14 @@ test("o :id malformado nem chega ao banco — a recusa é anterior à consulta",
     );
     await new DashboardRepository().deleteProduct(
       { params: { id: "abc" } },
+      respostaFalsa(),
+    );
+    await new DashboardRepository().getProductById(
+      { params: { id: "abc" } },
+      respostaFalsa(),
+    );
+    await new DashboardRepository().editProduct(
+      { params: { id: "abc" }, body: { name: "x", price: 1, quantity: 1 } },
       respostaFalsa(),
     );
   } finally {
