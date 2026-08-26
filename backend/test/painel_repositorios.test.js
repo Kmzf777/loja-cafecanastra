@@ -17,6 +17,7 @@ const { aplicarMigracoes } = require("../db/migrar.js");
 
 let bd;
 let ConfigRepository;
+let PromotionsRepository;
 
 /** Dublê de `res` no padrão de f4_repositorios.test.js, com send() para o 204. */
 function respostaFalsa() {
@@ -48,6 +49,7 @@ before(async () => {
   process.env.DATABASE_URL = bd.connectionString;
 
   ConfigRepository = require("../src/repositories/configRepository.js");
+  PromotionsRepository = require("../src/repositories/promotionsRepository.js");
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -171,4 +173,143 @@ test("config: valor inválido continua 400, e não toca em nada", async () => {
   const depois = await ConfigRepository.getConfig();
   assert.equal(depois.site_title, "Café Canastra");
   assert.equal(depois.frete_gratis_minimo_centavos, 14900);
+});
+
+/* --------------------------------------------------------------------------
+ * PUT /promotions/:id — parcial de verdade, e 404 para id inexistente
+ * -------------------------------------------------------------------------- */
+
+/** Cria uma promoção completa e devolve a linha crua do banco. */
+async function promocaoCompleta(titulo) {
+  const repo = new PromotionsRepository();
+  const res = respostaFalsa();
+  await repo.createPromotion(
+    {
+      body: {
+        title: titulo,
+        description: "10% na linha de moídos",
+        type: "percent",
+        value: 10,
+        applies_to: "category",
+        category: "Café moído",
+        start_date: "2020-01-01T00:00",
+        end_date: "2099-12-31T23:59",
+      },
+    },
+    res,
+  );
+  assert.equal(res.codigo, 201);
+
+  const { rows } = await bd.pool.query(
+    "SELECT * FROM canastra.promocoes WHERE titulo = $1",
+    [titulo],
+  );
+  return rows[0];
+}
+
+test("promoções: PUT só com o título preserva descrição, valor, datas e categoria", async () => {
+  const repo = new PromotionsRepository();
+  const antes = await promocaoCompleta("Semana do moído");
+
+  // O corpo tem UM campo. A versão anterior escrevia todas as colunas com o que
+  // veio, então tudo o que não veio virava NULL — e a promoção continuava
+  // "ativa" apontando para lugar nenhum, sem sinal na tela.
+  const res = respostaFalsa();
+  await repo.updatePromotion(
+    { params: { id: antes.id }, body: { title: "Semana do moído (nova)" } },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+
+  const { rows } = await bd.pool.query(
+    "SELECT * FROM canastra.promocoes WHERE id = $1",
+    [antes.id],
+  );
+  const depois = rows[0];
+
+  assert.equal(depois.titulo, "Semana do moído (nova)");
+  assert.equal(depois.descricao, antes.descricao);
+  assert.equal(Number(depois.valor), Number(antes.valor));
+  assert.equal(depois.tipo, antes.tipo);
+  assert.equal(depois.aplica_a, antes.aplica_a);
+  assert.equal(depois.categoria, antes.categoria);
+  assert.deepEqual(depois.inicio_em, antes.inicio_em);
+  assert.deepEqual(depois.fim_em, antes.fim_em);
+  assert.equal(depois.ativa, antes.ativa);
+});
+
+test("promoções: PUT num id inexistente responde 404, não 200", async () => {
+  const repo = new PromotionsRepository();
+
+  const res = respostaFalsa();
+  await repo.updatePromotion(
+    {
+      // UUID bem formado e que não existe: o 200 de antes fazia a tela
+      // anunciar "Promoção atualizada." tendo atualizado zero linhas.
+      params: { id: "00000000-0000-4000-8000-000000000000" },
+      body: { title: "Fantasma", type: "percent", value: 10 },
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 404);
+});
+
+test("promoções: o PUT completo do painel legado continua funcionando igual", async () => {
+  const repo = new PromotionsRepository();
+  const antes = await promocaoCompleta("Semana do grão");
+
+  // PromotionsManager.jsx:124 monta SEMPRE o objeto inteiro, inclusive no
+  // toggle de ativo. Num UPDATE parcial isso dá exatamente o mesmo resultado.
+  const res = respostaFalsa();
+  await repo.updatePromotion(
+    {
+      params: { id: antes.id },
+      body: {
+        title: "Semana do grão",
+        description: "15% na linha de grãos",
+        type: "percent",
+        value: 15,
+        applies_to: "all",
+        category: "",
+        product_id: "",
+        start_date: "",
+        end_date: "",
+        active: false,
+      },
+    },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+
+  const { rows } = await bd.pool.query(
+    "SELECT * FROM canastra.promocoes WHERE id = $1",
+    [antes.id],
+  );
+  assert.equal(Number(rows[0].valor), 15);
+  assert.equal(rows[0].aplica_a, "all");
+  assert.equal(rows[0].categoria, null);
+  assert.equal(rows[0].inicio_em, null);
+  assert.equal(rows[0].ativa, false);
+});
+
+test("promoções: o teto de 90% vale mesmo quando o PUT manda só o valor", async () => {
+  const repo = new PromotionsRepository();
+  const antes = await promocaoCompleta("Semana do coado");
+
+  // O `tipo` da promoção não está no corpo — só no banco. Sem ler a linha
+  // antes de validar, um PUT parcial passaria por cima do teto e o checkout
+  // calcularia preço negativo, que ABATE dos outros itens do carrinho.
+  const res = respostaFalsa();
+  await repo.updatePromotion(
+    { params: { id: antes.id }, body: { value: 150 } },
+    res,
+  );
+  assert.equal(res.codigo, 400);
+
+  const { rows } = await bd.pool.query(
+    "SELECT valor FROM canastra.promocoes WHERE id = $1",
+    [antes.id],
+  );
+  assert.equal(Number(rows[0].valor), 10);
 });
