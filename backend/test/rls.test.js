@@ -39,6 +39,11 @@ const DORA = "dddddddd-0000-0000-0000-000000000004";
 // SO em `auth.users`. Usuaria de outro projeto da instancia compartilhada — o
 // motivo de este arquivo existir.
 const ESTRANHA = "eeeeeeee-0000-0000-0000-000000000005";
+// Conta DESTA loja com e-mail confirmado que ainda nao virou cliente: e o unico
+// estado em que `canastra.garantir_cliente` (0008) grava CPF, e por isso ela
+// existe — sem ela nao da para provar que o REVOKE de UPDATE em `clientes`
+// (0031) fecha o oraculo sem fechar o cadastro junto.
+const NOVA = "faaaaaaa-0000-0000-0000-000000000006";
 
 const CAFE = "cccccccc-0000-0000-0000-000000000001";
 const END_ANA = "a1111111-0000-0000-0000-000000000001";
@@ -78,6 +83,7 @@ const SESSAO_ANA = { papel: "authenticated", sub: ANA };
 const SESSAO_BRUNO = { papel: "authenticated", sub: BRUNO };
 const SESSAO_DORA = { papel: "authenticated", sub: DORA };
 const SESSAO_ESTRANHA = { papel: "authenticated", sub: ESTRANHA };
+const SESSAO_NOVA = { papel: "authenticated", sub: NOVA };
 const SESSAO_ANON = { papel: "anon" };
 
 /**
@@ -119,6 +125,13 @@ before(async () => {
     `INSERT INTO auth.users (id, email) VALUES
        ($1,'ana@ex.com'), ($2,'bruno@ex.com'), ($3,'dora@ex.com'), ($4,'estranha@outroprojeto.com')`,
     [ANA, BRUNO, DORA, ESTRANHA],
+  );
+  // NOVA entra num INSERT proprio porque e a UNICA que precisa de
+  // `email_confirmed_at`: a RPC de 0008 le essa coluna (e nao um claim) antes de
+  // criar o vinculo, e sem data ela recusaria com 28000 em vez de gravar o CPF.
+  await bd.pool.query(
+    "INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1,'nova@ex.com', now())",
+    [NOVA],
   );
   await bd.pool.query(
     `INSERT INTO canastra.clientes (user_id, nome) VALUES
@@ -541,6 +554,74 @@ test("Ana le e escreve o que e dela", async () => {
     [CAR_BRUNO],
   );
   assert.equal(rows[0].n, 1);
+});
+
+test("o cliente corrige nome e telefone, e NAO escreve o proprio CPF", async () => {
+  // O BURACO QUE 0031 FECHA, e ele nao e sobre o CPF da Ana, e sobre o de todo
+  // mundo. `clientes_dono_atualiza` (0006:367) autoriza a LINHA inteira, e
+  // `clientes.cpf` e UNIQUE (0002): gravar um numero alheio devolve 23505 e
+  // gravar um numero livre devolve sucesso. Sao duas respostas distinguiveis
+  // para "este CPF tem conta nesta loja?", uma por tentativa, sem limite — um
+  // oraculo de enumeracao operado com a propria linha.
+  //
+  // Politica de RLS nao restringe COLUNA (0006:282), entao a trava desce um
+  // andar: REVOKE de UPDATE de tabela e GRANT so de (nome, telefone).
+  const perfil = await comoPapel(bd.pool, SESSAO_ANA, async (cliente) => {
+    const r = await cliente.query(
+      "UPDATE canastra.clientes SET nome = 'Ana Souza', telefone = '31999990000' WHERE user_id = $1",
+      [ANA],
+    );
+    return r.rowCount;
+  });
+  assert.equal(perfil, 1, "corrigir o proprio cadastro continua sendo do cliente");
+
+  await exigeRecusa(
+    SESSAO_ANA,
+    "UPDATE canastra.clientes SET cpf = $2 WHERE user_id = $1",
+    [ANA, "52998224725"],
+    "o dono gravando o proprio cpf",
+  );
+
+  // A FORMA QUE IMPORTA, e a asercao e no CODIGO justamente por isto: com um CPF
+  // que ja existe na loja, a recusa tem de ser 42501 (privilegio, antes do
+  // indice) e nunca 23505 (unicidade, DEPOIS de o indice ter respondido). A
+  // diferenca entre os dois codigos e a diferenca entre uma porta fechada e uma
+  // porta que conta quem esta do outro lado.
+  await bd.pool.query("UPDATE canastra.clientes SET cpf = $2 WHERE user_id = $1", [
+    BRUNO,
+    "11122233344",
+  ]);
+  try {
+    await exigeRecusa(
+      SESSAO_ANA,
+      "UPDATE canastra.clientes SET cpf = $2 WHERE user_id = $1",
+      [ANA, "11122233344"],
+      "sondagem do CPF de terceiro",
+    );
+  } finally {
+    await bd.pool.query("UPDATE canastra.clientes SET cpf = NULL WHERE user_id = $1", [
+      BRUNO,
+    ]);
+  }
+
+  // E O CADASTRO CONTINUA GRAVANDO CPF, que e a metade sem a qual o conserto
+  // seria uma regressao: `canastra.garantir_cliente` (0008) e SECURITY DEFINER,
+  // roda como o dono e por isso passa por cima do REVOKE. E o unico caminho que
+  // sobra ate a coluna pelo navegador — e ele normaliza o numero e traduz o
+  // 23505 numa frase, em vez de devolver o nome da constraint.
+  const linha = await comoPapel(bd.pool, SESSAO_NOVA, async (cliente) => {
+    await cliente.query("SELECT canastra.garantir_cliente($1, $2, $3)", [
+      "Nova Cliente",
+      null,
+      "52998224725",
+    ]);
+    const { rows: r } = await cliente.query(
+      "SELECT nome, cpf FROM canastra.clientes WHERE user_id = $1",
+      [NOVA],
+    );
+    return r[0];
+  });
+  assert.deepEqual(linha, { nome: "Nova Cliente", cpf: "52998224725" });
 });
 
 /* --------------------------------------------------------------------------
