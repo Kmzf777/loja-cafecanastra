@@ -12,7 +12,7 @@ escrever os sete de uma vez seria planejar contra um repositório que ainda vai 
 |---|---|---|---|
 | **1 · Fundação** | `2026-08-26-painel-onda-1-fundacao.md` | O núcleo verde: contrato tipado, transporte, lógica portada do legado, infra de teste, anel de acesso fechado, sistema de componentes e o esqueleto do painel navegável | — |
 | **2 · Vitrine** | `2026-08-26-painel-onda-2-vitrine.md` | `0030_vitrine.sql`, `GET`/`PUT /vitrine`, a tela `/dashboard/vitrine` com prévia ao vivo, e a home lendo do banco com fallback | 1 |
-| **3 · Migrações** | `…-onda-3-migracoes.md` | `0031`–`0035`: motor de promoção, marketing, produto fiscal, auditoria, correções de privilégio — com teste de RLS por papel | 1 |
+| **3 · Migrações** | `…-onda-3-migracoes.md` | `0032`–`0035`: motor de promoção, marketing, produto fiscal, auditoria — com teste de RLS por papel. As correções de privilégio saíram na frente, em `0031`, por serem independentes de tela | 1 |
 | **4 · Backend** | `…-onda-4-backend.md` | Motor de promoção calculando, rotas do painel que faltam (`GET /admin/orders/:id`, filtros, busca, `PATCH` de estoque, custo, avaliações, administradores), **e o conserto do `conferirSubtotal`** | 3 |
 | **5 · Telas** | `…-onda-5-telas.md` | As demais telas, na ordem leitura-pura → pedidos → bling → produtos → descontos → marketing → relatórios → avaliações → administradores | 1, 4 |
 | **6 · Preço e atribuição** | `…-onda-6-preco.md` | Preço "de/por" nos dois vocabulários de card, e captura de UTM | 4, 5 |

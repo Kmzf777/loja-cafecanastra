@@ -238,7 +238,11 @@ passa sem prova.
 Três branches disputam o número 0017: `worktree-melhor-envio` tem `0017_melhor_envio.sql`, e
 `worktree-whatsapp-bot` tem de `0017_whatsapp_meta.sql` a `0021_redacao_whatsapp.sql`. Este trabalho
 reserva a faixa **0030 em diante** — `0030_vitrine.sql` foi o primeiro a ser escrito, porque a fatia
-da vitrine subiu para a Onda 2 do roteiro; o motor de promoção ficou com `0031`, que fica acima das duas e mantém a branch auto-contida. O runner
+da vitrine subiu para a Onda 2 do roteiro, e `0031_correcoes_de_privilegio.sql` veio logo atrás,
+porque as três correções de privilégio (§7) não dependiam de tela nenhuma e fechavam vazamento em
+produção. As duas já estão aplicadas. Sobra para a Onda 3 a faixa **`0032` a `0035`**: motor de
+promoção, marketing, produto fiscal e auditoria, nessa ordem. Tudo isso fica acima das worktrees e
+mantém a branch auto-contida. O runner
 (`backend/db/migrar.js`) aplica por ordem de nome e registra em `canastra.migracoes`; buraco na
 numeração não o incomoda.
 
@@ -266,7 +270,7 @@ A pesquisa mostrou que Shopify, Medusa e Saleor modelam isso como uma entidade c
 `metodo`: `automatico` aplica sozinho no carrinho, `codigo` exige o cliente digitar. Mesma regra,
 porta de entrada diferente. Unificar dá **uma** tela, **uma** ordem de aplicação e **um** relatório.
 
-### 3.2 `0031_motor_de_promocao.sql`
+### 3.2 `0032_motor_de_promocao.sql`
 
 | Tabela | Carrega | Por que existe |
 |---|---|---|
@@ -335,7 +339,7 @@ agora. O herói nunca nasce em branco por causa de um campo não preenchido.
 
 `config_loja.banner_desktop`/`banner_mobile` são migrados para `vitrine_heroi` e depois removidos.
 
-### 3.7 `0032_marketing.sql`
+### 3.7 `0033_marketing.sql`
 
 `pedidos` ganha `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`, `canal`,
 `referrer` e `landing_page`. É o item #2 do top 15 da pesquisa e a única coisa aqui que é
@@ -351,7 +355,7 @@ carrinho cheio.
 `newsletter_inscritos` ganha `optout_em`, `token_descadastro` e `confirmado_em` — hoje não há como
 alguém sair da lista, o que é um problema de LGPD e não de funcionalidade.
 
-### 3.8 `0033_produto_fiscal_e_estado.sql`
+### 3.8 `0034_produto_fiscal_e_estado.sql`
 
 `produtos` ganha o bloco fiscal que o Bling exige e que hoje não existe em nenhuma das 16 colunas:
 `ncm` (8 dígitos), `cest` (7), `origem_fiscal` (0–8, tabela da SEFAZ), `gtin`, `gtin_embalagem`,
@@ -366,7 +370,7 @@ E o **snapshot de custo**: `produtos.custo` existe, mas custo muda. Sem congelar
 momento da venda não existe relatório de margem verdadeiro — recalcular com o custo de hoje mente
 sobre o passado.
 
-### 3.9 `0034_auditoria.sql`
+### 3.9 `0035_auditoria.sql`
 
 `admin_log` (quem, o quê, entidade, antes, depois, quando) e `admins.papel`. Hoje não existe nenhum
 registro de quem mexeu no painel, e `canastra.admins` tem só `user_id` e `criado_em`. Toda exportação
@@ -683,7 +687,7 @@ O mapa levantou 22 decisões. Resolvidas aqui:
 | Campos write-only | Barra de aviso e herói **ligados na vitrine** (§3.6, §5.2). Imagem de produto: **fica fora desta onda** e a tela diz isso — a vitrine só lê `product_id`, `sku`, `price` e `quantity`. |
 | Papéis e auditoria | `admins.papel` e `admin_log` **entram agora** (§3.9); a interface usa o log, não os papéis. |
 | Exportação de CSV | Confirmação obrigatória quando as datas estiverem vazias, período máximo, e registro de quem exportou no `admin_log`. |
-| Correções de privilégio | **Entram**, em `0035_correcoes_de_privilegio.sql`: `REVOKE UPDATE` em `clientes` com `GRANT` só de `(nome, telefone)` — hoje o cliente escreve o próprio CPF e o `UNIQUE` vira oráculo de enumeração; recorte de coluna no `SELECT` de `avaliacoes` — hoje qualquer token da instância compartilhada lê o `user_id` de todos os avaliadores; e `REVOKE DELETE` em `config_loja` — hoje um admin apaga a linha única junto com o refresh token do Bling. |
+| Correções de privilégio | **Entraram**, em `0031_correcoes_de_privilegio.sql` (aplicada; §2.9): `REVOKE UPDATE` em `clientes` com `GRANT` só de `(nome, telefone)` — o cliente escrevia o próprio CPF e o `UNIQUE` virava oráculo de enumeração; recorte de coluna no `SELECT` de `avaliacoes` — qualquer token da instância compartilhada lia o `user_id` de todos os avaliadores, e a vitrine passou a pedir "as minhas" pela RPC `canastra.minhas_avaliacoes()`, porque filtro por coluna sem privilégio também é 42501; e `REVOKE DELETE` em `config_loja` — um admin apagava a linha única junto com o refresh token do Bling. |
 | Migrar produção antes | Produção **ainda não foi publicada** (confirmado). Construímos contra o schema do repositório. Subir as migrações continua sendo pré-requisito de deploy, não de desenvolvimento. |
 | E2E no CI | **Fora.** O script de fumaça continua manual. |
 | Cancelamento propagado ao Bling | **Fora**, divergência documentada. |
