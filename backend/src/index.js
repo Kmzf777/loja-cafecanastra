@@ -10,6 +10,7 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const pool = require("./pgPool");
 const { opcoesDeCors } = require("./config/cors");
+const { erroDeUpload } = require("./middleware/erroDeUpload");
 
 const productsRoutes = require("./routes/products.routes");
 const { contaRoutes } = require("./routes/conta.routes");
@@ -160,6 +161,12 @@ if (process.env.ABANDONO_ATIVO === "true") {
 if (process.env.BLING_ATIVO === "true" && process.env.BLING_RASTREIO_CRON === "true") {
   require("./services/blingPedidos").iniciarCronBling();
 }
+
+// Erro de upload ANTES do handler geral, e a ordem e o conserto: o Express casa
+// error handler na ordem de registro e o primeiro que responder encerra. Com o
+// geral na frente, arquivo grande demais e mimetype recusado viravam
+// "Erro interno no servidor." e a frase util nunca chegava ao navegador.
+app.use(erroDeUpload);
 
 // Tratamento de erros gerais
 app.use((err, req, res, next) => {

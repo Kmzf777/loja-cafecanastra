@@ -2,6 +2,11 @@ const multer = require("multer");
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const { v2: cloudinary } = require("cloudinary");
 const { v4: uuidv4 } = require("uuid");
+const {
+  CODIGO_DE_FORMATO,
+  LIMITE_DE_TAMANHO_BYTES,
+  LIMITE_DE_ARQUIVOS,
+} = require("./erroDeUpload");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -51,15 +56,21 @@ const TIPOS_ACEITOS = new Set([
 const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5 MB por arquivo
-    files: 2, // o formulario de config envia 2 banners
+    // Os dois limites vem de `erroDeUpload` porque e la que eles viram FRASE
+    // ("O limite e 5 MB por arquivo"): numero e mensagem em arquivos
+    // diferentes divergem no primeiro dia em que alguem mexer num so.
+    fileSize: LIMITE_DE_TAMANHO_BYTES, // 5 MB por arquivo
+    files: LIMITE_DE_ARQUIVOS, // o formulario de config envia 2 banners
   },
   fileFilter: (req, file, cb) => {
     if (!TIPOS_ACEITOS.has(file.mimetype)) {
-      return cb(
-        new Error("Formato não aceito. Envie JPG, PNG, WebP ou AVIF."),
-        false,
-      );
+      // O `code` e o que permite `erroDeUpload` reconhecer esta recusa sem
+      // comparar o TEXTO da mensagem. Sem ele, esta frase — que existe
+      // justamente para ser lida por quem esta na tela — morria no error
+      // handler global como "Erro interno no servidor.".
+      const erro = new Error("Formato não aceito. Envie JPG, PNG, WebP ou AVIF.");
+      erro.code = CODIGO_DE_FORMATO;
+      return cb(erro, false);
     }
     cb(null, true);
   },
