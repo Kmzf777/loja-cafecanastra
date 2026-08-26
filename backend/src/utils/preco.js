@@ -1,5 +1,7 @@
 "use strict";
 
+const { calcularDescontos } = require("./motor");
+
 /**
  * O menor preco do produto dadas as promocoes ativas, arredondado a centavo.
  *
@@ -19,45 +21,106 @@
  * `productDb` fala o CONTRATO (price, category, product_id — os aliases dos
  * SELECTs), nao as colunas do banco; `activePromotions` e o formato de
  * `promotionsRepository.findActivePromotionsForCheckout`.
+ *
+ * ---------------------------------------------------------------------------
+ * A CONTA AGORA E DO MOTOR (Onda 4), E A ASSINATURA NAO MUDOU
+ * ---------------------------------------------------------------------------
+ *
+ * A aritmetica de "percent" e "fixed" saiu daqui e virou uma chamada a
+ * `utils/motor.js`: cada promocao legada e traduzida para uma regra de classe
+ * `produto` e avaliada sobre uma linha de UMA unidade. Os tres chamadores nao
+ * mudam — a funcao continua recebendo o par (produto, promocoes) e devolvendo
+ * um preco em REAIS.
+ *
+ * O ganho e o que o cabecalho acima ja pedia: existe UMA implementacao de
+ * "desconto em centavos inteiros" na loja, e nao duas. A conta passou a
+ * arredondar o DESCONTO em vez do preco resultante — que e o que o motor
+ * precisa fazer para a soma de `pedido_ajustes_desconto` fechar ao centavo com
+ * o valor cobrado. Nos dois casos o resultado e o mesmo real, salvo o meio
+ * centavo exato, onde o novo caminho e o mais defensavel: ele nunca passa por
+ * um produto em ponto flutuante.
+ *
+ * O `Math.min` FICA, e a permanencia e deliberada. "A mais generosa ganha" e
+ * acidente e nao decisao — a Onda 4 registrou isso —, mas a decisao NOVA (a
+ * ordem declarada: produto, depois pedido, depois frete; prioridade,
+ * exclusiva, grupo) vale para as regras da tabela `promocoes` de 0032, que o
+ * motor le pelo `motorRepository`. As linhas de `promocoes_legado` continuam
+ * com a semantica com que foram cadastradas ate a `0036` aposenta-las: mudar o
+ * criterio de selecao aqui mudaria, hoje, o preco de campanhas que ja estao no
+ * ar, sem ninguem ter pedido.
  */
+
+/** O default de uma regra do motor — so o legado preenche o que usa. */
+function regraDaPromocaoLegada(promocao) {
+  const escopo = [];
+  if (promocao.applies_to === "all") {
+    escopo.push({ tipo: "todos", alvo: null, incluir: true });
+  } else if (promocao.applies_to === "category") {
+    escopo.push({ tipo: "categoria", alvo: promocao.category, incluir: true });
+  } else if (promocao.applies_to === "product") {
+    escopo.push({ tipo: "produto", alvo: promocao.product_id, incluir: true });
+  }
+  // Escopo VAZIO deixa a regra inerte no motor, e e o comportamento preservado:
+  // `applies_to = 'category'` sem categoria e `'product'` sem produto_id nunca
+  // casaram nesta funcao, e a migracao 0032 nao criou linha de escopo para
+  // eles justamente por isso.
+
+  return {
+    id: promocao.id ?? null,
+    nome: promocao.title || "Promoção",
+    metodo: "automatico",
+    classe: "produto",
+    mecanica: promocao.type === "percent" ? "percentual" : "valor_fixo",
+    valor: promocao.value,
+    tetoDescontoCentavos: null,
+    minimoTipo: "nenhum",
+    minimoValor: null,
+    prioridade: 0,
+    exclusiva: false,
+    grupoExclusividade: null,
+    meiosPagamento: null,
+    criadaEm: promocao.created_at ?? null,
+    escopo,
+    faixas: [],
+    frete: null,
+    codigo: null,
+  };
+}
+
 function precoComPromocao(productDb, activePromotions) {
-  const precoOriginal = Number(productDb.price);
-  let bestPrice = precoOriginal;
+  const precoOriginalCentavos = Math.round(Number(productDb.price) * 100);
+  let melhorCentavos = precoOriginalCentavos;
 
-  activePromotions.forEach((p) => {
-    let match = false;
+  // UMA unidade: esta funcao devolve preco UNITARIO, e e assim que os tres
+  // chamadores a usam. Quantidade entra depois, em `somarCentavos`.
+  const carrinho = {
+    itens: [
+      {
+        produtoId: productDb.product_id,
+        sku: productDb.sku ?? null,
+        categoria: productDb.category,
+        precoCentavos: precoOriginalCentavos,
+        quantidade: 1,
+      },
+    ],
+    meioPagamento: null,
+    assinante: false,
+    frete: null,
+  };
 
-    const promoCategory = p.category
-      ? String(p.category).trim().toLowerCase()
-      : "";
-    const prodCategory = productDb.category
-      ? String(productDb.category).trim().toLowerCase()
-      : "";
+  // UMA REGRA POR VEZ, de proposito: e o que preserva o `Math.min` (ver o
+  // cabecalho). Avaliar as duas juntas faria o motor EMPILHA-LAS, que e a
+  // ordem nova — correta para `promocoes`, e uma mudanca de preco silenciosa
+  // para `promocoes_legado`.
+  for (const promocao of activePromotions || []) {
+    const { totalCentavos } = calcularDescontos(carrinho, [
+      regraDaPromocaoLegada(promocao),
+    ]);
+    const comDesconto = precoOriginalCentavos - totalCentavos;
+    if (comDesconto < melhorCentavos) melhorCentavos = comDesconto;
+  }
 
-    if (p.applies_to === "all") {
-      match = true;
-    } else if (p.applies_to === "category") {
-      if (promoCategory && promoCategory === prodCategory) {
-        match = true;
-      }
-    } else if (p.applies_to === "product") {
-      if (String(p.product_id) === String(productDb.product_id)) {
-        match = true;
-      }
-    }
-
-    if (match) {
-      const value = Number(p.value);
-      const discounted =
-        p.type === "percent"
-          ? precoOriginal * (1 - value / 100)
-          : Math.max(0, precoOriginal - value);
-
-      if (discounted < bestPrice) bestPrice = discounted;
-    }
-  });
-
-  return Math.round(bestPrice * 100) / 100;
+  return melhorCentavos / 100;
 }
 
 /**

@@ -51,6 +51,15 @@ class OrderRepository {
    * parcial `pedidos_idempotencia_idx` (0005) é a defesa contra o duplo clique
    * do checkout, e ela só funciona se TODA gravação carregar uma chave.
    * Chave repetida estoura 23505 — quem chama decide o que responder.
+   *
+   * `client` OPCIONAL, mesmo padrão de `updateOrderStatus` logo abaixo, e aqui
+   * ele existe por uma restrição de schema: `promocao_resgates.pedido_id` e
+   * `pedido_ajustes_desconto.pedido_id` são NOT NULL com FK para esta tabela,
+   * então o resgate e a decomposição do desconto SÓ podem existir na mesma
+   * transação que grava o pedido — não há resgate sem pedido, por construção.
+   * Sem este parâmetro o INSERT sairia pelo pool, commitando sozinho, e um erro
+   * na gravação dos ajustes deixaria um pedido cobrado sem a linha que explica
+   * por quanto ele saiu.
    */
   async createOrder({
     userId,
@@ -68,8 +77,9 @@ class OrderRepository {
     // COLUNAS_DO_CONTRATO.
     cupomCodigo = null,
     desconto = 0,
+    client = pool,
   }) {
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `INSERT INTO canastra.pedidos
          (pedido_id, user_id, total, status, metodo_pagamento, pagamento_id_mp,
           chave_idempotencia, itens, endereco_json, frete, metodo_envio,
