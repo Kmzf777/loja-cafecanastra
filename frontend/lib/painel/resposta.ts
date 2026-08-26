@@ -26,7 +26,8 @@ export async function lerCorpo(res: Response): Promise<CorpoDeErro> {
  * "SKU tal não está cadastrado no Bling", "nota gerada mas não transmitida" —
  * essas frases SÃO o diagnóstico, e trocá-las por "Erro ao salvar" transforma
  * um problema de dois minutos num chamado. Portado de
- * `legacy/.../Bling/blingContrato.js:243-292`, onde a regra nasceu.
+ * `lib/painel/bling/contrato.ts` (que era `legacy/.../Bling/blingContrato.js`
+ * quando a regra nasceu, e mudou de casa por `git mv` na Onda 1).
  *
  * O 403 tem texto próprio e deliberadamente SEM a palavra "sessão": o backend
  * responde 403 para token válido de quem não está vinculado à loja, e sugerir

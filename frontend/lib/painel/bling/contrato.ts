@@ -5,12 +5,29 @@
  * a lógica que decide o que o gestor LÊ (em que estado o pedido está no ERP,
  * quais botões fazem sentido, que frase mostrar quando o servidor recusa), e
  * essa lógica é a única parte desta tela que dá para testar sem navegador.
- * `blingContrato.test.ts` exercita tudo o que está aqui.
+ * `contrato.test.ts` exercita tudo o que está aqui.
  *
  * As duas superfícies que consomem isto — a tela `/dashboard/bling` e o modal
  * de detalhe de `Orders.jsx` — mostram exatamente a mesma verdade porque
  * derivam dela do mesmo lugar.
  */
+
+/**
+ * A linha de pedido como este módulo a recebe — DELIBERADAMENTE ABERTA.
+ *
+ * O painel lê pedidos de duas rotas com projeções diferentes (`/admin/orders`
+ * traz `address`, `user_name`, `user_email` e `user_cpf`; `/bling` traz
+ * `address_json` e nada do cliente), e a resposta de uma ação do Bling é
+ * parcial por natureza. Fechar a forma aqui obrigaria a declarar dois
+ * contratos e a mantê-los sincronizados com o backend à mão — e o compilador
+ * passaria a recusar exatamente o caso que `mesclarPedido` existe para tratar.
+ *
+ * Este arquivo veio de `legacy/.../Bling/blingContrato.js` por `git mv`, e a
+ * conversão para TypeScript acrescentou ANOTAÇÃO e nada mais: nenhuma função
+ * mudou de nome, nenhuma pergunta de `estadoDoBling` mudou de ordem, e a lista
+ * congelada de `mesclarPedido` continua sendo lista.
+ */
+export type PedidoDoPainel = Record<string, unknown>;
 
 /**
  * As três ações de `backend/src/routes/bling.routes.js`, na ordem em que o
@@ -27,7 +44,7 @@ export const ACOES_BLING = Object.freeze([
     chave: "sincronizar",
     rotulo: "Sincronizar",
     rotuloOcupado: "Sincronizando…",
-    caminho: (id) => `/bling/pedidos/${id}/sincronizar`,
+    caminho: (id: string) => `/bling/pedidos/${id}/sincronizar`,
     precisaDeSincronia: false,
     titulo: "Cria (ou confere) o pedido de venda no Bling. Não duplica.",
   }),
@@ -35,7 +52,7 @@ export const ACOES_BLING = Object.freeze([
     chave: "nfe",
     rotulo: "Emitir NF-e",
     rotuloOcupado: "Emitindo…",
-    caminho: (id) => `/bling/pedidos/${id}/nfe`,
+    caminho: (id: string) => `/bling/pedidos/${id}/nfe`,
     precisaDeSincronia: false,
     titulo:
       "Gera a nota do pedido de venda e transmite à SEFAZ. Se a nota já foi " +
@@ -45,7 +62,7 @@ export const ACOES_BLING = Object.freeze([
     chave: "rastreio",
     rotulo: "Buscar rastreio",
     rotuloOcupado: "Buscando…",
-    caminho: (id) => `/bling/pedidos/${id}/rastreio`,
+    caminho: (id: string) => `/bling/pedidos/${id}/rastreio`,
     precisaDeSincronia: true,
     titulo:
       "Lê o rastreio no pedido de venda do Bling; com código lá, grava aqui, " +
@@ -54,7 +71,7 @@ export const ACOES_BLING = Object.freeze([
 ]);
 
 /** A ação pela chave — para quem tem só a string na mão. */
-export const acaoBling = (chave) =>
+export const acaoBling = (chave: string) =>
   ACOES_BLING.find((a) => a.chave === chave) || null;
 
 /**
@@ -72,8 +89,10 @@ export const STATUS_QUE_SINCRONIZAM = Object.freeze([
   "entregue",
 ]);
 
-export const pedidoPodeIrAoBling = (pedido) =>
-  STATUS_QUE_SINCRONIZAM.includes(pedido?.status);
+export const pedidoPodeIrAoBling = (pedido?: PedidoDoPainel | null): boolean =>
+  // O `as string` é só para o compilador: `includes` de um valor ausente já
+  // devolve false, que é a resposta certa para pedido nenhum.
+  STATUS_QUE_SINCRONIZAM.includes(pedido?.status as string);
 
 /**
  * O estado do pedido DENTRO do Bling, derivado dos campos que
@@ -98,8 +117,8 @@ export const pedidoPodeIrAoBling = (pedido) =>
  * As cores são as de `getStatusColor` em Orders.jsx: o painel inteiro fala a
  * mesma língua de cor.
  */
-export function estadoDoBling(pedido) {
-  const p = pedido || {};
+export function estadoDoBling(pedido?: PedidoDoPainel | null) {
+  const p: PedidoDoPainel = pedido || {};
 
   if (p.nfe_chave) {
     return {
@@ -161,7 +180,7 @@ export const FILTROS_DA_FILA = Object.freeze([
     chave: "pendentes",
     rotulo: "Pendentes no Bling",
     vazio: "Nenhum pedido pago esperando o Bling nesta página.",
-    aceita: (p) => {
+    aceita: (p: PedidoDoPainel) => {
       const estado = estadoDoBling(p).chave;
       return estado !== "com_nota" || !p.tracking_code;
     },
@@ -170,19 +189,19 @@ export const FILTROS_DA_FILA = Object.freeze([
     chave: "sem_pedido",
     rotulo: "Sem pedido de venda",
     vazio: "Todos os pedidos pagos desta página já estão no Bling.",
-    aceita: (p) => !p.bling_id,
+    aceita: (p: PedidoDoPainel) => !p.bling_id,
   }),
   Object.freeze({
     chave: "sem_nota",
     rotulo: "Sem NF-e autorizada",
     vazio: "Nenhuma nota pendente nesta página.",
-    aceita: (p) => !p.nfe_chave,
+    aceita: (p: PedidoDoPainel) => !p.nfe_chave,
   }),
   Object.freeze({
     chave: "sem_rastreio",
     rotulo: "Sem rastreio",
     vazio: "Todos os pedidos pagos desta página já têm rastreio.",
-    aceita: (p) => !p.tracking_code,
+    aceita: (p: PedidoDoPainel) => !p.tracking_code,
   }),
   Object.freeze({
     chave: "todos",
@@ -197,7 +216,10 @@ export const FILTROS_DA_FILA = Object.freeze([
  * pelo filtro escolhido. A ordem que veio do servidor (mais novo primeiro) é
  * preservada — é a ordem em que o gestor pensa nos pedidos.
  */
-export function filtrarFila(pedidos, chaveDoFiltro) {
+export function filtrarFila(
+  pedidos: PedidoDoPainel[] | null | undefined,
+  chaveDoFiltro: string,
+): PedidoDoPainel[] {
   const filtro =
     FILTROS_DA_FILA.find((f) => f.chave === chaveDoFiltro) ||
     FILTROS_DA_FILA[0];
@@ -231,7 +253,10 @@ export const CAMPOS_ATUALIZADOS_PELO_BLING = Object.freeze([
   "updated_at",
 ]);
 
-export function mesclarPedido(linha, pedido) {
+export function mesclarPedido(
+  linha: PedidoDoPainel,
+  pedido?: PedidoDoPainel | null,
+): PedidoDoPainel {
   if (!pedido || typeof pedido !== "object") return linha;
   const proxima = { ...linha };
   for (const campo of CAMPOS_ATUALIZADOS_PELO_BLING) {
@@ -259,7 +284,10 @@ export function mesclarPedido(linha, pedido) {
  * fallback por status só existe para o corpo ilegível (proxy no meio, HTML de
  * erro do nginx) — e mesmo aí diz algo útil.
  */
-export function fraseDeErro(status, corpo) {
+export function fraseDeErro(
+  status: number,
+  corpo?: Record<string, unknown> | null,
+): string {
   const doServidor =
     corpo && typeof corpo === "object"
       ? corpo.message || corpo.error

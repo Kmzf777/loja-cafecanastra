@@ -7,7 +7,7 @@ import {
   fraseDeErro,
   mesclarPedido,
   pedidoPodeIrAoBling,
-} from "./blingContrato";
+} from "./contrato";
 
 /**
  * O painel do Bling é JSX e não tem teste de render (o painel legado inteiro

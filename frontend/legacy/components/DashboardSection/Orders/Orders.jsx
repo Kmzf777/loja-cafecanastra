@@ -38,7 +38,7 @@ import {
   estadoDoBling,
   mesclarPedido,
   pedidoPodeIrAoBling,
-} from "../Bling/blingContrato";
+} from "@/lib/painel/bling/contrato";
 import { useBlingAcoes } from "../Bling/useBlingAcoes";
 
 /**

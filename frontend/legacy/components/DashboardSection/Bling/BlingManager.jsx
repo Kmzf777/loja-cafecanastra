@@ -21,7 +21,7 @@ import {
   estadoDoBling,
   filtrarFila,
   mesclarPedido,
-} from "./blingContrato";
+} from "@/lib/painel/bling/contrato";
 import { buscarStatusDoBling, useBlingAcoes } from "./useBlingAcoes";
 
 /**

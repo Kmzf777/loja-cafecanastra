@@ -2,7 +2,11 @@ import { useCallback, useRef, useState } from "react";
 import { toast } from "react-toastify";
 
 import { API_BASE } from "../../../api";
-import { acaoBling, fraseDeErro, mesclarPedido } from "./blingContrato";
+import {
+  acaoBling,
+  fraseDeErro,
+  mesclarPedido,
+} from "@/lib/painel/bling/contrato";
 
 /**
  * As três ações do Bling, uma vez só, para as DUAS telas que as oferecem: a
@@ -30,8 +34,8 @@ import { acaoBling, fraseDeErro, mesclarPedido } from "./blingContrato";
  *    e faria a fila pular embaixo do dedo do gestor.
  *
  * 3. A FRASE DO SERVIDOR CHEGA INTEIRA. Ver `fraseDeErro` em
- *    `blingContrato.js`: as mensagens de 503/502/422/409/504 foram escritas
- *    para este gestor ler.
+ *    `lib/painel/bling/contrato.ts`: as mensagens de 503/502/422/409/504
+ *    foram escritas para este gestor ler.
  *
  * O toast some em 2s e é o aviso do canto do olho; `aoFalhar` leva a MESMA
  * frase para a tarja persistente da tela, que é onde ela pode ser lida com
