@@ -248,12 +248,12 @@ class MotorRepository {
    */
   async diagnosticarCodigo(codigo, client = pool) {
     const { rows } = await client.query(
-      `SELECT c.ativo, c.uso_unico, c.usos, c.limite_usos,
-              p.habilitada, p.arquivada_em, p.inicio_em, p.fim_em,
-              p.limite_usos AS promocao_limite,
-              (SELECT count(*)::int
-                 FROM canastra.promocao_resgates r
-                WHERE r.promocao_id = p.id AND r.estornado_em IS NULL) AS usados
+      // Só as colunas que decidem a FRASE. Contador e limites ficam de fora de
+      // propósito: qualquer um deles leva à mesma resposta ("esgotado"), que é
+      // o default abaixo, e projetá-los só para não usá-los faria a consulta
+      // parecer decidir mais do que decide.
+      `SELECT c.ativo,
+              p.habilitada, p.arquivada_em, p.inicio_em, p.fim_em
          FROM canastra.promocao_codigos c
          JOIN canastra.promocoes p ON p.id = c.promocao_id
         WHERE c.codigo = $1
