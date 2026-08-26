@@ -481,13 +481,30 @@ Todo preço de tela passa por uma função só, `formatarPreco()` em `lib/catalo
 Os tipos `Variante`, `Kit` e `ProdutoVendavel` têm um campo `preco` e nenhum componente desenha
 valor riscado.
 
-**Antes de exibir preço promocional é obrigatório consertar `conferirSubtotal`.**
+**A mina, e por que ela é menos perigosa do que parecia.**
 `PaymentController.js:203-213` compara com **tolerância zero** o subtotal declarado pelo navegador
 contra o subtotal de catálogo **sem promoção**. O comentário de `:184-195` diz que isso só funciona
 porque a vitrine hoje não renderiza preço promocional. No instante em que a vitrine passar a exibir
-e declarar o preço promocional, **todo pedido com promoção ativa vira 409 `PRECO_MUDOU` e a loja
-para de vender.** Este é o item de maior risco da spec inteira e tem ordem obrigatória: conserto do
-backend primeiro, com teste, exibição depois.
+**e declarar** o preço promocional, todo pedido com promoção ativa vira 409 `PRECO_MUDOU` e a loja
+para de vender.
+
+**O conserto, depois de ler o código de perto, NÃO é mexer em `conferirSubtotal`.** A releitura
+mostrou que o campo `subtotalCentavos` não significa "o que o cliente vai pagar" — significa *"o
+que a tela do cliente somou a partir do catálogo"*, e existe só para o servidor perceber que a tela
+está velha. O valor cobrado nunca sai dele. Então:
+
+1. **A sacola continua guardando o preço de CATÁLOGO**, e `subtotalCentavos` continua sendo a soma
+   dele. Exibir o preço promocional é uma decisão de *renderização*, não de armazenamento. Feito
+   assim, a conferência atual continua correta e nada quebra — a mina não é pisada.
+2. **Um campo novo e opcional**, `subtotalPromocionalCentavos`, carrega o que a tela exibiu, e é
+   conferido com a mesma tolerância zero contra a soma de `precoComPromocao` no servidor. Isso pega
+   a classe de erro que a exibição introduz — a tela mostrando promoção que já expirou.
+
+O que **não** pode acontecer é o caminho ingênuo: passar a guardar o preço promocional na sacola e
+deixar `subtotalCentavos` mudar de significado em silêncio. Aí sim os dois lados calculam sobre
+bases diferentes e toda venda com promoção morre em 409.
+
+A ordem continua sendo backend primeiro, com teste; exibição depois.
 
 Segundo cuidado: `formatarPreco` é pt-BR/BRL fixo **de propósito** nos três idiomas. Trocar por
 `Intl.NumberFormat(locale)` faria `/en` exibir outra moeda sem mudar o que o Mercado Pago cobra.
