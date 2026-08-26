@@ -1075,7 +1075,20 @@ npm --prefix frontend install -D jsdom @testing-library/react @testing-library/u
 
 - [ ] **Step 2: Escopar o ambiente no `vitest.config.ts`**
 
-Acrescentar dentro de `test:`, mantendo `environment: "node"` como padrão:
+> ⚠️ **CORREÇÃO, feita durante a execução:** `environmentMatchGlobs` **não existe no Vitest 4** —
+> foi removido na 4.0, e a chave é **ignorada em silêncio**, sem erro de configuração. O substituto
+> oficial é `test.projects`. Duas armadilhas medidas na hora de migrar, e as duas são caladas:
+>
+> 1. **Assim que `test.projects` existe, o `test` de nível raiz para de rodar.** Sem declarar a
+>    vitrine como projeto explícito, a suíte cai de 891 casos para 1 — e passa.
+> 2. **Projeto com `extends: true` tem `include`/`exclude` concatenados**, não substituídos. O
+>    projeto do painel herdaria o `include` amplo da vitrine e rodaria tudo em jsdom.
+>
+> A configuração real, com o comentário que explica as duas, está commitada em
+> `frontend/vitest.config.ts`. **Ela é a fonte da verdade** — o bloco abaixo fica como registro da
+> intenção original, e não deve ser copiado.
+
+O que se queria (e que `test.projects` entrega):
 
 ```ts
     /**
