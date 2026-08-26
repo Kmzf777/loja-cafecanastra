@@ -489,20 +489,22 @@ function calcularDescontos(carrinho, regras) {
     (regras || []).filter((r) => ORDEM_DAS_CLASSES.includes(r.classe)),
   );
 
-  /**
-   * A exclusividade é por CLASSE, e o estado zera entre elas: uma promoção
-   * exclusiva de produto não pode calar o frete grátis, que é de outra
-   * natureza e outra etapa. É a leitura literal de 0032 — "duas promoções de
-   * pagamento se excluem entre si e ainda assim somam com uma de frete".
-   */
-  // Atravessa as classes: a etapa 3 precisa saber quanto a etapa 2 já tirou,
-  // porque o mínimo do frete grátis é conferido contra o subtotal FINAL.
+  // ATRAVESSA as classes, e é o único estado que atravessa: a etapa 3 precisa
+  // saber quanto a etapa 2 já tirou, porque o mínimo do frete grátis é
+  // conferido contra o subtotal FINAL.
   let descontoDePedido = 0;
 
   for (const classe of ORDEM_DAS_CLASSES) {
     const daClasse = ordenadas.filter((r) => r.classe === classe);
     if (daClasse.length === 0) continue;
 
+    /**
+     * A EXCLUSIVIDADE É POR CLASSE, e por isso estas duas variáveis nascem
+     * dentro do laço: uma promoção exclusiva de produto não pode calar o frete
+     * grátis, que é de outra natureza e outra etapa. É a leitura literal de
+     * 0032 — "duas promoções de pagamento se excluem entre si e ainda assim
+     * somam com uma de frete".
+     */
     let classeBloqueada = false;
     const gruposUsados = new Set();
 
