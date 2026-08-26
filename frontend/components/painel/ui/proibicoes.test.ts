@@ -93,8 +93,50 @@ function semComentarios(fonte: string): string {
 const PASTAS = ["ui", "casca"] as const;
 const RAIZ_DO_PAINEL = join(__dirname, "..");
 
+/**
+ * AS TELAS TAMBÉM SÃO VARRIDAS — e sem isto a guarda cobriria a caixa de
+ * ferramentas e deixaria de fora o que é construído com ela.
+ *
+ * Os primitivos são doze arquivos escritos uma vez; as telas são uma pasta nova
+ * por onda, escritas depressa, quase sempre a partir de um trecho achado por
+ * aí. É exatamente ali que `rounded-lg` e `shadow-sm` entram num projeto —
+ * nunca por decisão, sempre por cópia. Um `<Ficha>` impecável não salva uma
+ * tela que desenhou o próprio cartão ao lado dele.
+ *
+ * `(publico)/entrar` FICA DE FORA, e a exceção é nomeada de propósito. A spec
+ * §2.5 diz que "a mão aparece exatamente três vezes no painel inteiro: no
+ * login, na marca do menu lateral e no estado vazio" — a tela de entrada é a
+ * superfície de MARCA do painel, e nela o vermelho é o acento da Canastra, como
+ * na loja. Dentro de `(protegido)` reina a etiqueta, e é ali que a regra vale.
+ */
+const TELAS_DO_PAINEL = join(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "app",
+  "dashboard",
+  "(protegido)",
+);
+
+function arquivosDeTela(dir: string, prefixo: string): { nome: string; fonte: string }[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entrada) => {
+    const caminho = join(dir, entrada.name);
+    if (entrada.isDirectory()) {
+      return arquivosDeTela(caminho, `${prefixo}${entrada.name}/`);
+    }
+    if (!/\.tsx?$/.test(entrada.name) || entrada.name.includes(".test.")) return [];
+    return [
+      {
+        nome: `${prefixo}${entrada.name}`,
+        fonte: semComentarios(readFileSync(caminho, "utf8")),
+      },
+    ];
+  });
+}
+
 function arquivosDeProducao(): { nome: string; fonte: string }[] {
-  return PASTAS.flatMap((pasta) => {
+  const primitivos = PASTAS.flatMap((pasta) => {
     const dir = join(RAIZ_DO_PAINEL, pasta);
     return readdirSync(dir)
       .filter((nome) => /\.tsx?$/.test(nome) && !nome.includes(".test."))
@@ -103,6 +145,8 @@ function arquivosDeProducao(): { nome: string; fonte: string }[] {
         fonte: semComentarios(readFileSync(join(dir, nome), "utf8")),
       }));
   });
+
+  return [...primitivos, ...arquivosDeTela(TELAS_DO_PAINEL, "tela/")];
 }
 
 describe("as proibições do painel", () => {
@@ -113,6 +157,19 @@ describe("as proibições do painel", () => {
       "casca/Cabecalho.tsx",
       "casca/MenuLateral.tsx",
       "casca/menu.logica.ts",
+      // As telas. A lista é escrita à mão de propósito: uma pasta nova em
+      // `(protegido)` fica vermelha aqui, e quem a acrescentar tem de olhar
+      // para esta lista uma vez. É o mesmo mecanismo do teste de estrutura em
+      // `lib/conta/painel-servidor.test.ts` — a onda seguinte não nasce fora da
+      // varredura por distração.
+      "tela/layout.tsx",
+      "tela/legado/[[...rota]]/PainelLegado.tsx",
+      "tela/legado/[[...rota]]/page.tsx",
+      "tela/page.tsx",
+      "tela/vitrine/FormularioDaVitrine.tsx",
+      "tela/vitrine/Previa.tsx",
+      "tela/vitrine/acoes.ts",
+      "tela/vitrine/page.tsx",
       "ui/Botao.tsx",
       "ui/Campo.tsx",
       "ui/EstadoDaTela.tsx",
@@ -151,6 +208,21 @@ describe("as proibições do painel", () => {
       .map(({ nome }) => nome)
       .sort();
     expect(comVermelho).toEqual([
+      /**
+       * A ÚNICA EXCEÇÃO, e ela é auditável por estar escrita aqui.
+       *
+       * `Previa.tsx` desenha uma MINIATURA DA LOJA dentro do painel, e na loja
+       * `--color-vermelho` é o acento de marca: o botão primário do herói é
+       * vermelho sólido (`components/ui/Botao.tsx`, variante `primario`). R21
+       * governa o cromo do painel — pintar o botão de preto ali para obedecer a
+       * uma regra que não é dele faria a prévia mentir sobre a única coisa que
+       * ela existe para mostrar.
+       *
+       * Uma SEGUNDA tela que apareça nesta lista é outra conversa: ou ela
+       * também desenha a loja, ou o vermelho virou destaque e ninguém mais vai
+       * acreditar nos erros de verdade.
+       */
+      "tela/vitrine/Previa.tsx",
       "ui/Botao.tsx",
       "ui/Campo.tsx",
       "ui/Selo.tsx",

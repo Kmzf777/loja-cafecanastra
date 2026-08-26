@@ -362,8 +362,18 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
  * e `notFound()` também usam o mesmo mecanismo (`NEXT_REDIRECT`, `NEXT_HTTP_ERROR_FALLBACK`) —
  * nenhum dos dois é lançado dentro do `try` desta função, mas a checagem é
  * escrita por prefixo de família para continuar valendo se um dia for.
+ *
+ * EXPORTADA DESDE A ONDA 2 DO PAINEL, e não por generalidade: toda tela do
+ * painel que busca dado no servidor tem um `catch` largo em volta do `fetch`
+ * (falha de rede vira "não consegui ler", e não página quebrada), e todo `catch`
+ * largo dentro de um Server Component é uma armadilha para o mesmo sinal.
+ * `app/dashboard/(protegido)/vitrine/page.tsx` foi a primeira a pagar: o
+ * `next build` tenta prerenderizar a rota, o `no-store` lança
+ * `DYNAMIC_SERVER_USAGE`, e o `catch` o engolia — transformando um recado
+ * interno do framework em "a API não respondeu". Duas cópias da checagem
+ * divergiriam no dia em que o Next acrescentasse uma família de digest.
  */
-function ehSinalDoNext(erro: unknown): boolean {
+export function ehSinalDoNext(erro: unknown): boolean {
   const digest = (erro as { digest?: unknown } | null)?.digest;
   if (typeof digest !== "string") return false;
   return (
