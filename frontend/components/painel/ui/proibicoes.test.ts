@@ -109,21 +109,30 @@ const RAIZ_DO_PAINEL = join(__dirname, "..");
  * superfície de MARCA do painel, e nela o vermelho é o acento da Canastra, como
  * na loja. Dentro de `(protegido)` reina a etiqueta, e é ali que a regra vale.
  */
-const TELAS_DO_PAINEL = join(
-  __dirname,
-  "..",
-  "..",
-  "..",
-  "app",
-  "dashboard",
-  "(protegido)",
-);
+const RAIZ_DO_FRONTEND = join(__dirname, "..", "..", "..");
+const TELAS_DO_PAINEL = join(RAIZ_DO_FRONTEND, "app", "dashboard", "(protegido)");
 
-function arquivosDeTela(dir: string, prefixo: string): { nome: string; fonte: string }[] {
+/**
+ * OS MÓDULOS PUROS TAMBÉM SÃO VARRIDOS — `lib/painel/`, acrescentado na Onda 5.
+ *
+ * Parece desnecessário: um `*.logica.ts` não tem JSX, então não teria classe do
+ * Tailwind para violar. Só que ele TEM strings, e a tentação de guardar ali o
+ * "mapa de cor por status" ou o "className da coluna" é exatamente o atalho que
+ * as próximas ondas vão querer tomar — e ele passa por fora da guarda desenhada
+ * para o JSX, que é o pior lugar por onde uma proibição pode escapar: o teste
+ * continua verde e a proibição já não vale.
+ *
+ * A varredura desta pasta começou vazia de violações (medido nesta onda: zero
+ * ocorrências em todos os seis padrões), então ela não custa nada hoje. É agora
+ * que se fecha a porta, não depois de alguém passar por ela.
+ */
+const MODULOS_DO_PAINEL = join(RAIZ_DO_FRONTEND, "lib", "painel");
+
+function varrer(dir: string, prefixo: string): { nome: string; fonte: string }[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entrada) => {
     const caminho = join(dir, entrada.name);
     if (entrada.isDirectory()) {
-      return arquivosDeTela(caminho, `${prefixo}${entrada.name}/`);
+      return varrer(caminho, `${prefixo}${entrada.name}/`);
     }
     if (!/\.tsx?$/.test(entrada.name) || entrada.name.includes(".test.")) return [];
     return [
@@ -136,17 +145,15 @@ function arquivosDeTela(dir: string, prefixo: string): { nome: string; fonte: st
 }
 
 function arquivosDeProducao(): { nome: string; fonte: string }[] {
-  const primitivos = PASTAS.flatMap((pasta) => {
-    const dir = join(RAIZ_DO_PAINEL, pasta);
-    return readdirSync(dir)
-      .filter((nome) => /\.tsx?$/.test(nome) && !nome.includes(".test."))
-      .map((nome) => ({
-        nome: `${pasta}/${nome}`,
-        fonte: semComentarios(readFileSync(join(dir, nome), "utf8")),
-      }));
-  });
+  const primitivos = PASTAS.flatMap((pasta) =>
+    varrer(join(RAIZ_DO_PAINEL, pasta), `${pasta}/`),
+  );
 
-  return [...primitivos, ...arquivosDeTela(TELAS_DO_PAINEL, "tela/")];
+  return [
+    ...primitivos,
+    ...varrer(TELAS_DO_PAINEL, "tela/"),
+    ...varrer(MODULOS_DO_PAINEL, "logica/"),
+  ];
 }
 
 describe("as proibições do painel", () => {
@@ -157,11 +164,26 @@ describe("as proibições do painel", () => {
       "casca/Cabecalho.tsx",
       "casca/MenuLateral.tsx",
       "casca/menu.logica.ts",
+      // Os módulos puros de `lib/painel/` — ver o comentário de
+      // MODULOS_DO_PAINEL para o porquê de eles entrarem na varredura.
+      "logica/api-servidor.ts",
+      "logica/bling/contrato.ts",
+      "logica/clientes/clientes.logica.ts",
+      "logica/data.ts",
+      "logica/dinheiro.ts",
+      "logica/filtros.ts",
+      "logica/paginacao.ts",
+      "logica/resposta.ts",
+      "logica/status.ts",
+      "logica/transporte.ts",
+      "logica/vitrine/vitrine.logica.ts",
       // As telas. A lista é escrita à mão de propósito: uma pasta nova em
       // `(protegido)` fica vermelha aqui, e quem a acrescentar tem de olhar
       // para esta lista uma vez. É o mesmo mecanismo do teste de estrutura em
       // `lib/conta/painel-servidor.test.ts` — a onda seguinte não nasce fora da
       // varredura por distração.
+      "tela/clientes/BuscaDeClientes.tsx",
+      "tela/clientes/page.tsx",
       "tela/layout.tsx",
       "tela/legado/[[...rota]]/PainelLegado.tsx",
       "tela/legado/[[...rota]]/page.tsx",
@@ -172,8 +194,10 @@ describe("as proibições do painel", () => {
       "tela/vitrine/page.tsx",
       "ui/Botao.tsx",
       "ui/Campo.tsx",
+      "ui/ChipsDeFiltro.tsx",
       "ui/EstadoDaTela.tsx",
       "ui/Ficha.tsx",
+      "ui/Paginacao.tsx",
       "ui/Selo.tsx",
       "ui/Tabela.tsx",
       "ui/Tarja.tsx",
