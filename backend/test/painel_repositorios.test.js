@@ -203,7 +203,7 @@ async function promocaoCompleta(titulo) {
   assert.equal(res.codigo, 201);
 
   const { rows } = await bd.pool.query(
-    "SELECT * FROM canastra.promocoes WHERE titulo = $1",
+    "SELECT * FROM canastra.promocoes_legado WHERE titulo = $1",
     [titulo],
   );
   return rows[0];
@@ -224,7 +224,7 @@ test("promoções: PUT só com o título preserva descrição, valor, datas e ca
   assert.equal(res.codigo, 200);
 
   const { rows } = await bd.pool.query(
-    "SELECT * FROM canastra.promocoes WHERE id = $1",
+    "SELECT * FROM canastra.promocoes_legado WHERE id = $1",
     [antes.id],
   );
   const depois = rows[0];
@@ -285,7 +285,7 @@ test("promoções: o PUT completo do painel legado continua funcionando igual", 
   assert.equal(res.codigo, 200);
 
   const { rows } = await bd.pool.query(
-    "SELECT * FROM canastra.promocoes WHERE id = $1",
+    "SELECT * FROM canastra.promocoes_legado WHERE id = $1",
     [antes.id],
   );
   assert.equal(Number(rows[0].valor), 15);
@@ -310,7 +310,7 @@ test("promoções: o teto de 90% vale mesmo quando o PUT manda só o valor", asy
   assert.equal(res.codigo, 400);
 
   const { rows } = await bd.pool.query(
-    "SELECT valor FROM canastra.promocoes WHERE id = $1",
+    "SELECT valor FROM canastra.promocoes_legado WHERE id = $1",
     [antes.id],
   );
   assert.equal(Number(rows[0].valor), 10);
@@ -586,7 +586,7 @@ test("promoções: por PRODUTO exige um uuid de verdade no corpo", async () => {
   );
   assert.equal(res.codigo, 201);
   const { rows } = await bd.pool.query(
-    "SELECT produto_id FROM canastra.promocoes WHERE titulo = $1",
+    "SELECT produto_id FROM canastra.promocoes_legado WHERE titulo = $1",
     ["Só neste café (válida)"],
   );
   assert.equal(rows[0].produto_id, "00000000-0000-4000-8000-00000000abcd");

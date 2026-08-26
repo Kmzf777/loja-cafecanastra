@@ -69,12 +69,23 @@ const PED_ORFAO = "03333333-0000-0000-0000-000000000009";
  * aviso sao a PRIMEIRA coisa que a home mostra, antes de qualquer login — sem
  * leitura anonima a loja abre com o topo em branco. Elas nao guardam vinculo
  * com pessoa nenhuma; a escrita continua so de admin, como as outras quatro.
+ *
+ * `promocoes` VIROU `promocoes_legado` EM 0032, E A LISTA NAO CRESCEU. Aquela
+ * migracao renomeou a tabela de 0005 e deu o nome `promocoes` ao motor novo —
+ * entao a linha aqui e a MESMA relacao de sempre, com o nome que ela passou a
+ * ter. O motor novo NAO entra: as sete tabelas de 0032 nao tem uma unica
+ * politica `USING (true)`. A leitura anonima de `promocoes` la e recortada no
+ * predicado (automatica, habilitada, dentro da janela, nao arquivada), porque a
+ * campanha AGENDADA e calendario comercial e a promocao de CODIGO carrega o
+ * valor de um cupom que circula em anuncio. Um nome a mais nesta lista teria
+ * dito, no diff, que a tabela inteira pode ser lida por quem nao tem conta — e
+ * seria falso.
  */
 const PUBLICAS = [
   "config_loja",
   "produto_opcoes",
   "produtos",
-  "promocoes",
+  "promocoes_legado",
   "vitrine_heroi",
   "vitrine_texto",
 ];
@@ -149,7 +160,9 @@ before(async () => {
   await bd.pool.query(
     "INSERT INTO canastra.produto_opcoes (tipo, valor) VALUES ('tamanho', '250 g')",
   );
-  await bd.pool.query("INSERT INTO canastra.promocoes (titulo) VALUES ('Frete gratis')");
+  await bd.pool.query(
+    "INSERT INTO canastra.promocoes_legado (titulo) VALUES ('Frete gratis')",
+  );
   await bd.pool.query(
     "INSERT INTO canastra.config_loja (id, titulo_site) VALUES (1, 'Cafe Canastra')",
   );
@@ -285,7 +298,7 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
   );
   await exigeRecusa(
     SESSAO_ESTRANHA,
-    "INSERT INTO canastra.promocoes (titulo) VALUES ('Invasor')",
+    "INSERT INTO canastra.promocoes_legado (titulo) VALUES ('Invasor')",
     [],
     "insercao de promocao",
   );
@@ -294,7 +307,7 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
     "UPDATE canastra.produtos SET preco = 0.01",
     "DELETE FROM canastra.produtos",
     "DELETE FROM canastra.produto_opcoes",
-    "UPDATE canastra.promocoes SET titulo = 'Invasor'",
+    "UPDATE canastra.promocoes_legado SET titulo = 'Invasor'",
     "UPDATE canastra.config_loja SET titulo_site = 'Invadido'",
   ];
   for (const sql of SILENCIOSOS) {
@@ -322,7 +335,7 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
     SELECT
       (SELECT count(*)::int FROM canastra.produtos)       AS produtos,
       (SELECT count(*)::int FROM canastra.produto_opcoes) AS opcoes,
-      (SELECT count(*)::int FROM canastra.promocoes)      AS promocoes,
+      (SELECT count(*)::int FROM canastra.promocoes_legado) AS promocoes,
       (SELECT count(*)::int FROM canastra.config_loja)    AS config
   `);
   assert.deepEqual(rows[0], { produtos: 1, opcoes: 1, promocoes: 1, config: 1 });
@@ -440,7 +453,7 @@ test("anon le a vitrine inteira: catalogo, filtros, promocoes e configuracao", a
       "SELECT nome, preco FROM canastra.produtos_publicos ORDER BY nome",
     );
     const filtros = await cliente.query("SELECT valor FROM canastra.produto_opcoes");
-    const promocoes = await cliente.query("SELECT titulo FROM canastra.promocoes");
+    const promocoes = await cliente.query("SELECT titulo FROM canastra.promocoes_legado");
     const config = await cliente.query("SELECT titulo_site FROM canastra.config_loja");
     return {
       catalogo: catalogo.rows.map((r) => r.nome),
@@ -655,7 +668,7 @@ test("DORA administra: cadastra produto, le todos os pedidos e todos os clientes
       "INSERT INTO canastra.produto_opcoes (tipo, valor) VALUES ('categoria', 'Especial')",
     );
     const promo = await cliente.query(
-      "INSERT INTO canastra.promocoes (titulo) VALUES ('Semana do cafe')",
+      "INSERT INTO canastra.promocoes_legado (titulo) VALUES ('Semana do cafe')",
     );
     const config = await cliente.query(
       "UPDATE canastra.config_loja SET barra_de_aviso = 'Entrega em 2 dias', atualizado_em = now()",

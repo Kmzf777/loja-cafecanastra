@@ -9,11 +9,26 @@ const { v4: uuidv4 } = require("uuid");
 const { ehUuid } = require("../utils/formatoUuid");
 
 /**
- * Promoções, contra `canastra.promocoes`. O contrato HTTP segue o que o
+ * Promoções, contra `canastra.promocoes_legado`. O contrato HTTP segue o que o
  * PromotionsManager.jsx do painel legado envia e lê (`title`, `type`,
  * `value`, `applies_to`, `start_date`...); o mapa para as colunas em
  * português (`titulo`, `tipo`, `valor`, `aplica_a`, `inicio_em`...) vive
  * nos SELECTs e INSERTs daqui.
+ *
+ * POR QUE `_legado` NO NOME DA TABELA, E NÃO `canastra.promocoes`
+ * A migração `0032_motor_de_promocao.sql` renomeou a tabela de 0005 para
+ * `promocoes_legado` e deu o nome `promocoes` ao motor unificado — sete tabelas
+ * onde promoção e cupom viram uma entidade só, com `metodo` decidindo se a regra
+ * aplica sozinha ou exige um código digitado. Este módulo continua falando com a
+ * tabela ANTIGA de propósito: a Onda 3 é só schema, e trocar o motor do checkout
+ * junto misturaria "criar o lugar novo" com "mudar o que a loja cobra".
+ *
+ * Quem troca isto é a Onda 4, e é ela também que derruba `promocoes_legado` e
+ * `cupons`, em `0036_aposentar_promocoes_e_cupons.sql`. Enquanto esse dia não
+ * chega, um `canastra.promocoes` escrito aqui por distração acerta a tabela
+ * ERRADA — mas erra alto: o motor novo não tem `titulo`, `tipo`, `aplica_a`,
+ * `categoria`, `produto_id` nem `ativa`, então a consulta morre em 42703 na
+ * primeira chamada, e não em silêncio.
  */
 
 const COLUNAS_DO_CONTRATO = `
@@ -102,7 +117,7 @@ class PromotionsRepository {
       }
 
       await pool.query(
-        `INSERT INTO canastra.promocoes (
+        `INSERT INTO canastra.promocoes_legado (
            id, titulo, descricao, tipo, valor, aplica_a,
            categoria, produto_id, inicio_em, fim_em, ativa
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
@@ -130,7 +145,7 @@ class PromotionsRepository {
   async getPromotions(request, response) {
     try {
       const result = await pool.query(
-        `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.promocoes
+        `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.promocoes_legado
           ORDER BY criada_em DESC`,
       );
       response.status(200).json(result.rows);
@@ -218,7 +233,7 @@ class PromotionsRepository {
       // e o tipo, nesse PUT, só existe no banco. Por isso a leitura vem antes —
       // ela também é a que distingue "id inexistente" de "nada mudou".
       const atual = await pool.query(
-        "SELECT tipo, valor FROM canastra.promocoes WHERE id = $1",
+        "SELECT tipo, valor FROM canastra.promocoes_legado WHERE id = $1",
         [id],
       );
       if (!atual.rows.length) {
@@ -241,7 +256,7 @@ class PromotionsRepository {
 
       values.push(id);
       const resultado = await pool.query(
-        `UPDATE canastra.promocoes SET ${atribuicoes.join(", ")}
+        `UPDATE canastra.promocoes_legado SET ${atribuicoes.join(", ")}
           WHERE id = $${values.length}`,
         values,
       );
@@ -270,7 +285,7 @@ class PromotionsRepository {
    */
   async findActivePromotionsForCheckout() {
     const result = await pool.query(
-      `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.promocoes
+      `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.promocoes_legado
         WHERE ativa = true
           AND inicio_em <= now()
           AND fim_em >= now()`,

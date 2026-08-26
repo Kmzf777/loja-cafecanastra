@@ -88,7 +88,7 @@ before(async () => {
   // Promoção de 50% SÓ no P2: o teste do /cupons/validar afirma que o cupom
   // desconta sobre o preço JÁ promocional.
   await bd.pool.query(
-    `INSERT INTO canastra.promocoes
+    `INSERT INTO canastra.promocoes_legado
        (titulo, tipo, valor, aplica_a, produto_id, inicio_em, fim_em, ativa)
      VALUES ('Metade no Promo', 'percent', 50, 'product', $1,
              now() - interval '1 day', now() + interval '1 day', true)`,
