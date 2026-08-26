@@ -91,6 +91,18 @@ async function recusarForaDaLoja(req, res, conexao) {
  *   `newsletter_inscritos` a inscrição do rodapé (0011). Sem `user_id`: a
  *                          tabela é POR E-MAIL, e o e-mail é justamente o que
  *                          esta exportação acabou de resolver no GoTrue.
+ *   `consentimentos` ..... a autorização de contato por canal (0033): quando
+ *                          foi dada, de onde veio, com que texto — e quando foi
+ *                          revogada. É a resposta a "com base em quê vocês me
+ *                          mandaram esta mensagem?", que é exatamente uma
+ *                          pergunta de titular. Alcançada por `user_id` OU por
+ *                          e-mail: a tabela aceita as duas âncoras (0033), e
+ *                          quem consentiu no rodapé sem conta só tem a segunda.
+ *   `envios` ............. a mensagem que a loja MANDOU para a pessoa (0033),
+ *                          com destinatário, estado e data. É dado dela tanto
+ *                          quanto o consentimento — e é o outro lado da mesma
+ *                          conta: um envio sem consentimento é o que uma
+ *                          fiscalização procura.
  *
  * O QUE FICA DE FORA, e por quê: `carrinhos`/`carrinho_itens` (o carrinho em
  * curso é produto e quantidade — o que a própria pessoa está vendo na tela
@@ -128,11 +140,23 @@ async function exportarDadosDoTitular(req, res, { conexao = pool } = {}) {
       )
     ).rows;
 
+    /**
+     * AS COLUNAS DE ATRIBUIÇÃO (0033) ENTRAM NA PROJEÇÃO, e não são detalhe de
+     * marketing: `utm_*`, `canal`, `referrer`, `landing_page`, `gclid` e
+     * `fbclid` registram POR ONDE esta pessoa chegou à loja e de que anúncio
+     * ela veio. Isso é comportamento de navegação atrelado a uma venda
+     * identificada — dado pessoal pelo art. 5º, I, e o `gclid`/`fbclid` é
+     * literalmente o identificador que uma plataforma de anúncio usa para
+     * reconhecê-la. Omitir da exportação seria a loja guardar sobre a pessoa
+     * algo que a resposta ao direito de acesso não conta.
+     */
     const pedidos = (
       await conexao.query(
         `SELECT pedido_id, total, status, metodo_pagamento, pagamento_id_mp,
                 itens, endereco_json, frete, metodo_envio, codigo_rastreio,
-                cupom_codigo, desconto, criado_em, redigido_em
+                cupom_codigo, desconto, criado_em, redigido_em,
+                utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+                canal, referrer, landing_page, gclid, fbclid
            FROM canastra.pedidos
           WHERE user_id = $1
           ORDER BY criado_em`,
@@ -185,6 +209,44 @@ async function exportarDadosDoTitular(req, res, { conexao = pool } = {}) {
         ).rows
       : [];
 
+    /**
+     * Consentimento e envio se ancoram em DOIS lugares, e por isso a consulta
+     * pergunta pelos dois: `user_id` (quem consentiu logada) OU o e-mail (quem
+     * marcou a caixa no rodapé sem conta, e depois se cadastrou com o mesmo
+     * e-mail). Perguntar só pelo `user_id` deixaria de fora justamente o
+     * histórico mais antigo da pessoa — e é o histórico antigo que uma
+     * contestação de consentimento vai buscar.
+     *
+     * `lower()` dos dois lados pelo motivo da newsletter logo abaixo: o e-mail
+     * não é sensível a caixa e o índice `consentimentos_email_idx` é sobre
+     * `lower(email)`.
+     */
+    const email = titular.email ? String(titular.email).toLowerCase() : null;
+
+    const consentimentos = (
+      await conexao.query(
+        `SELECT id, canal, estado, origem, email, telefone, texto_aceito,
+                criado_em
+           FROM canastra.consentimentos
+          WHERE user_id = $1
+             OR ($2::text IS NOT NULL AND lower(email) = $2)
+          ORDER BY criado_em`,
+        [userId, email],
+      )
+    ).rows;
+
+    const envios = (
+      await conexao.query(
+        `SELECT id, canal, campanha_id, destinatario_final, template, estado,
+                erro_texto, criado_em, enviado_em, entregue_em
+           FROM canastra.envios
+          WHERE user_id = $1
+             OR ($2::text IS NOT NULL AND lower(destinatario_final) = $2)
+          ORDER BY criado_em`,
+        [userId, email],
+      )
+    ).rows;
+
     return res.json({
       // Datada: uma exportação é uma fotografia, e a data é parte da resposta
       // ao titular ("estes eram os seus dados em...").
@@ -201,6 +263,8 @@ async function exportarDadosDoTitular(req, res, { conexao = pool } = {}) {
       assinaturas,
       avaliacoes,
       newsletter,
+      consentimentos,
+      envios,
     });
   } catch (erro) {
     console.error("Erro ao exportar dados do titular:", erro);

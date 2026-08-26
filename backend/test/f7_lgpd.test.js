@@ -996,6 +996,79 @@ test("exportação devolve TUDO que a loja guarda sobre o titular", async () => 
     [titular.email],
     "e SÓ a do titular",
   );
+
+  // AS COLUNAS DE ATRIBUIÇÃO (0033) FAZEM PARTE DA RESPOSTA. `gclid`/`fbclid`
+  // são literalmente o identificador com que uma plataforma de anúncio
+  // reconhece esta pessoa, e `referrer`/`landing_page` são comportamento de
+  // navegação atrelado a uma venda identificada. Omiti-los faria a exportação
+  // esconder algo que a loja guarda.
+  for (const coluna of [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_content",
+    "utm_term",
+    "canal",
+    "referrer",
+    "landing_page",
+    "gclid",
+    "fbclid",
+  ]) {
+    assert.ok(
+      coluna in dados.pedidos[0],
+      `a exportação do pedido precisa projetar "${coluna}"`,
+    );
+  }
+});
+
+test("a exportação alcança consentimentos e envios — as duas tabelas que a 0033 criou", async () => {
+  // O cabeçalho de `lgpd.routes.js` diz que a lista é "TODA tabela desta loja
+  // com dado da pessoa, e quem criar a próxima tem de voltar aqui".
+  // `consentimentos` e `envios` nasceram fora dela.
+  const titular = await novoTitular("Rita Campos");
+
+  // Consentimento por USER_ID, e outro só por E-MAIL (o do rodapé, dado antes
+  // de a pessoa ter conta): a exportação tem de alcançar os dois, senão o
+  // histórico mais antigo — que é o que uma contestação vai buscar — some.
+  await bd.pool.query(
+    `INSERT INTO canastra.consentimentos (user_id, canal, estado, origem)
+     VALUES ($1, 'whatsapp', 'concedido', 'checkout')`,
+    [titular.id],
+  );
+  await bd.pool.query(
+    `INSERT INTO canastra.consentimentos (email, canal, estado, origem)
+     VALUES ($1, 'email', 'revogado', 'rodape')`,
+    [titular.email.toUpperCase()],
+  );
+  // De OUTRA pessoa: a exportação não pode varrer a tabela.
+  await bd.pool.query(
+    `INSERT INTO canastra.consentimentos (email, canal, estado, origem)
+     VALUES ('alheio@ex.com', 'email', 'concedido', 'rodape')`,
+  );
+
+  await bd.pool.query(
+    `INSERT INTO canastra.envios (canal, user_id, destinatario_final, estado, template)
+     VALUES ('email', $1, $2, 'entregue', 'boas-vindas')`,
+    [titular.id, titular.email],
+  );
+  await bd.pool.query(
+    `INSERT INTO canastra.envios (canal, destinatario_final, estado)
+     VALUES ('email', 'alheio@ex.com', 'enviado')`,
+  );
+
+  const res = respostaFalsa();
+  await lgpd.exportarDadosDoTitular({ params: { userId: titular.id } }, res, {
+    conexao: bd.pool,
+  });
+
+  assert.equal(res.codigo, 200);
+  assert.equal(res.corpo.consentimentos.length, 2, "por user_id E por e-mail");
+  assert.deepEqual(
+    new Set(res.corpo.consentimentos.map((c) => c.canal)),
+    new Set(["whatsapp", "email"]),
+  );
+  assert.equal(res.corpo.envios.length, 1);
+  assert.equal(res.corpo.envios[0].template, "boas-vindas");
 });
 
 test("exportação de titular sem nada devolve listas vazias, nunca erro", async () => {
@@ -1012,6 +1085,8 @@ test("exportação de titular sem nada devolve listas vazias, nunca erro", async
   assert.deepEqual(res.corpo.assinaturas, []);
   assert.deepEqual(res.corpo.avaliacoes, []);
   assert.deepEqual(res.corpo.newsletter, []);
+  assert.deepEqual(res.corpo.consentimentos, []);
+  assert.deepEqual(res.corpo.envios, []);
 });
 
 test("404 uniforme: não-cliente e inexistente são indistinguíveis, nos dois endpoints", async () => {

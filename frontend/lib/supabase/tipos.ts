@@ -532,6 +532,41 @@ export type Database = {
           comprimento: number;
           destacado_em: string;
           sku: string | null;
+          /**
+           * 0037. Entrou na projeção porque entrou no `WHERE` da view: com
+           * `security_invoker = true`, o Postgres confere privilégio de COLUNA
+           * sobre tudo que a consulta referencia, e sem `GRANT SELECT (estado)`
+           * a vitrine inteira responderia 42501. A invariante que
+           * `test/rls.test.js` afirma — "a lista pública de colunas de
+           * `produtos` é EXATAMENTE a projeção da view" — é o que mantém as
+           * duas listas juntas.
+           *
+           * A view já filtra `estado <> 'arquivado'`, então esta coluna nunca
+           * volta 'arquivado' por aqui.
+           */
+          estado: "rascunho" | "ativo" | "arquivado";
+        };
+        Relationships: [];
+      };
+
+      /**
+       * 0037. A janela estreita do SEGUNDO leitor da view pública.
+       *
+       * `produtos_publicos` passou a esconder o produto arquivado, e isso está
+       * certo para a vitrine e ERRADO para `AvaliarPedido.tsx`, que usa a mesma
+       * ponte `product_id -> sku` para montar o formulário de avaliação de quem
+       * JÁ COMPROU. Arquivar um café não pode apagar em silêncio o formulário
+       * de quem o recebeu — `canastra.pode_avaliar(sku)` não olha estado, e
+       * quem recebeu avalia.
+       *
+       * Duas colunas e só elas, e `TO authenticated` apenas: `anon` não tem por
+       * que enumerar SKU de produto arquivado. Somente leitura (0037 revoga
+       * INSERT/UPDATE/DELETE).
+       */
+      produtos_sku: {
+        Row: {
+          produto_id: string;
+          sku: string | null;
         };
         Relationships: [];
       };
