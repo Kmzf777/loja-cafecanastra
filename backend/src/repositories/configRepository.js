@@ -28,8 +28,35 @@ class ConfigRepository {
     return res.rows[0];
   }
 
+  /**
+   * CAMPO EM BRANCO É AUSÊNCIA, NÃO É VALOR — e é esta distinção que é o
+   * conserto.
+   *
+   * O corpo do PUT chega por MULTIPART: um campo que o formulário envia vazio
+   * vale `''`, que não é `undefined` e portanto atravessava a condicional do
+   * `atribui()` abaixo. Para texto isso já apagava título e barra de aviso; para
+   * `frete_gratis_minimo_centavos` é pior, porque a validação APROVAVA:
+   * `Number('')` é `0`, `Number.isInteger(0)` é `true` e `0 < 0` é falso — o
+   * piso do frete grátis virava zero e a loja INTEIRA passava a dar frete
+   * grátis, disparado por qualquer outro campo que o painel estivesse salvando.
+   *
+   * Quem quiser mesmo zerar o piso manda `0` (ou `"0"`) explícito: `'0'` não é
+   * `''`, então passa por aqui e chega ao banco. O preço desta regra é que
+   * ESVAZIAR um texto (limpar a barra de aviso, por exemplo) deixou de ser
+   * possível por campo em branco — apagar por engano é o erro caro, e apagar de
+   * propósito precisa de um caminho explícito, que hoje não existe.
+   *
+   * `null` entra junto: a coluna do frete é `NOT NULL DEFAULT 14900` (0009), e
+   * um JSON com `null` só produziria 23502 — nunca é pedido de zerar.
+   */
+  static ehAusencia(valor) {
+    if (valor === undefined || valor === null) return true;
+    return typeof valor === "string" && valor.trim() === "";
+  }
+
   async updateConfig(req, res) {
     const { site_title, whatsapp_number, announcement_bar } = req.body;
+    const ehAusencia = ConfigRepository.ehAusencia;
 
     const bannerDesktop = req.files?.banner_desktop
       ? req.files.banner_desktop[0].path
@@ -45,7 +72,7 @@ class ConfigRepository {
      * frase em vez de 500 com SQLSTATE.
      */
     let freteGratis;
-    if (req.body.frete_gratis_minimo_centavos !== undefined) {
+    if (!ehAusencia(req.body.frete_gratis_minimo_centavos)) {
       freteGratis = Number(req.body.frete_gratis_minimo_centavos);
       if (!Number.isInteger(freteGratis) || freteGratis < 0) {
         return res.status(400).json({
@@ -69,7 +96,7 @@ class ConfigRepository {
       const atribuicoes = ["atualizado_em = now()"];
       const values = [];
       const atribui = (coluna, valor) => {
-        if (valor === undefined) return;
+        if (ehAusencia(valor)) return;
         values.push(valor);
         atribuicoes.push(`${coluna} = $${values.length}`);
       };
