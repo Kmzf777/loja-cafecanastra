@@ -9,6 +9,7 @@ const helmet = require("helmet");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const pool = require("./pgPool");
+const { opcoesDeCors } = require("./config/cors");
 
 const productsRoutes = require("./routes/products.routes");
 const { contaRoutes } = require("./routes/conta.routes");
@@ -39,56 +40,11 @@ app.use(
   }),
 );
 
-const isProd = process.env.NODE_ENV === "production";
-
-/**
- * Origens liberadas.
- *
- * Antes a lista misturava dominios de outra loja com localhost,
- * e valia igual em producao. Manter localhost liberado em producao significa
- * que uma pagina rodando na maquina de um atacante (ou um app local malicioso)
- * fala com esta API a partir do navegador de quem esta logado.
- *
- * `credentials: true` FICA, apesar de nao existir mais cookie de sessao. Nao e
- * sobra: a vitrine e o painel chamam esta API com `credentials: "include"`, e
- * sem o `Access-Control-Allow-Credentials` na resposta o navegador BLOQUEIA a
- * resposta inteira — checkout, endereco e frete parariam com erro de CORS, nao
- * com erro de autenticacao. Enquanto quem chama mandar `include`, isto fica.
- *
- * Em producao vale so o que vier de CORS_ORIGIN (aceita lista separada por
- * virgula, para www e apex). Em desenvolvimento, as portas locais entram.
- */
-const origensDeDesenvolvimento = [
-  "http://localhost:5173",
-  // A vitrine migrou de Vite (5173) para Next (3000) e o painel passou a ser
-  // servido pelo Next junto com ela.
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-];
-
-const allowedOrigins = [
-  ...(process.env.CORS_ORIGIN || "").split(",").map((o) => o.trim()),
-  ...(isProd ? [] : origensDeDesenvolvimento),
-].filter(Boolean);
-
-// Liberação de origem controlada
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    // `X-CSRF-Token` saiu da lista junto com o csurf: um cabecalho liberado no
-    // preflight que ninguem valida so confunde quem le. Ver o bloco do CSRF,
-    // logo abaixo do healthcheck.
-    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
-    credentials: true,
-  }),
-);
+// Liberação de origem controlada. As origens e a lista de cabecalhos liberados
+// moram em `config/cors.js` — `index.js` nao e carregavel num teste (abre porta
+// e fala com o GoTrue no require), e a lista de cabecalhos precisa de teste que
+// exercite o preflight de verdade.
+app.use(cors(opcoesDeCors));
 
 app.options("*", (req, res) => res.sendStatus(200));
 
