@@ -1,10 +1,11 @@
 const pool = require("../pgPool");
 const { v4: uuidv4 } = require("uuid");
 // A MESMA forma de UUID de `conta.routes.js` e `lgpd.routes.js`, e pelo mesmo
-// motivo: o id vem da URL e vira `$1` numa coluna `uuid`. (A cópia da regex que
-// `createPromotion` ainda carrega mais abaixo continua ali de propósito — migrar
-// os outros chamadores é o trabalho que `utils/formatoUuid.js` já descreve, e
-// não este.)
+// motivo: o identificador vem de fora e vira `$1` numa coluna `uuid`. Este
+// módulo faz a pergunta duas vezes — no `:id` da URL (updatePromotion) e no
+// `product_id` do corpo (createPromotion) —, e as duas passam por aqui: era a
+// segunda que carregava uma cópia literal da regex, e cópia divergindo é
+// questão de tempo, como `utils/formatoUuid.js` já explica.
 const { ehUuid } = require("../utils/formatoUuid");
 
 /**
@@ -89,9 +90,9 @@ class PromotionsRepository {
       const categoryFixed = applies_to === "category" ? category : null;
       let productIdFixed = null;
       if (applies_to === "product") {
-        const uuidRegex =
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        if (!product_id || !uuidRegex.test(product_id)) {
+        // `ehUuid` já embute o `String(... || "")`, então `undefined`, `null` e
+        // `""` respondem false sem precisar do teste separado que estava aqui.
+        if (!ehUuid(product_id)) {
           return response.status(400).json({
             error:
               "Para promoção por produto, você deve fornecer o ID (UUID) válido do produto.",

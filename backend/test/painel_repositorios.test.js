@@ -541,6 +541,57 @@ const IDS_MALFORMADOS = [
   ["texto com aspas", "abc'--"],
 ];
 
+test("promoções: por PRODUTO exige um uuid de verdade no corpo", async () => {
+  // ESTE TESTE NÃO NASCEU DE UM BUG: ele existe para prender o comportamento
+  // ANTES de a validação daqui trocar a regex copiada pelo `ehUuid` comum — um
+  // refactor só é seguro quando existe alguém para reprovar a diferença. Vale
+  // nas duas versões, e é isso que o torna útil.
+  //
+  // Repare que o alvo é o `product_id` do CORPO, não o `:id` da URL: aqui o
+  // uuid inválido nunca chegou ao banco (a validação já existia). O que se
+  // ganha é uma cópia a menos da mesma pergunta.
+  const repo = new PromotionsRepository();
+
+  for (const invalido of [undefined, null, "", "abc", "00000000-0000-4000-8000-0000000000"]) {
+    const res = respostaFalsa();
+    await repo.createPromotion(
+      {
+        body: {
+          title: "Só neste café",
+          type: "percent",
+          value: 10,
+          applies_to: "product",
+          product_id: invalido,
+        },
+      },
+      res,
+    );
+    assert.equal(res.codigo, 400, `product_id = ${JSON.stringify(invalido)}`);
+    assert.match(res.corpo.error, /UUID/i);
+  }
+
+  // E o caminho feliz continua criando, com o uuid guardado como veio.
+  const res = respostaFalsa();
+  await repo.createPromotion(
+    {
+      body: {
+        title: "Só neste café (válida)",
+        type: "percent",
+        value: 10,
+        applies_to: "product",
+        product_id: "00000000-0000-4000-8000-00000000abcd",
+      },
+    },
+    res,
+  );
+  assert.equal(res.codigo, 201);
+  const { rows } = await bd.pool.query(
+    "SELECT produto_id FROM canastra.promocoes WHERE titulo = $1",
+    ["Só neste café (válida)"],
+  );
+  assert.equal(rows[0].produto_id, "00000000-0000-4000-8000-00000000abcd");
+});
+
 test("promoções: PUT com :id malformado é 400 com frase, não 500", async () => {
   const repo = new PromotionsRepository();
 
