@@ -325,7 +325,7 @@ export async function chamarApi(
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix frontend run test -- lib/painel/transporte`
-Expected: PASS, 12 casos.
+Expected: PASS, 11 casos.
 
 - [ ] **Step 5: `legacy/api.js` passa a reexportar**
 
@@ -825,7 +825,7 @@ Expected: PASS, 21 casos.
 
 - [ ] **Step 4: Apontar o painel legado para o novo caminho**
 
-Em `BlingManager.jsx` e `useBlingAcoes.js`, trocar `from "./blingContrato"` por
+Em `BlingManager.jsx`, `useBlingAcoes.js` e `Orders.jsx` (que tambem importa ACOES_BLING, estadoDoBling, mesclarPedido e pedidoPodeIrAoBling no bloco do modal de detalhe — sem ele o `next build` quebra), trocar `from "./blingContrato"` por
 `from "@/lib/painel/bling/contrato"`.
 
 - [ ] **Step 5: Rodar a suíte inteira do frontend**
