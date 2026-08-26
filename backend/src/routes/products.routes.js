@@ -71,4 +71,28 @@ productsRoutes.put(
   ConfigController.updateConfig
 );
 
+/**
+ * Ajuste de estoque, sozinho — ACRESCENTADA NO FIM.
+ *
+ * A ordem de registro deste arquivo é load-bearing: `/dashboard/summary` está
+ * registrada ANTES de `/dashboard/:id` porque o Express casa na ordem, e
+ * invertidas o summary viraria um produto de id "summary" e responderia 404
+ * PÚBLICO — a rota administrativa desaparecendo sem 401 e sem erro. Esta linha
+ * entra no fim e não desloca nada; `/dashboard/:id/estoque` tem sufixo próprio
+ * e não colide com `/dashboard/:id`.
+ *
+ * SEM `upload` NO MEIO, e é o ponto da rota: o único caminho para corrigir o
+ * estoque era o `PUT /dashboard/:id` multipart, que reenviava o formulário
+ * inteiro — imagem incluída — e apagava as medidas do pacote pelo caminho.
+ * JSON puro, um campo, nenhum efeito colateral.
+ */
+productsRoutes.patch(
+  "/dashboard/:id/estoque",
+  authenticateToken,
+  isAdmin,
+  async (request, response) => {
+    await dashboardRepository.ajustarEstoque(request, response);
+  }
+);
+
 module.exports = productsRoutes;

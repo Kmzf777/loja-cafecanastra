@@ -24,6 +24,7 @@ const { lgpdRoutes } = require("./routes/lgpd.routes");
 const blingRoutes = require("./routes/bling.routes");
 const clubeRoutes = require("./routes/clube.routes");
 const vitrineRoutes = require("./routes/vitrine.routes");
+const painelRoutes = require("./routes/painel.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 
@@ -146,6 +147,12 @@ app.use(clubeRoutes);
 // antes de /admin/orders/:id, /users/me antes de /users/:id). `/vitrine` nao
 // tem `:id` e nao forma par com nada, entao entra sem mexer em nada acima.
 app.use("/vitrine", vitrineRoutes);
+// Painel (Onda 4): custo do produto, moderacao de avaliacoes e administradores.
+// Caminhos absolutos `/admin/...` no proprio router, como orders.routes.js.
+// TAMBEM NO FIM, e pelo mesmo motivo do `/vitrine` acima: nada aqui forma par
+// com uma rota de `:id` ja registrada, entao acrescentar no fim nao desloca
+// nenhum dos tres pares load-bearing.
+app.use(painelRoutes);
 
 /**
  * Carrinho abandonado: cron de hora em hora, DESLIGADO por padrao (decisao 5

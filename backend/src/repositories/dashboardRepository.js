@@ -4,6 +4,7 @@ const { GRUPO_ATIVO } = require("../utils/statusDePedido");
 // A MESMA forma de UUID de `conta.routes.js` e `lgpd.routes.js`: o id vem da
 // URL e vira `$1` numa coluna `uuid`.
 const { ehUuid } = require("../utils/formatoUuid");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * Catálogo do painel, contra `canastra.produtos`.
@@ -435,6 +436,213 @@ class DashboardRepository {
     } catch (err) {
       console.error("getProductById error:", err);
       return response.status(500).json({ message: "Erro ao buscar produto." });
+    }
+  }
+
+  /**
+   * `PATCH /dashboard/:id/estoque` — mexe na QUANTIDADE, e em nada mais.
+   *
+   * POR QUE UMA ROTA SÓ PARA ISSO. Até a Onda 4 o único caminho para corrigir
+   * o estoque de um café era reenviar o formulário inteiro por multipart —
+   * imagem incluída —, e é exatamente por esse caminho que as medidas do pacote
+   * eram apagadas: o formulário legado envia `weight/width/height/length` sem
+   * ter input para nenhum dos quatro, `undefined` vira a string "undefined" no
+   * FormData, e a loja passa a cotar frete de uma caixa que não existe. O
+   * `editProduct` acima já defende esse caso preservando o valor do banco, mas
+   * a defesa certa para "ajustar o estoque" é não ter de mandar o resto.
+   *
+   * O UPDATE PROJETA COLUNA POR NOME NO `RETURNING`, e não `*`: em
+   * `canastra.produtos` — a única relação do schema com privilégio de SELECT
+   * por COLUNA — `RETURNING *` alcança `custo` e responde 42501 até para a
+   * admin (0006). Aqui o pool conecta como dono e passaria, mas a regra é da
+   * tabela e não da conexão: um dia em que esta rota rodar por outro papel, a
+   * lista explícita é o que a mantém de pé.
+   *
+   * A LEITURA ANTERIOR É TRAVADA (`FOR UPDATE`) e mora na mesma transação da
+   * escrita: o `antes` do log tem de ser o valor que ESTA operação substituiu.
+   * Sem a trava, dois ajustes simultâneos gravariam dois logs dizendo que
+   * partiram do mesmo número, e o histórico do produto passaria a mentir.
+   */
+  async ajustarEstoque(request, response) {
+    const { id } = request.params;
+
+    if (!ehUuid(id)) {
+      return response
+        .status(400)
+        .json({ error: "Identificador de produto inválido." });
+    }
+
+    const quantidade = request.body?.quantity ?? request.body?.quantidade;
+    if (
+      quantidade === undefined ||
+      quantidade === null ||
+      String(quantidade).trim() === "" ||
+      !Number.isInteger(Number(quantidade)) ||
+      Number(quantidade) < 0
+    ) {
+      return response.status(400).json({
+        message: "Estoque deve ser um número inteiro igual ou maior que zero.",
+      });
+    }
+    const novaQuantidade = Number(quantidade);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const atual = await client.query(
+        `SELECT quantidade FROM canastra.produtos
+          WHERE produto_id = $1 FOR UPDATE`,
+        [id],
+      );
+      if (!atual.rows.length) {
+        await client.query("ROLLBACK");
+        return response.status(404).json({ error: "Produto não encontrado." });
+      }
+      const antes = atual.rows[0].quantidade;
+
+      const { rows } = await client.query(
+        `UPDATE canastra.produtos SET quantidade = $1
+          WHERE produto_id = $2
+        RETURNING produto_id AS product_id, quantidade AS quantity`,
+        [novaQuantidade, id],
+      );
+
+      await registrar(client, {
+        adminUserId: request.user?.userId ?? null,
+        acao: ACOES.PRODUTO_ESTOQUE_AJUSTADO,
+        entidade: ENTIDADES.PRODUTO,
+        entidadeId: id,
+        antes: { quantidade: antes },
+        depois: { quantidade: novaQuantidade },
+      });
+
+      await client.query("COMMIT");
+      return response.status(200).json(rows[0]);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("ajustarEstoque error:", err);
+      return response.status(500).json({ message: "Erro ao ajustar o estoque." });
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * `GET /admin/produtos/:id/custo` — a rota que a migração 0006 encomendou.
+   *
+   * `produtos.custo` ficou FORA do `GRANT SELECT (…)` de coluna daquela
+   * migração de propósito: com a instância Supabase compartilhada, dar a coluna
+   * a `authenticated` seria entregar a margem da loja a qualquer token da VPS —
+   * inclusive de outro projeto. O troco, que 0006 escreveu e adiou "para a
+   * tarefa que construir o painel", é que nem a admin lê `custo` pelo PostgREST,
+   * porque privilégio de coluna é por PAPEL e ela autentica como
+   * `authenticated` igual a todo mundo.
+   *
+   * ESTA É A TAREFA. O caminho escolhido é o que a spec §7-C fixou: rota admin
+   * no Express, que conecta como DONO do banco — sem RLS e sem privilégio de
+   * coluna no caminho —, com `isAuthenticated` + `isAdmin` na frente fazendo o
+   * porteiro. A alternativa (uma função SECURITY DEFINER com `eh_admin()`)
+   * daria o mesmo resultado por um caminho que o painel não usa para mais nada.
+   *
+   * O PREÇO VEM JUNTO no corpo porque custo sozinho não responde a pergunta que
+   * se faz olhando para ele ("dá margem?"), e buscá-lo numa segunda ida seria
+   * duas idas para uma linha só.
+   */
+  async getCusto(request, response) {
+    const { id } = request.params;
+    if (!ehUuid(id)) {
+      return response
+        .status(400)
+        .json({ error: "Identificador de produto inválido." });
+    }
+
+    try {
+      const { rows } = await pool.query(
+        `SELECT produto_id AS product_id, sku, nome AS name,
+                preco AS price, custo
+           FROM canastra.produtos WHERE produto_id = $1`,
+        [id],
+      );
+      if (!rows.length) {
+        return response.status(404).json({ error: "Produto não encontrado." });
+      }
+      return response.status(200).json(rows[0]);
+    } catch (err) {
+      console.error("getCusto error:", err);
+      return response.status(500).json({ message: "Erro ao buscar o custo." });
+    }
+  }
+
+  /**
+   * `PATCH /admin/produtos/:id/custo` — e ela existe pelo mesmo motivo da
+   * leitura, do outro lado: sem uma rota de escrita o custo continuaria sendo
+   * um número que só o `psql` sabe mudar. O formulário de produto NÃO o envia
+   * (nem envia hoje, nem passa a enviar aqui): custo não é campo de catálogo, é
+   * de gestão, e misturá-lo ao `PUT /dashboard/:id` faria toda edição de preço
+   * carregar a margem junto — com o risco de zerá-la quando o campo viesse
+   * vazio, que é o defeito que `PUT /config` já demonstrou nesta loja.
+   */
+  async atualizarCusto(request, response) {
+    const { id } = request.params;
+    if (!ehUuid(id)) {
+      return response
+        .status(400)
+        .json({ error: "Identificador de produto inválido." });
+    }
+
+    const bruto = request.body?.custo;
+    const custo = Number(bruto);
+    if (
+      bruto === undefined ||
+      bruto === null ||
+      String(bruto).trim() === "" ||
+      !Number.isFinite(custo) ||
+      custo < 0 ||
+      custo > 1_000_000
+    ) {
+      return response
+        .status(400)
+        .json({ message: "Custo inválido: informe um valor em reais, não negativo." });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const atual = await client.query(
+        "SELECT custo FROM canastra.produtos WHERE produto_id = $1 FOR UPDATE",
+        [id],
+      );
+      if (!atual.rows.length) {
+        await client.query("ROLLBACK");
+        return response.status(404).json({ error: "Produto não encontrado." });
+      }
+
+      const { rows } = await client.query(
+        `UPDATE canastra.produtos SET custo = $1
+          WHERE produto_id = $2
+        RETURNING produto_id AS product_id, custo`,
+        [custo, id],
+      );
+
+      await registrar(client, {
+        adminUserId: request.user?.userId ?? null,
+        acao: ACOES.PRODUTO_CUSTO_ALTERADO,
+        entidade: ENTIDADES.PRODUTO,
+        entidadeId: id,
+        antes: { custo: Number(atual.rows[0].custo) },
+        depois: { custo },
+      });
+
+      await client.query("COMMIT");
+      return response.status(200).json(rows[0]);
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      console.error("atualizarCusto error:", err);
+      return response.status(500).json({ message: "Erro ao atualizar o custo." });
+    } finally {
+      client.release();
     }
   }
 
