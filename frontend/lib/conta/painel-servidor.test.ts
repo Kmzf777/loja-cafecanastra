@@ -384,14 +384,38 @@ describe("estrutura de rotas de /dashboard", () => {
    * de falha. Quem quebrar isto precisa ler o NOME DO ARQUIVO na saída
    * vermelha, senão a trava obriga a caçar o culpado.
    */
+  /**
+   * A VARREDURA IGNORA COMENTÁRIO, e isso foi descoberto pelo furo acontecendo.
+   *
+   * A primeira versão casava a regex contra o arquivo cru. Comentar a chamada
+   * em `acoes.ts` — deixando lá só a linha de comentário que EXPLICA a regra —
+   * mantinha o teste VERDE: a menção em prosa satisfazia o casamento. Ou seja,
+   * a trava pegava a omissão total e não pegava a chamada desativada, que é
+   * justamente o que acontece quando alguém "só quer testar uma coisa rápido".
+   *
+   * E o arquivo mais provável de conter a palavra num comentário é exatamente
+   * o que documenta a regra — isto é, o mais importante de proteger.
+   *
+   * A técnica é a mesma de `components/painel/ui/proibicoes.test.ts`, que já
+   * tinha topado com a versão irmã deste problema: um guarda que confunde
+   * "usa" com "fala sobre" ensina a apagar a explicação para calar o teste.
+   */
+  function semComentarios(fonte: string): string {
+    return fonte
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<!:)\/\/[^\n]*/g, "");
+  }
+
+  const CHAMA_A_CHECAGEM = /exigirAdminEmAcao\s*\(/;
+
   it("todo Route Handler sob /dashboard chama a checagem na própria função", () => {
     const handlers = arquivosRecursivos(RAIZ).filter((a) =>
       /(^|\/)route\.(ts|tsx|js|jsx)$/.test(a),
     );
     for (const h of handlers) {
-      const fonte = readFileSync(join(RAIZ, h), "utf8");
+      const fonte = semComentarios(readFileSync(join(RAIZ, h), "utf8"));
       expect(fonte, `${h} não chama exigirAdminEmAcao`).toMatch(
-        /exigirAdminEmAcao\s*\(/,
+        CHAMA_A_CHECAGEM,
       );
     }
   });
@@ -423,12 +447,18 @@ describe("estrutura de rotas de /dashboard", () => {
         /\.(ts|tsx)$/.test(a),
       );
       for (const arquivo of suspeitos) {
-        const fonte = readFileSync(join(caminho, arquivo), "utf8");
+        // As DUAS perguntas olham o arquivo sem comentário, pela mesma razão em
+        // direções opostas: uma diretiva escrita dentro de um comentário de
+        // bloco não vira ação nenhuma (e exigir a checagem dela seria falso
+        // positivo), e uma chamada comentada não protege nada (e aceitá-la
+        // seria falso negativo). A âncora `^\s*` continua valendo depois da
+        // limpeza: tirar o comentário deixa linha em branco, não junta linhas.
+        const fonte = semComentarios(readFileSync(join(caminho, arquivo), "utf8"));
         if (!/^\s*["']use server["']/m.test(fonte)) continue;
         expect(
           fonte,
           `${rotulo}/${arquivo} declara "use server" e não chama exigirAdminEmAcao`,
-        ).toMatch(/exigirAdminEmAcao\s*\(/);
+        ).toMatch(CHAMA_A_CHECAGEM);
       }
     }
   });
