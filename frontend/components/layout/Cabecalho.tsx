@@ -4,6 +4,7 @@ import { Serra } from "@/components/marca/Serra";
 import { dicionario, type Dicionario } from "@/lib/i18n/dicionario";
 import { href } from "@/lib/i18n/rotas";
 import type { Locale } from "@/lib/i18n/tipos";
+import { buscarBarraDeAviso } from "@/lib/vitrine/heroi";
 import {
   AtalhosDoCliente,
   type RotulosDeAtalho,
@@ -174,9 +175,36 @@ function Logo({ locale, d }: { locale: Locale; d: Dicionario }) {
   );
 }
 
-export function Cabecalho({ locale }: { locale: Locale }) {
+/**
+ * A BARRA DE AVISO PASSOU A LER O BANCO — e é por isso que este componente
+ * virou `async`.
+ *
+ * `canastra.config_loja.barra_de_aviso` existe desde a 0005, o Express a expoe
+ * como `announcement_bar` e o painel legado a edita ha anos. Esta barra sempre
+ * leu o DICIONARIO: o gestor salvava o aviso e nada acontecia em lugar nenhum.
+ * Era um campo write-only, e o spec §1 o registra ao lado dos dois banners.
+ *
+ * Agora ela le `canastra.vitrine_texto` com a chave `barra_aviso`, e o
+ * dicionario virou o PISO — banco vazio, coluna nula, campo em branco ou API
+ * fora do ar e a barra continua dizendo exatamente o que dizia antes.
+ *
+ * `async` NAO TIRA PAGINA NENHUMA DO BUILD: `buscarBarraDeAviso` e `fetch` com
+ * `next: { revalidate }`, a unica leitura que sobrevive a geracao estatica.
+ * Nenhum `cookies()`, `headers()` ou `searchParams` entra aqui — seria derrubar
+ * as tres homes E as quinze PDPs de uma vez, porque este cabecalho esta em
+ * TODAS elas.
+ */
+export async function Cabecalho({ locale }: { locale: Locale }) {
   const d = dicionario(locale);
   const nav = navegacao(d);
+
+  const barra = await buscarBarraDeAviso(locale, {
+    texto: d.barra.torradoSobDemanda,
+    // Sem piso: a barra nunca teve link. Vazio significa "nao desenhe o link",
+    // e e o estado normal — quem preenche os dois campos e o painel.
+    rotuloBotao: "",
+    destino: "",
+  });
 
   /**
    * O recorte do dicionário que atravessa a fronteira de cliente. Montado uma
@@ -197,7 +225,25 @@ export function Cabecalho({ locale }: { locale: Locale }) {
       {/* Barra de aviso — §5.8 */}
       <div className="bg-fuligem text-cal">
         <p className="mx-auto flex min-h-9 max-w-[1440px] flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 py-2 text-center font-dado text-[10px] leading-tight tracking-[0.04em] sm:text-[11px] md:px-10">
-          <span>{d.barra.torradoSobDemanda}</span>
+          <span>{barra.texto}</span>
+          {/* O LINK SO EXISTE COM OS DOIS CAMPOS. `validar()` no painel ja
+              recusa rotulo sem destino; aqui a guarda e a segunda, para o que
+              tiver entrado por SQL. Ele e inline dentro da frase, e nao um
+              botao de 44px: a barra tem 36px de altura por desenho (§5.8), e
+              engorda-la para caber um alvo de toque empurraria o cabecalho
+              inteiro para baixo em toda pagina da loja. */}
+          {barra.rotuloBotao && barra.destino && (
+            <Link
+              href={
+                barra.destino.startsWith("/")
+                  ? href(locale, barra.destino)
+                  : barra.destino
+              }
+              className="underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cal"
+            >
+              {barra.rotuloBotao}
+            </Link>
+          )}
           {/* O piso do frete grátis vem de GET /config e pode mudar sem
               deploy — só este trecho é ilha client; o separador vai junto
               porque a promessa inteira some quando o admin a desliga. */}

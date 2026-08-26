@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import { produtosDaHome } from "@/lib/catalogo/repositorio";
+import { buscarHeroi } from "@/lib/vitrine/heroi";
 import { lotesDoLocale } from "@/lib/catalogo/produtos";
 import { Carrossel, SlideDoCarrossel } from "@/components/ui/Carrossel";
 import { CardProduto } from "@/components/catalogo/CardProduto";
@@ -155,8 +156,32 @@ function numeroDaEtapa(indice: number): string {
   return String(indice + 1).padStart(2, "0");
 }
 
+/**
+ * O destino do botão do herói, já no idioma da página.
+ *
+ * O gestor digita o caminho CANÔNICO (`/cafes`, sempre em português, sempre sem
+ * prefixo) — é o mesmo contrato que todo `href()` deste projeto usa, e sem ele
+ * um botão editado no painel devolveria o visitante de `/en` ao português no
+ * primeiro clique. Endereço absoluto (uma campanha noutro domínio) vai como
+ * está: `href()` só sabe prefixar caminho interno.
+ */
+function destinoDoBotao(locale: Locale, destino: string): string {
+  return destino.startsWith("/") ? href(locale, destino) : destino;
+}
+
 /* -------------------------------------------------------------------------
    Os textos da home, nos três idiomas.
+
+   A TABELA DEIXOU DE SER A FONTE DO HERÓI E VIROU O PISO DELE. Desde a Onda 2
+   do painel, kicker, título, texto, rótulo do botão, destino e alt da foto vêm
+   de `canastra.vitrine_texto` — e `buscarHeroi(locale, piso)` recebe os valores
+   abaixo como fallback. Linha ausente, coluna nula, campo em branco ou API fora
+   do ar ⇒ a home aparece EXATAMENTE como aparecia antes de existir tabela
+   nenhuma. Ela não sai daqui: um gestor que salva o formulário pela metade não
+   pode apagar o topo da loja, e é este arquivo que garante isso.
+
+   O resto da tabela (prova, etapas, clube) NÃO é editável e continua sendo
+   fonte, não piso.
 
    Mesma trava do lib/i18n/dicionario.ts: `pt` é a fonte do tipo, `en` e `es`
    são DECLARADOS como `TextosDaHome`, e chave faltante quebra o build. Só os
@@ -374,21 +399,80 @@ export default async function Home({
    * com `next: { revalidate }`, que é justamente a leitura que sobrevive ao
    * prerender — a mesma que a listagem de lotes já fazia nesta página antes.
    */
-  const seccoes = await produtosDaHome();
+  /**
+   * AS DUAS LEITURAS DE FORA VÃO JUNTAS. Elas são independentes, e em série a
+   * segunda esperaria a primeira à toa — o preço apareceria no tempo de build
+   * das três homes e em cada revalidação.
+   *
+   * `buscarHeroi` é `fetch` com `next: { revalidate }`, igual a `produtosDaHome`:
+   * nenhuma das duas usa `cookies()`, `headers()` ou `searchParams`, que é o
+   * que mantém esta página elegível à geração estática. Ver o comentário de
+   * `generateStaticParams` lá em cima e `lib/vitrine/heroi.ts`.
+   */
+  const [seccoes, heroi] = await Promise.all([
+    produtosDaHome(),
+    buscarHeroi(locale, {
+      kicker: t.heroiRotulo,
+      titulo: t.heroiTitulo,
+      texto: t.heroiTexto,
+      rotuloBotao: d.comum.verOsCafes,
+      destino: "/cafes",
+      imagemAlt: t.heroiImagemAlt,
+    }),
+  ]);
 
   return (
     <>
       {/* ── HERÓI ─────────────────────────────────────────── superfície fuligem */}
       <section className="relative flex min-h-[88vh] flex-col justify-end overflow-hidden bg-fuligem text-cal">
-        <Image
-          src="/imagem-banner.jpg"
-          alt={t.heroiImagemAlt}
-          fill
-          priority
-          fetchPriority="high"
-          sizes="100vw"
-          className="object-cover object-center"
-        />
+        {/*
+          UMA IMAGEM QUANDO SÓ HÁ UMA, DUAS QUANDO O GESTOR ENVIOU DUAS.
+
+          `buscarHeroi` já resolve `imagemMobile` para a mesma foto do desktop
+          quando ninguém enviou uma versão de telefone — que é o caso normal, e
+          o caso de hoje. Aí sai UM <Image>, exatamente como antes desta onda:
+          um preload, um arquivo.
+
+          Com duas fotos de verdade não há saída barata: `next/image` não faz
+          art direction, então são dois elementos e dois preloads, e o navegador
+          baixa o que vai descartar. É o preço de ter duas fotos, e ele só é
+          pago por quem escolheu tê-las.
+
+          O ALT viaja com a foto VISÍVEL em cada faixa; a outra vai decorativa,
+          senão o leitor de tela anuncia a mesma imagem duas vezes.
+        */}
+        {heroi.imagemMobile === heroi.imagemDesktop ? (
+          <Image
+            src={heroi.imagemDesktop}
+            alt={heroi.imagemAlt}
+            fill
+            priority
+            fetchPriority="high"
+            sizes="100vw"
+            className="object-cover object-center"
+          />
+        ) : (
+          <>
+            <Image
+              src={heroi.imagemMobile}
+              alt={heroi.imagemAlt}
+              fill
+              priority
+              fetchPriority="high"
+              sizes="100vw"
+              className="object-cover object-center md:hidden"
+            />
+            <Image
+              src={heroi.imagemDesktop}
+              alt=""
+              fill
+              priority
+              fetchPriority="high"
+              sizes="100vw"
+              className="hidden object-cover object-center md:block"
+            />
+          </>
+        )}
         {/* §7.1: sobreposição em gradiente de fuligem, 0 -> 60%, de baixo para
             cima. Sem ela o texto em Cal não passa contraste sobre a foto. */}
         <div
@@ -409,17 +493,24 @@ export default async function Home({
         />
         <div className="relative mx-auto w-full max-w-[1440px] px-4 pb-20 pt-32 md:px-10 md:pb-28">
           <p className="text-[12px] font-semibold uppercase tracking-[0.18em] text-juta">
-            {t.heroiRotulo}
+            {heroi.kicker}
           </p>
           <h1 className="mt-6 max-w-[14ch] font-titulo text-[clamp(2.75rem,7vw,5.5rem)] leading-[0.95] tracking-[-0.02em]">
-            {t.heroiTitulo}
+            {heroi.titulo}
           </h1>
           <p className="mt-6 max-w-[52ch] text-[18px] leading-relaxed text-cal/80">
-            {t.heroiTexto}
+            {heroi.texto}
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
-            <BotaoLink href={href(locale, "/cafes")} variante="primario">
-              {d.comum.verOsCafes}
+            {/* O PRIMEIRO BOTÃO É EDITÁVEL, O SEGUNDO NÃO. "Conhecer a Serra" é
+                navegação de marca e vive no menu e no rodapé; dar dois botões
+                editáveis ao painel seria dar ao gestor a chance de apagar os
+                dois caminhos de saída do herói de uma vez. */}
+            <BotaoLink
+              href={destinoDoBotao(locale, heroi.destino)}
+              variante="primario"
+            >
+              {heroi.rotuloBotao}
             </BotaoLink>
             <BotaoLink
               href={href(locale, "/a-serra")}
