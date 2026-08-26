@@ -398,16 +398,16 @@ export default async function Home({
    * Isto NÃO tira a home da geração estática: `buscarDadosAoVivo` é `fetch`
    * com `next: { revalidate }`, que é justamente a leitura que sobrevive ao
    * prerender — a mesma que a listagem de lotes já fazia nesta página antes.
-   */
-  /**
-   * AS DUAS LEITURAS DE FORA VÃO JUNTAS. Elas são independentes, e em série a
-   * segunda esperaria a primeira à toa — o preço apareceria no tempo de build
+   *
+   * DESDE A ONDA 2 DO PAINEL SÃO DUAS LEITURAS, E ELAS VÃO JUNTAS. `buscarHeroi`
+   * traz o conteúdo editável do topo, e é independente da primeira: em série, a
+   * segunda esperaria a primeira à toa, e o preço apareceria no tempo de build
    * das três homes e em cada revalidação.
    *
-   * `buscarHeroi` é `fetch` com `next: { revalidate }`, igual a `produtosDaHome`:
-   * nenhuma das duas usa `cookies()`, `headers()` ou `searchParams`, que é o
-   * que mantém esta página elegível à geração estática. Ver o comentário de
-   * `generateStaticParams` lá em cima e `lib/vitrine/heroi.ts`.
+   * Vale para ela a mesma frase do parágrafo acima, e é o que mantém esta
+   * página elegível à geração estática: `fetch` com `next: { revalidate }`,
+   * nenhum `cookies()`, `headers()` ou `searchParams`. Ver `generateStaticParams`
+   * lá em cima e `lib/vitrine/heroi.ts`.
    */
   const [seccoes, heroi] = await Promise.all([
     produtosDaHome(),
