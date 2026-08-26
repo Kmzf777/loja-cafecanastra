@@ -17,6 +17,21 @@ import {
 import PropTypes from "prop-types";
 import { useEffect } from "react";
 
+/**
+ * OS `to` DESTE MENU SAO RELATIVOS AO BASENAME, e nao ao dominio.
+ *
+ * `to={"/orders"}` gera o href `/dashboard/legado/orders`, porque o
+ * `createBrowserRouter` de `legacy/PainelApp.jsx` roda com
+ * `basename: "/dashboard/legado"` e o react-router poe o prefixo de volta em
+ * todo href que gera. Eles eram absolutos (`/dashboard/orders`) enquanto o SPA
+ * era servido pelo catch-all na RAIZ de `/dashboard`; o catch-all desceu para
+ * `legado/` para nao engolir as rotas do painel novo, e o motivo inteiro esta
+ * no comentario grande de `PainelApp.jsx`.
+ *
+ * NAO reescreva nenhum destes para `/dashboard/...` "para ficar igual a URL".
+ * Com basename, um path absoluto vira `/dashboard/legado/dashboard/...` — e o
+ * teste `legacy/PainelApp.rotas.test.ts` fica vermelho na hora, de proposito.
+ */
 function MenuAside({ isOpen }) {
   useEffect(() => {
     if (isOpen) {
@@ -34,7 +49,7 @@ function MenuAside({ isOpen }) {
     <Aside isOpen={isOpen}>
       <ContainerSection>
         <DivMenu>
-          <Link className="link" to={"/dashboard"}>
+          <Link className="link" to={"/"}>
             <HomeIcon size={18} />
             <li>Home</li>
           </Link>
@@ -44,12 +59,12 @@ function MenuAside({ isOpen }) {
 
         <DivMenu>
           <span>Gestão de produtos</span>
-          <Link className="link" to={"/dashboard/products/addProduct"}>
+          <Link className="link" to={"/products/addProduct"}>
             <SquarePlus size={18} />
             <li>Cadastrar produto</li>
           </Link>
 
-          <Link className="link" to={"/dashboard/products/addedProducts"}>
+          <Link className="link" to={"/products/addedProducts"}>
             <FileStack size={18} />
             <li>Produtos cadastrados</li>
           </Link>
@@ -59,12 +74,12 @@ function MenuAside({ isOpen }) {
 
         <DivMenu>
           <span>Gestão de pedidos</span>
-          <Link className="link" to={"/dashboard/orders"}>
+          <Link className="link" to={"/orders"}>
             <ShoppingCart size={18} />
             <li>Pedidos realizados</li>
           </Link>
 
-          <Link className="link" to={"/dashboard/assinaturas"}>
+          <Link className="link" to={"/assinaturas"}>
             <Repeat size={18} />
             <li>Assinaturas do Clube</li>
           </Link>
@@ -74,7 +89,7 @@ function MenuAside({ isOpen }) {
               saiu"), não de uma vontade de administrar uma integração. Ícone
               de documento porque o que se resolve nesta tela, no dia a dia, é
               nota fiscal. */}
-          <Link className="link" to={"/dashboard/bling"}>
+          <Link className="link" to={"/bling"}>
             <FileText size={18} />
             <li>Bling: NF-e e rastreio</li>
           </Link>
@@ -84,7 +99,7 @@ function MenuAside({ isOpen }) {
 
         <DivMenu>
           <span>Gestão de clientes</span>
-          <Link className="link" to={"/dashboard/clients/registeredClients"}>
+          <Link className="link" to={"/clients/registeredClients"}>
             <CircleUser size={18} />
             <li>Clientes cadastrados</li>
           </Link>
@@ -94,7 +109,7 @@ function MenuAside({ isOpen }) {
 
         <DivMenu>
           <span>Avaliações</span>
-          <Link className="link" to={"/dashboard/avaliacoes"}>
+          <Link className="link" to={"/avaliacoes"}>
             <Star size={18} />
             <li>Moderar avaliações</li>
           </Link>
@@ -104,22 +119,22 @@ function MenuAside({ isOpen }) {
 
         <DivMenu>
           <span>Configurações gerais</span>
-          <Link className="link" to={"/dashboard/settings/updateShopInfo"}>
+          <Link className="link" to={"/settings/updateShopInfo"}>
             <Settings size={18} />
             <li>Atualizar informações da loja</li>
           </Link>
 
-          <Link className="link" to={"/dashboard/settings/manageCategories"}>
+          <Link className="link" to={"/settings/manageCategories"}>
             <Settings2 size={18} />
             <li>Gerenciar categorias dos produtos</li>
           </Link>
 
-          <Link className="link" to={"/dashboard/settings/offers"}>
+          <Link className="link" to={"/settings/offers"}>
             <BadgeDollarSign size={18} />
             <li>Promoções</li>
           </Link>
 
-          <Link className="link" to={"/dashboard/settings/cupons"}>
+          <Link className="link" to={"/settings/cupons"}>
             <TicketPercent size={18} />
             <li>Cupons de desconto</li>
           </Link>

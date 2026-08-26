@@ -7,8 +7,8 @@
  * essa lógica é a única parte desta tela que dá para testar sem navegador.
  * `contrato.test.ts` exercita tudo o que está aqui.
  *
- * As duas superfícies que consomem isto — a tela `/dashboard/bling` e o modal
- * de detalhe de `Orders.jsx` — mostram exatamente a mesma verdade porque
+ * As duas superfícies que consomem isto — a tela `/dashboard/legado/bling` e o
+ * modal de detalhe de `Orders.jsx` — mostram exatamente a mesma verdade porque
  * derivam dela do mesmo lugar.
  */
 

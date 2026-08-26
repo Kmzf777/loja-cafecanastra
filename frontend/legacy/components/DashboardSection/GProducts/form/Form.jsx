@@ -214,7 +214,7 @@ function Form() {
 
       await updateProductList();
       setProductId("");
-      navigate("/dashboard/products/addedProducts");
+      navigate("/products/addedProducts");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       console.error(err);

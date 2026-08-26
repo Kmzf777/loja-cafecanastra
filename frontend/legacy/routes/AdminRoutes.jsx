@@ -7,9 +7,12 @@ import Loading from "../components/Loading/Loading";
  * Guard do painel — o SEGUNDO anel.
  *
  * O PRIMEIRO ANEL AGORA E DE SERVIDOR: `lib/conta/painel-servidor.ts`, chamado
- * por `app/dashboard/[[...rota]]/page.tsx` antes de qualquer byte desta ilha ser
- * emitido. Quem chega aqui ja passou por la. Entao por que este arquivo
- * continua existindo?
+ * pelo layout de `app/dashboard/(protegido)/` antes de qualquer byte desta ilha
+ * ser emitido. (Ele era chamado pela pagina do catch-all, que morava na raiz do
+ * grupo; na Onda 1 do painel novo o catch-all desceu para
+ * `(protegido)/legado/[[...rota]]/page.tsx` e a checagem ja tinha subido para o
+ * layout, que cobre as rotas que ainda nem existem.) Quem chega aqui ja passou
+ * por la. Entao por que este arquivo continua existindo?
  *
  * PORQUE A SESSAO PODE MORRER COM O PAINEL JA ABERTO. O guard de servidor roda
  * uma vez, na requisicao que serviu a pagina; depois disso o painel e um SPA e
@@ -24,7 +27,8 @@ import Loading from "../components/Loading/Loading";
  *
  * POR QUE NAO USA <Navigate>
  * Este componente roda dentro de uma ilha client-only: o `createBrowserRouter`
- * de `legacy/PainelApp.jsx` so conhece as rotas sob `/dashboard`. Um
+ * de `legacy/PainelApp.jsx` so conhece as rotas sob `/dashboard/legado` (era
+ * `/dashboard` ate o catch-all descer para `legado/`). Um
  * `<Navigate to="/dashboard/entrar">` pede ao react-router para casar uma rota
  * que NAO existe no roteador dele (a entrada e uma rota do App Router, nao da
  * ilha), e o resultado era a tela de erro padrao ("Unexpected Application Error
@@ -49,8 +53,11 @@ const AdminRoutes = () => {
     if (semSessao) {
       // `?de=` devolve a pessoa para a rota do painel que ela tentou abrir,
       // em vez de despeja-la na home depois de entrar. O destino e sempre um
-      // caminho sob /dashboard (este componente so roda dentro da ilha), que e
-      // exatamente o que `destinoDoPainel` do outro lado aceita.
+      // caminho sob /dashboard/legado (este componente so roda dentro da ilha),
+      // e `destinoDoPainel` do outro lado aceita qualquer caminho sob
+      // /dashboard — entao a mudanca de casa do SPA nao o afeta.
+      // `location.pathname` e o caminho do NAVEGADOR: ele ja vem com o
+      // basename, e nao passa pelo react-router.
       const destino = window.location.pathname + window.location.search;
       window.location.replace(
         `/dashboard/entrar?de=${encodeURIComponent(destino)}`,

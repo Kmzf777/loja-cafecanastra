@@ -65,7 +65,7 @@ function AddedProducts() {
     const product = dataForm[index];
     if (!product) return;
     setProductId(product.product_id);
-    navigate("/dashboard/products/addProduct");
+    navigate("/products/addProduct");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 

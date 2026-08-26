@@ -15,9 +15,15 @@ import { MenuLateral } from "@/components/painel/casca/MenuLateral";
  * AGORA O PADRÃO É "PROTEGIDO". Todo arquivo dentro de `(protegido)/` herda este
  * layout e, com ele, a checagem. Sair da cerca exige criar a rota dentro de
  * `(publico)/`, que é uma palavra que aparece no diff e que ninguém escreve por
- * distração. Route group não muda URL nenhuma: `(protegido)/[[...rota]]`
- * continua servindo `/dashboard`, e `(publico)/entrar` continua servindo
- * `/dashboard/entrar`.
+ * distração. Route group não muda URL nenhuma: `(protegido)/page.tsx` serve
+ * `/dashboard`, `(protegido)/legado/[[...rota]]` serve `/dashboard/legado/…`, e
+ * `(publico)/entrar` continua servindo `/dashboard/entrar`.
+ *
+ * (Este parágrafo dizia que `(protegido)/[[...rota]]` servia `/dashboard`, e era
+ * verdade até a Onda 1 do painel novo. O catch-all do painel legado DESCEU para
+ * `legado/`: enquanto ele estiver na raiz do grupo, é ele o dono de tudo que
+ * ainda não tem pasta própria, e cada tela nova das ondas seguintes teria de
+ * disputar rota com ele.)
  *
  * `layout.tsx` E NÃO `template.tsx`: layout é o que envolve TODAS as rotas do
  * grupo, incluindo as que ainda não existem. É o default que se queria.

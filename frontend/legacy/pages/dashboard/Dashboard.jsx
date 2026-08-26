@@ -30,7 +30,7 @@ function Dashboard() {
       <HeaderComponent>
         {/* Marca do painel. Servido de /public pelo mesmo Next que serve a
             ilha, entao caminho absoluto basta — sem import estatico. */}
-        <div className="logoContent" onClick={() => navigate("/dashboard")}>
+        <div className="logoContent" onClick={() => navigate("/")}>
           <img src="/logo-canastra.png" alt="Café Canastra" />
         </div>
 

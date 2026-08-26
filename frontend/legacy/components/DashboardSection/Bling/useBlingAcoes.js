@@ -10,7 +10,7 @@ import {
 
 /**
  * As três ações do Bling, uma vez só, para as DUAS telas que as oferecem: a
- * fila de `/dashboard/bling` e o modal de detalhe de `Orders.jsx`.
+ * fila de `/dashboard/legado/bling` e o modal de detalhe de `Orders.jsx`.
  *
  * O gestor descobre que a nota não saiu enquanto olha o pedido — é ali que o
  * botão precisa estar. E a tela de Bling é onde ele trabalha a fila inteira.

@@ -209,8 +209,8 @@ function Orders() {
    * BLING NO MODAL DE DETALHE — porque é AQUI que o gestor está quando
    * percebe o problema.
    *
-   * A tela dedicada (`/dashboard/bling`) é para trabalhar a fila; esta é para
-   * o momento em que ele abriu um pedido para conferir e viu que a nota não
+   * A tela dedicada (`/dashboard/legado/bling`) é para trabalhar a fila; esta
+   * é para o momento em que ele abriu um pedido para conferir e viu que a nota não
    * saiu. Mandá-lo trocar de tela e reencontrar o pedido pelos últimos seis
    * dígitos seria transformar um clique em uma busca.
    *
@@ -881,7 +881,7 @@ function Orders() {
 
           {/* BLING / NF-e — a situação no ERP e as três ações, no lugar onde
               o gestor descobre que algo ficou para trás. A tela cheia da fila
-              é /dashboard/bling. */}
+              é /dashboard/legado/bling. */}
           <div
             style={{
               borderTop: "1px solid #eee",
