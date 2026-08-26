@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 /**
- * O que estes testes protegem é curto de propósito — o painel legado é apagado
- * inteiro na fase F6. São três decisões cuja falha é SILENCIOSA em produção:
+ * O que estes testes protegem é curto de propósito. São três decisões cuja
+ * falha é SILENCIOSA em produção:
  *
  *   - token não anexado ..... toda tela do painel volta 401 e parece "sessão
  *                             expirada"; ninguém suspeita do `fetch`;
@@ -13,6 +13,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  *                             área de gestão para quem não é administrador.
  *
  * Nenhuma das três aparece em `next build` nem em `tsc --noEmit`.
+ *
+ * ESTE ARQUIVO VEIO DE `legacy/api.test.ts` POR `git mv`, e veio ANTES de o
+ * painel legado ser apagado na Onda 6 — não depois. Ele era o único lugar do
+ * repositório que cobria o laço de 403; apagar `legacy/` levaria os onze casos
+ * junto, e o painel novo reimplementaria a regra sem rede nenhuma embaixo.
  */
 
 type SessaoFalsa = {
@@ -64,14 +69,14 @@ const falso = {
 };
 
 /**
- * O caminho é o mesmo módulo que `legacy/api.js` e `lib/conta/sessao.ts`
- * importam (de diretórios diferentes, mas resolvendo para o mesmo arquivo), de
- * modo que os dois recebem este cliente.
+ * O caminho é o mesmo módulo que `lib/painel/transporte.ts` e
+ * `lib/conta/sessao.ts` importam (de diretórios diferentes, mas resolvendo
+ * para o mesmo arquivo), de modo que os dois recebem este cliente.
  */
-vi.mock("../lib/supabase/cliente", () => ({ clienteNavegador: () => falso }));
+vi.mock("@/lib/supabase/cliente", () => ({ clienteNavegador: () => falso }));
 
-import fetchDataForm, { API_BASE, authFetch } from "./api";
-import { _esquecerPerfil, recuperarSessao } from "../lib/conta/sessao";
+import { authFetch, chamarApi, BASE_DA_API } from "./transporte";
+import { _esquecerPerfil, recuperarSessao } from "@/lib/conta/sessao";
 
 const sessaoDe = (token: string): SessaoFalsa => ({
   access_token: token,
@@ -138,7 +143,7 @@ describe("authFetch — o token", () => {
   it("anexa o access token do GoTrue e NÃO manda X-CSRF-Token", async () => {
     cenario.sessao = sessaoDe("tok-1");
 
-    await authFetch(`${API_BASE}/dashboard`);
+    await authFetch(`${BASE_DA_API}/dashboard`);
 
     expect(chamadas).toHaveLength(1);
     expect(cabecalhos(0).Authorization).toBe("Bearer tok-1");
@@ -150,7 +155,7 @@ describe("authFetch — o token", () => {
   it("não busca /csrf-token em lugar nenhum", async () => {
     cenario.sessao = sessaoDe("tok-1");
 
-    await fetchDataForm("/options?type=category", "GET");
+    await chamarApi("/options?type=category", "GET");
 
     // A rota devolve 404 desde a Task 5, e o `getCsrfToken` antigo LANÇAVA
     // nesse caso — antes de emitir qualquer requisição. Era isso que deixava as
@@ -162,18 +167,18 @@ describe("authFetch — o token", () => {
   it("emite a requisição mesmo sem sessão, sem Authorization", async () => {
     cenario.sessao = null;
 
-    await authFetch(`${API_BASE}/dashboard`);
+    await authFetch(`${BASE_DA_API}/dashboard`);
 
     expect(chamadas).toHaveLength(1);
     expect(cabecalhos(0)).not.toHaveProperty("Authorization");
   });
 
-  it("fetchDataForm monta o corpo JSON e passa pelo mesmo caminho", async () => {
+  it("chamarApi monta o corpo JSON e passa pelo mesmo caminho", async () => {
     cenario.sessao = sessaoDe("tok-1");
 
-    await fetchDataForm("/promotions", "POST", { ativo: true });
+    await chamarApi("/promotions", "POST", { ativo: true });
 
-    expect(chamadas[0].url).toBe(`${API_BASE}/promotions`);
+    expect(chamadas[0].url).toBe(`${BASE_DA_API}/promotions`);
     expect(cabecalhos(0)["Content-Type"]).toBe("application/json");
     expect(cabecalhos(0).Authorization).toBe("Bearer tok-1");
     expect(chamadas[0].init.body).toBe(JSON.stringify({ ativo: true }));
@@ -187,7 +192,7 @@ describe("authFetch — quando renovar, e quando NÃO renovar", () => {
     // `canastra.clientes`. Renovar devolveria o mesmo 403, para sempre.
     respostas = [{ status: 403 }];
 
-    const res = await authFetch(`${API_BASE}/dashboard`);
+    const res = await authFetch(`${BASE_DA_API}/dashboard`);
 
     expect(res.status).toBe(403);
     expect(cenario.renovacoes).toBe(0);
@@ -199,7 +204,7 @@ describe("authFetch — quando renovar, e quando NÃO renovar", () => {
     cenario.sessaoRenovada = sessaoDe("tok-novo");
     respostas = [{ status: 401 }, { status: 200 }];
 
-    const res = await authFetch(`${API_BASE}/dashboard`);
+    const res = await authFetch(`${BASE_DA_API}/dashboard`);
 
     expect(cenario.renovacoes).toBe(1);
     expect(chamadas).toHaveLength(2);
@@ -212,7 +217,7 @@ describe("authFetch — quando renovar, e quando NÃO renovar", () => {
     cenario.sessaoRenovada = sessaoDe("tok-1");
     respostas = [{ status: 401 }];
 
-    const res = await authFetch(`${API_BASE}/dashboard`);
+    const res = await authFetch(`${BASE_DA_API}/dashboard`);
 
     // Reenviar o mesmo token contra a mesma rota é um segundo 401 garantido.
     expect(chamadas).toHaveLength(1);
@@ -224,7 +229,7 @@ describe("authFetch — quando renovar, e quando NÃO renovar", () => {
     cenario.sessaoRenovada = null;
     respostas = [{ status: 401 }];
 
-    const res = await authFetch(`${API_BASE}/dashboard`);
+    const res = await authFetch(`${BASE_DA_API}/dashboard`);
 
     expect(chamadas).toHaveLength(1);
     expect(res.status).toBe(401);
