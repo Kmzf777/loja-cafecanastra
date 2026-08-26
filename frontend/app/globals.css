@@ -205,6 +205,81 @@
   .vitrine textarea {
     resize: vertical;
   }
+
+  /* -------------------------------------------------------------------------
+     O PAINEL — o segundo escopo, pelo mesmo mecanismo do primeiro.
+
+     O reset do Tailwind continua NÃO sendo global, e a razão não mudou: o
+     painel LEGADO (frontend/legacy, styled-components) depende dos defaults do
+     navegador e reseta só `* { margin/padding/box-sizing/font-family }` no seu
+     próprio createGlobalStyle. Um preflight global zeraria font-size de título,
+     aparência de button e sublinhado de <a> lá dentro.
+
+     Então o painel NOVO ganha o mesmo tratamento que a vitrine: um contêiner
+     `.painel`, aplicado por app/dashboard/(protegido)/layout.tsx, e o reset
+     escopado nele. Dois escopos, um mecanismo, e o legado segue de pé até a
+     Onda 6 do roteiro — quando `.painel` deixa de precisar do escopo e este
+     arquivo simplifica sozinho.
+
+     A DIFERENÇA PARA `.vitrine`, e ela é deliberada: aqui o padrão é DENSO.
+     `font-size: 14px` na raiz do painel, contra os 16px da loja. Painel
+     administrativo é lido de perto, com muita linha na tela, por quem passa o
+     dia nele — R22 da pesquisa: "densidade alta e cor escassa; mas comprima o
+     PADDING da célula, nunca o alvo de toque".
+  ------------------------------------------------------------------------- */
+  body:has(.painel) {
+    margin: 0;
+    font-family: var(--font-ui);
+    line-height: 1.45;
+    color: var(--color-fuligem);
+    background-color: var(--color-cal);
+  }
+
+  .painel {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--color-fuligem);
+    background-color: var(--color-cal);
+    min-height: 100vh;
+  }
+
+  .painel *,
+  .painel *::before,
+  .painel *::after {
+    box-sizing: border-box;
+    border: 0 solid var(--color-fuligem-20);
+    margin: 0;
+    padding: 0;
+  }
+
+  .painel img,
+  .painel svg,
+  .painel video {
+    display: block;
+    max-width: 100%;
+  }
+
+  /* Todo NÚMERO em monoespaçada com numeral tabular — R23. É o que faz comparar
+     valores numa coluna ser comparar POSIÇÃO, e não comprimento de string. */
+  .painel [data-dado],
+  .painel td[data-dado],
+  .painel .dado {
+    font-family: var(--font-dado);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* `button` e `input` não herdam fonte do pai por default do navegador. Sem
+     isto, todo campo do painel sai em Arial enquanto o resto sai em Archivo —
+     e a diferença é sutil o bastante para passar despercebida por semanas. */
+  .painel button,
+  .painel input,
+  .painel select,
+  .painel textarea {
+    font: inherit;
+    color: inherit;
+    background: none;
+  }
 }
 
 @layer components {
