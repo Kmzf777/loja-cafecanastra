@@ -471,3 +471,40 @@ test("produto: medida enviada DE VERDADE continua sendo gravada", async () => {
   assert.equal(Number(rows[0].peso), 0.62);
   assert.equal(Number(rows[0].largura), 22);
 });
+
+/* --------------------------------------------------------------------------
+ * DELETE /dashboard/:id — 204 é "eu apaguei", e só o rowCount sabe disso
+ * -------------------------------------------------------------------------- */
+
+test("produto: DELETE num id inexistente responde 404, não 204", async () => {
+  const repo = new DashboardRepository();
+
+  const res = respostaFalsa();
+  await repo.deleteProduct(
+    { params: { id: "00000000-0000-4000-8000-0000000000ff" } },
+    res,
+  );
+
+  // Uma tela que confie no status para anunciar "Produto deletado!" mentia.
+  assert.equal(res.codigo, 404);
+});
+
+test("produto: DELETE num id existente continua 204 e some do banco", async () => {
+  const repo = new DashboardRepository();
+  const criado = await produtoCriado(repo, {
+    name: "Canastra Descontinuado",
+    price: 39.9,
+    quantity: 1,
+    sku: "PARA-EXCLUIR",
+  });
+
+  const res = respostaFalsa();
+  await repo.deleteProduct({ params: { id: criado.produto_id } }, res);
+  assert.equal(res.codigo, 204);
+
+  const { rows } = await bd.pool.query(
+    "SELECT 1 FROM canastra.produtos WHERE produto_id = $1",
+    [criado.produto_id],
+  );
+  assert.equal(rows.length, 0);
+});

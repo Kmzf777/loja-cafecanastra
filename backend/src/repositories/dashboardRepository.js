@@ -262,13 +262,25 @@ class DashboardRepository {
     }
   }
 
+  /**
+   * 204 é "eu apaguei", e só o `rowCount` sabe disso.
+   *
+   * A versão anterior respondia 204 mesmo quando o DELETE não achava nada:
+   * qualquer tela que confie no status para dizer "Produto deletado!" mentia —
+   * e este painel já mentiu por motivo parecido, quando um 403 caía no caminho
+   * de sucesso e a lista anunciava exclusão com o produto intacto.
+   */
   async deleteProduct(request, response) {
     const { id } = request.params;
 
     try {
-      await pool.query("DELETE FROM canastra.produtos WHERE produto_id = $1", [
-        id,
-      ]);
+      const resultado = await pool.query(
+        "DELETE FROM canastra.produtos WHERE produto_id = $1",
+        [id],
+      );
+      if (resultado.rowCount === 0) {
+        return response.status(404).json({ error: "Produto não encontrado." });
+      }
       response.status(204).send();
     } catch (err) {
       console.error("deleteProduct error:", err);
