@@ -31,6 +31,28 @@ export const FOCO_INTERNO =
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-fuligem";
 
 /**
+ * O anel invertido — para o MENU LATERAL, a única superfície escura do painel.
+ *
+ * `FOCO` é fuligem, e fuligem sobre `bg-fuligem` é um anel invisível: quem
+ * navega o menu de Tab perderia o cursor por completo, que é o modo mais
+ * silencioso de quebrar a WCAG 2.4.7. A cal sobre o fuligem dá 16,5:1.
+ *
+ * ELE VIVE AQUI E NÃO DENTRO DO `MenuLateral.tsx` pela razão que abre este
+ * arquivo — anel de foco divergente é o defeito que ninguém compara entre
+ * telas. E ele é uma CONSTANTE SEPARADA, e não um `FOCO` com
+ * `focus-visible:outline-cal` colado ao lado: as duas classes escreveriam
+ * `outline-color`, e quem desempata não é a ordem no atributo `class`, é a
+ * ordem em que o Tailwind as emitiu na folha. É a mesma armadilha que o
+ * comentário de `ETIQUETA` descreve para `font-size`, e ela falha calada.
+ *
+ * O afastamento é NEGATIVO (o anel entra) porque o item do menu vai de ponta a
+ * ponta da barra, dentro de um contêiner que rola: um anel de 2px para fora
+ * seria cortado pelas bordas laterais.
+ */
+export const FOCO_CLARO =
+  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-cal";
+
+/**
  * A voz da etiqueta — estetica.md §4.2, `--t-label`.
  *
  * Grotesca condensada, caixa alta, entreletra aberta: é literalmente a

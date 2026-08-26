@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { exigirAdminNoPainel } from "@/lib/conta/painel-servidor";
+import { MenuLateral } from "@/components/painel/casca/MenuLateral";
 
 /**
  * A cerca do painel — e o motivo de ela morar num LAYOUT.
@@ -51,11 +52,51 @@ import { exigirAdminNoPainel } from "@/lib/conta/painel-servidor";
  * o caso da sessão que morre com o painel já aberto. Quem chega por favorito
  * frio volta para a raiz do painel e navega dali.
  */
+/**
+ * A CASCA, acrescentada na Onda 1 — e o que ela liga.
+ *
+ * `.painel` NÃO É DECORAÇÃO: é o gancho do reset escopado de `globals.css`. O
+ * preflight do Tailwind não é global neste projeto porque o painel LEGADO
+ * (styled-components) depende dos defaults do navegador — um preflight global
+ * zeraria font-size de título, aparência de button e sublinhado de <a> lá
+ * dentro. Sem esta classe o painel novo herda os defaults do navegador e sai
+ * em Times New Roman com 8px de margem no body, sem erro nenhum. É o mesmo
+ * mecanismo que `.vitrine` usa do outro lado.
+ *
+ * O MENU MORA AQUI, e não em cada página, pela mesma razão que a checagem: o
+ * que envolve toda rota do grupo — inclusive as que ainda não existem — é o
+ * layout. Uma tela nova nasce com navegação por herança, sem ninguém lembrar
+ * de importá-la.
+ *
+ * O PULO PARA O CONTEÚDO é a contrapartida de ter treze links antes do
+ * primeiro parágrafo: sem ele, quem navega por teclado ou por leitor de tela
+ * atravessa a barra inteira a cada troca de tela. `focus:` e não
+ * `focus-visible:` de propósito — este link só é alcançável por teclado, então
+ * "recebeu foco" e "foi tabulado até aqui" são a mesma coisa.
+ *
+ * O `<main id="conteudo">` fica NESTE arquivo e não nas páginas: é o alvo do
+ * pulo, e um alvo que cada página precisa lembrar de declarar é um alvo que um
+ * dia falta. Consequência para quem escrever tela nova: a página renderiza o
+ * <Cabecalho> e o conteúdo direto, SEM abrir outro <main>.
+ */
 export default async function LayoutProtegidoDoPainel({
   children,
 }: {
   children: ReactNode;
 }) {
   await exigirAdminNoPainel("/dashboard");
-  return <>{children}</>;
+  return (
+    <div className="painel flex min-h-screen flex-col md:flex-row">
+      <a
+        href="#conteudo"
+        className="sr-only rounded-cx bg-fuligem px-4 py-3 text-cal focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50"
+      >
+        Pular para o conteúdo
+      </a>
+      <MenuLateral />
+      <main id="conteudo" className="min-w-0 flex-1">
+        {children}
+      </main>
+    </div>
+  );
 }

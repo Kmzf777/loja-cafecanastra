@@ -77,32 +77,55 @@ function semComentarios(fonte: string): string {
   return fonte.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<!:)\/\/[^\n]*/g, "");
 }
 
+/**
+ * A VARREDURA OLHA `ui/` E `casca/` — as duas pastas de `components/painel/`.
+ *
+ * `casca/` entrou quando ela nasceu (MenuLateral, Cabecalho, o botão de sair).
+ * Deixá-la de fora seria guardar a porta da frente e abrir a dos fundos: a
+ * casca é JSX do painel exatamente como os primitivos são, e é justamente nela
+ * que se cola trecho de layout de admin achado por aí — que é como `rounded-lg`
+ * e `shadow-sm` entram num projeto, nunca por decisão.
+ *
+ * O NOME VEM COM A PASTA (`ui/Botao.tsx`) porque duas pastas podem ter arquivos
+ * de mesmo nome, e uma mensagem de falha dizendo só "Botao.tsx" mandaria quem
+ * for consertar procurar em dois lugares.
+ */
+const PASTAS = ["ui", "casca"] as const;
+const RAIZ_DO_PAINEL = join(__dirname, "..");
+
 function arquivosDeProducao(): { nome: string; fonte: string }[] {
-  return readdirSync(__dirname)
-    .filter((nome) => /\.tsx?$/.test(nome) && !nome.includes(".test."))
-    .map((nome) => ({
-      nome,
-      fonte: semComentarios(readFileSync(join(__dirname, nome), "utf8")),
-    }));
+  return PASTAS.flatMap((pasta) => {
+    const dir = join(RAIZ_DO_PAINEL, pasta);
+    return readdirSync(dir)
+      .filter((nome) => /\.tsx?$/.test(nome) && !nome.includes(".test."))
+      .map((nome) => ({
+        nome: `${pasta}/${nome}`,
+        fonte: semComentarios(readFileSync(join(dir, nome), "utf8")),
+      }));
+  });
 }
 
 describe("as proibições do painel", () => {
   it("a varredura acha os arquivos — um teste que não lê nada passa por engano", () => {
     const arquivos = arquivosDeProducao();
     expect(arquivos.map((a) => a.nome).sort()).toEqual([
-      "Botao.tsx",
-      "Campo.tsx",
-      "EstadoDaTela.tsx",
-      "Ficha.tsx",
-      "Selo.tsx",
-      "Tabela.tsx",
-      "Tarja.tsx",
-      "estilos.ts",
+      "casca/BotaoDeSair.tsx",
+      "casca/Cabecalho.tsx",
+      "casca/MenuLateral.tsx",
+      "casca/menu.logica.ts",
+      "ui/Botao.tsx",
+      "ui/Campo.tsx",
+      "ui/EstadoDaTela.tsx",
+      "ui/Ficha.tsx",
+      "ui/Selo.tsx",
+      "ui/Tabela.tsx",
+      "ui/Tarja.tsx",
+      "ui/estilos.ts",
     ]);
   });
 
   it("e some com os comentários — senão a explicação da regra viola a regra", () => {
-    const tabela = arquivosDeProducao().find((a) => a.nome === "Tabela.tsx")!;
+    const tabela = arquivosDeProducao().find((a) => a.nome === "ui/Tabela.tsx")!;
     expect(tabela.fonte).toContain("<table");
     expect(tabela.fonte).not.toContain("R24");
   });
@@ -127,7 +150,12 @@ describe("as proibições do painel", () => {
       .filter(({ fonte }) => /vermelho/.test(fonte))
       .map(({ nome }) => nome)
       .sort();
-    expect(comVermelho).toEqual(["Botao.tsx", "Campo.tsx", "Selo.tsx", "Tarja.tsx"]);
+    expect(comVermelho).toEqual([
+      "ui/Botao.tsx",
+      "ui/Campo.tsx",
+      "ui/Selo.tsx",
+      "ui/Tarja.tsx",
+    ]);
   });
 });
 
