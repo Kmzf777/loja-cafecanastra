@@ -394,53 +394,20 @@ export type Database = {
         ];
       };
 
-      /** 0005. `criada_em` — no feminino, ao contrário das outras tabelas. */
-      promocoes: {
-        Row: {
-          id: string;
-          titulo: string;
-          descricao: string | null;
-          tipo: string | null;
-          valor: number | null;
-          aplica_a: string | null;
-          categoria: string | null;
-          /** Sem FK para `produtos`: não há embed a partir daqui. */
-          produto_id: string | null;
-          inicio_em: string | null;
-          fim_em: string | null;
-          ativa: boolean;
-          criada_em: string;
-        };
-        Insert: {
-          id?: string;
-          titulo: string;
-          descricao?: string | null;
-          tipo?: string | null;
-          valor?: number | null;
-          aplica_a?: string | null;
-          categoria?: string | null;
-          produto_id?: string | null;
-          inicio_em?: string | null;
-          fim_em?: string | null;
-          ativa?: boolean;
-          criada_em?: string;
-        };
-        Update: {
-          id?: string;
-          titulo?: string;
-          descricao?: string | null;
-          tipo?: string | null;
-          valor?: number | null;
-          aplica_a?: string | null;
-          categoria?: string | null;
-          produto_id?: string | null;
-          inicio_em?: string | null;
-          fim_em?: string | null;
-          ativa?: boolean;
-          criada_em?: string;
-        };
-        Relationships: [];
-      };
+      /**
+       * `promocoes` SAIU DAQUI na 0032, e a ausência é a informação.
+       *
+       * A tabela que tinha este nome virou `promocoes_legado`, e o nome passou
+       * para o motor de promoção novo — outra forma inteira. Manter o bloco
+       * antigo seria exatamente o defeito que o cabeçalho deste arquivo nomeia:
+       * um tipo que afirma com confiança colunas que o banco não tem mais.
+       *
+       * E o bloco NOVO não entra, pela regra que este arquivo já segue: nenhum
+       * código do navegador consulta promoção — a vitrine recebe preço já
+       * promocional do Express, e o painel fala com o Express também. Tipar
+       * tabela sem leitor é manutenção sem leitor. Quando a primeira consulta
+       * direta existir, a tabela entra ANTES dela.
+       */
 
       /**
        * 0014. Avaliações de produto.
