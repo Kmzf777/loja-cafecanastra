@@ -28,7 +28,7 @@ vi.mock("../supabase/servidor", () => ({
   criarClienteServidor: vi.fn(),
 }));
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -403,17 +403,33 @@ describe("estrutura de rotas de /dashboard", () => {
    * `'use server'` e `"use server"` são a mesma diretiva para o compilador e
    * seria absurdo a trava depender de qual delas a pessoa digitou.
    */
-  it('todo arquivo com "use server" sob /dashboard chama a checagem', () => {
-    const suspeitos = arquivosRecursivos(RAIZ).filter((a) =>
-      /\.(ts|tsx)$/.test(a),
-    );
-    for (const arquivo of suspeitos) {
-      const fonte = readFileSync(join(RAIZ, arquivo), "utf8");
-      if (!/^\s*["']use server["']/m.test(fonte)) continue;
-      expect(
-        fonte,
-        `${arquivo} declara "use server" e não chama exigirAdminEmAcao`,
-      ).toMatch(/exigirAdminEmAcao\s*\(/);
+  /**
+   * DUAS RAÍZES, e a segunda foi acrescentada porque a primeira sozinha deixava
+   * a porta dos fundos aberta: uma ação em `lib/painel/acoes.ts`, importada por
+   * uma página do painel, roda com exatamente os mesmos privilégios de uma que
+   * mora sob `app/dashboard/` — e passava despercebida por morar fora da árvore
+   * varrida. `lib/painel/` é, por definição, código de painel; se um arquivo de
+   * lá declara `"use server"`, ele é uma ação administrativa.
+   */
+  const RAIZES_DE_ACAO = [
+    { rotulo: "app/dashboard", caminho: RAIZ },
+    { rotulo: "lib/painel", caminho: join(__dirname, "..", "painel") },
+  ];
+
+  it('todo arquivo com "use server" no painel chama a checagem', () => {
+    for (const { rotulo, caminho } of RAIZES_DE_ACAO) {
+      if (!existsSync(caminho)) continue;
+      const suspeitos = arquivosRecursivos(caminho).filter((a) =>
+        /\.(ts|tsx)$/.test(a),
+      );
+      for (const arquivo of suspeitos) {
+        const fonte = readFileSync(join(caminho, arquivo), "utf8");
+        if (!/^\s*["']use server["']/m.test(fonte)) continue;
+        expect(
+          fonte,
+          `${rotulo}/${arquivo} declara "use server" e não chama exigirAdminEmAcao`,
+        ).toMatch(/exigirAdminEmAcao\s*\(/);
+      }
     }
   });
 });
