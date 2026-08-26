@@ -2,6 +2,7 @@ const { Router } = require("express");
 
 const DashboardRepository = require("../repositories/dashboardRepository");
 const avaliacoesRepository = require("../repositories/avaliacoesRepository");
+const administradoresRepository = require("../repositories/administradoresRepository");
 
 const isAuthenticated = require("../middleware/isAuthenticated");
 const isAdmin = require("../middleware/isAdmin");
@@ -90,5 +91,75 @@ painelRoutes.patch("/admin/avaliacoes", isAuthenticated, isAdmin, async (req, re
     return res.status(500).json({ error: "Erro ao moderar avaliações." });
   }
 });
+
+/* --------------------------------------------------------------------------
+ * Administradores — o caminho que não existia
+ * -------------------------------------------------------------------------- */
+
+/**
+ * A recusa do último administrador sai com a chave `message`, e não `error`.
+ *
+ * É a MESMA chave que `DELETE /auth/users/:id` já usa para a mesma regra
+ * (conta.routes.js), e o painel legado lê `corpo.message || corpo.error` — as
+ * duas chegariam à tela. Manter as duas recusas do último admin idênticas entre
+ * si vale mais do que casar com o `error` dos vizinhos deste arquivo: quem
+ * escrever o tratamento na tela nova vai escrever um só para as duas.
+ */
+function responderErroDeAdmin(res, erro, contexto) {
+  if (erro.status) {
+    const chave = erro.chave === "message" ? "message" : "error";
+    return res.status(erro.status).json({ [chave]: erro.message });
+  }
+  console.error(`Erro em ${contexto}:`, erro);
+  return res.status(500).json({ error: `Erro ao ${contexto}.` });
+}
+
+painelRoutes.get(
+  "/admin/administradores",
+  isAuthenticated,
+  isAdmin,
+  async (req, res) => {
+    try {
+      return res.json({ data: await administradoresRepository.listar() });
+    } catch (erro) {
+      return responderErroDeAdmin(res, erro, "listar administradores");
+    }
+  },
+);
+
+painelRoutes.post(
+  "/admin/administradores",
+  isAuthenticated,
+  isAdmin,
+  async (req, res) => {
+    try {
+      const criado = await administradoresRepository.promover({
+        userId: req.body?.userId ?? req.body?.user_id,
+        papel: req.body?.papel ?? "dono",
+        adminUserId: req.user?.userId ?? null,
+      });
+      return res.status(201).json(criado);
+    } catch (erro) {
+      return responderErroDeAdmin(res, erro, "promover o administrador");
+    }
+  },
+);
+
+painelRoutes.delete(
+  "/admin/administradores/:userId",
+  isAuthenticated,
+  isAdmin,
+  async (req, res) => {
+    try {
+      await administradoresRepository.remover({
+        userId: req.params.userId,
+        adminUserId: req.user?.userId ?? null,
+      });
+      return res.json({ message: "Administrador removido." });
+    } catch (erro) {
+      return responderErroDeAdmin(res, erro, "remover o administrador");
+    }
+  },
+);
 
 module.exports = painelRoutes;

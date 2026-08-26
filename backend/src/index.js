@@ -25,6 +25,7 @@ const blingRoutes = require("./routes/bling.routes");
 const clubeRoutes = require("./routes/clube.routes");
 const vitrineRoutes = require("./routes/vitrine.routes");
 const painelRoutes = require("./routes/painel.routes");
+const marketingRoutes = require("./routes/marketing.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 
@@ -153,6 +154,9 @@ app.use("/vitrine", vitrineRoutes);
 // com uma rota de `:id` ja registrada, entao acrescentar no fim nao desloca
 // nenhum dos tres pares load-bearing.
 app.use(painelRoutes);
+// Marketing (0033): campanhas, consentimentos e envios. Tudo so de admin —
+// `consentimentos` e `envios` carregam e-mail e telefone de gente.
+app.use(marketingRoutes);
 
 /**
  * Carrinho abandonado: cron de hora em hora, DESLIGADO por padrao (decisao 5
