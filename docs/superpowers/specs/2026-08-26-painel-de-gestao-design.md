@@ -237,7 +237,8 @@ passa sem prova.
 
 Três branches disputam o número 0017: `worktree-melhor-envio` tem `0017_melhor_envio.sql`, e
 `worktree-whatsapp-bot` tem de `0017_whatsapp_meta.sql` a `0021_redacao_whatsapp.sql`. Este trabalho
-reserva a faixa **0030 em diante**, que fica acima das duas e mantém a branch auto-contida. O runner
+reserva a faixa **0030 em diante** — `0030_vitrine.sql` foi o primeiro a ser escrito, porque a fatia
+da vitrine subiu para a Onda 2 do roteiro; o motor de promoção ficou com `0031`, que fica acima das duas e mantém a branch auto-contida. O runner
 (`backend/db/migrar.js`) aplica por ordem de nome e registra em `canastra.migracoes`; buraco na
 numeração não o incomoda.
 
@@ -265,7 +266,7 @@ A pesquisa mostrou que Shopify, Medusa e Saleor modelam isso como uma entidade c
 `metodo`: `automatico` aplica sozinho no carrinho, `codigo` exige o cliente digitar. Mesma regra,
 porta de entrada diferente. Unificar dá **uma** tela, **uma** ordem de aplicação e **um** relatório.
 
-### 3.2 `0030_motor_de_promocao.sql`
+### 3.2 `0031_motor_de_promocao.sql`
 
 | Tabela | Carrega | Por que existe |
 |---|---|---|
@@ -315,7 +316,7 @@ NF-e com desconto rateado por item (o Bling exige), estorno proporcional em devo
 resposta para *"por que este pedido saiu por R$ 137,40?"*. Sustenta §3.4, o relatório de cupom e a
 integração fiscal ao mesmo tempo.
 
-### 3.6 `0031_vitrine.sql` — herói e barra de aviso
+### 3.6 `0030_vitrine.sql` — herói e barra de aviso
 
 Escopo escolhido: **um herói, sem carrossel** — o `estetica.md` §2 lista "carrossel de banner não
 entra" entre as decisões deliberadas, e nada aqui a contraria.
