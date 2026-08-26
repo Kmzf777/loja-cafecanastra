@@ -1,6 +1,9 @@
 const pool = require("../pgPool");
 const { v4 } = require("uuid");
 const { GRUPO_ATIVO } = require("../utils/statusDePedido");
+// A MESMA forma de UUID de `conta.routes.js` e `lgpd.routes.js`: o id vem da
+// URL e vira `$1` numa coluna `uuid`.
+const { ehUuid } = require("../utils/formatoUuid");
 
 /**
  * Catálogo do painel, contra `canastra.produtos`.
@@ -272,6 +275,23 @@ class DashboardRepository {
    */
   async deleteProduct(request, response) {
     const { id } = request.params;
+
+    /**
+     * MALFORMADO NÃO É INEXISTENTE. Um id sem forma de uuid ia intacto para o
+     * `$1` da coluna `uuid`, levantava 22P02 e virava 500 "Erro ao deletar
+     * produto." — a frase de servidor quebrado para um pedido errado do
+     * cliente. A guarda vem ANTES da consulta (nada de tratar 22P02 no catch):
+     * assim o lixo não gasta conexão do pool nem enche o log do Postgres.
+     *
+     * O `catch` abaixo NÃO deixa de ser necessário: ele continua sendo o 500 de
+     * verdade — banco fora, FK inesperada, permissão. O que sai dele é só o
+     * caso em que a culpa era do pedido.
+     */
+    if (!ehUuid(id)) {
+      return response
+        .status(400)
+        .json({ error: "Identificador de produto inválido." });
+    }
 
     try {
       const resultado = await pool.query(

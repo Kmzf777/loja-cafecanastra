@@ -1,5 +1,11 @@
 const pool = require("../pgPool");
 const { v4: uuidv4 } = require("uuid");
+// A MESMA forma de UUID de `conta.routes.js` e `lgpd.routes.js`, e pelo mesmo
+// motivo: o id vem da URL e vira `$1` numa coluna `uuid`. (A cópia da regex que
+// `createPromotion` ainda carrega mais abaixo continua ali de propósito — migrar
+// os outros chamadores é o trabalho que `utils/formatoUuid.js` já descreve, e
+// não este.)
+const { ehUuid } = require("../utils/formatoUuid");
 
 /**
  * Promoções, contra `canastra.promocoes`. O contrato HTTP segue o que o
@@ -148,6 +154,27 @@ class PromotionsRepository {
    */
   async updatePromotion(request, response) {
     const { id } = request.params;
+
+    /**
+     * MALFORMADO NÃO É INEXISTENTE, e antes disto os dois davam respostas
+     * trocadas: o id que não existe já respondia 404 (logo abaixo), e o id que
+     * não tem FORMA de uuid chegava ao `$1` da consulta, levantava 22P02
+     * ("invalid input syntax for type uuid") e caía no `catch` como 500 "Erro ao
+     * atualizar promoção." — a frase de servidor quebrado para um pedido errado
+     * do cliente. O gestor lia "erro interno", e o log enchia de 22P02 que
+     * parecem incidente de banco.
+     *
+     * A guarda é ANTES da consulta, e não um `if (err.code === '22P02')` no
+     * catch: assim o lixo não gasta conexão do pool nem deixa rastro no log do
+     * Postgres. `test/painel_repositorios.test.js` afirma as duas coisas — o
+     * 400 e o "nenhuma consulta saiu".
+     */
+    if (!ehUuid(id)) {
+      return response
+        .status(400)
+        .json({ error: "Identificador de promoção inválido." });
+    }
+
     const corpo = request.body || {};
     const veio = (campo) => Object.prototype.hasOwnProperty.call(corpo, campo);
 

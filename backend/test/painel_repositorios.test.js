@@ -508,3 +508,95 @@ test("produto: DELETE num id existente continua 204 e some do banco", async () =
   );
   assert.equal(rows.length, 0);
 });
+
+/* --------------------------------------------------------------------------
+ * `:id` MALFORMADO — 400 com frase, nunca 500
+ * -------------------------------------------------------------------------- */
+
+/**
+ * "Malformado" NÃO é "inexistente", e os dois já tinham desfechos diferentes —
+ * o problema é que o segundo estava certo e o primeiro não.
+ *
+ * Um id que não tem forma de UUID chega intacto ao `$1` de uma coluna `uuid`,
+ * o Postgres levanta 22P02 ("invalid input syntax for type uuid"), o `catch`
+ * genérico do repositório vê um erro qualquer e responde 500 "Erro ao
+ * atualizar promoção." — a frase que o painel mostra quando o SERVIDOR quebrou.
+ * E não quebrou: quem mandou o pedido errado foi o cliente. O gestor lê "erro
+ * interno", abre um chamado, e o log do servidor enche de 22P02 que parecem
+ * incidente de banco.
+ *
+ * A checagem é ANTES do banco de propósito: é a mesma disciplina de
+ * `conta.routes.js` e `lgpd.routes.js`, que usam o `ehUuid` de
+ * `utils/formatoUuid.js` — lixo não chega ao cast.
+ *
+ * O 404 do id BEM FORMADO e inexistente continua sendo 404 (os dois testes
+ * acima), e é essa diferença que a tela precisa: "não existe" manda recarregar
+ * a lista, "está malformado" manda olhar o link.
+ */
+const IDS_MALFORMADOS = [
+  ["texto puro", "abc"],
+  ["número", "123"],
+  ["uuid com um dígito a menos", "00000000-0000-4000-8000-00000000000"],
+  ["uuid sem hífens", "00000000000040008000000000000000"],
+  ["texto com aspas", "abc'--"],
+];
+
+test("promoções: PUT com :id malformado é 400 com frase, não 500", async () => {
+  const repo = new PromotionsRepository();
+
+  for (const [nome, id] of IDS_MALFORMADOS) {
+    const res = respostaFalsa();
+    await repo.updatePromotion(
+      { params: { id }, body: { title: "Qualquer coisa" } },
+      res,
+    );
+
+    assert.equal(res.codigo, 400, `${nome} deveria ser 400 (é erro do pedido)`);
+    // A frase importa tanto quanto o código: é ela que diz ao gestor que o
+    // problema está no link, e não no servidor.
+    assert.notEqual(res.corpo.error, "Erro ao atualizar promoção.", nome);
+    assert.match(res.corpo.error, /identificador/i, nome);
+  }
+});
+
+test("produto: DELETE com :id malformado é 400 com frase, não 500", async () => {
+  const repo = new DashboardRepository();
+
+  for (const [nome, id] of IDS_MALFORMADOS) {
+    const res = respostaFalsa();
+    await repo.deleteProduct({ params: { id } }, res);
+
+    assert.equal(res.codigo, 400, `${nome} deveria ser 400 (é erro do pedido)`);
+    assert.notEqual(res.corpo.message, "Erro ao deletar produto.", nome);
+    assert.match(res.corpo.error, /identificador/i, nome);
+  }
+});
+
+test("o :id malformado nem chega ao banco — a recusa é anterior à consulta", async () => {
+  // Sem esta asserção, um `catch (err) { if (err.code === '22P02') 400 }` também
+  // passaria nos dois testes acima — e aí o lixo teria ido ao banco, gasto uma
+  // conexão do pool e deixado um 22P02 no log do Postgres a cada clique errado.
+  // A guarda tem de ser ANTES.
+  const consultasAntes = [];
+  const poolReal = require("../src/pgPool.js");
+  const queryOriginal = poolReal.query.bind(poolReal);
+  poolReal.query = (...args) => {
+    consultasAntes.push(args[0]);
+    return queryOriginal(...args);
+  };
+
+  try {
+    await new PromotionsRepository().updatePromotion(
+      { params: { id: "abc" }, body: { title: "x" } },
+      respostaFalsa(),
+    );
+    await new DashboardRepository().deleteProduct(
+      { params: { id: "abc" } },
+      respostaFalsa(),
+    );
+  } finally {
+    poolReal.query = queryOriginal;
+  }
+
+  assert.deepEqual(consultasAntes, [], "nenhuma consulta deveria ter saído");
+});
