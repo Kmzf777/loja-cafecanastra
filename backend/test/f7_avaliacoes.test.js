@@ -392,13 +392,20 @@ test("anon não alcança user_id nem moderado_em: 42501, nunca dado", async () =
 });
 
 test("dono lê a própria avaliação pendente; o vizinho não a vê", async () => {
+  // A POLÍTICA DE DONO CONTINUA VALENDO DEPOIS DE 0031, e este é o ponto sutil:
+  // `avaliacoes_dono_le` referencia `user_id` no seu USING, e o dono não tem
+  // mais privilégio de SELECT nessa coluna. Medido: expressão de política NÃO
+  // passa pela checagem de privilégio de coluna do chamador — a política filtra
+  // igual, e é por isso que a Ana enxerga a própria pendente sem citar `user_id`.
+  //
+  // O que mudou é a CONSULTA: filtrar por `user_id` agora é 42501 (o teste
+  // logo abaixo afirma isso), então quem quer "as minhas" chama a RPC de 0031.
   const daAna = await comoPapel(
     bd.pool,
     { papel: "authenticated", sub: ANA },
     async (c) => {
       const { rows } = await c.query(
-        `SELECT sku, status FROM canastra.avaliacoes WHERE user_id = $1`,
-        [ANA],
+        `SELECT sku, status FROM canastra.avaliacoes WHERE status = 'pendente'`,
       );
       return rows;
     },
@@ -441,16 +448,178 @@ test("admin lê tudo, inclusive as pendentes", async () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * `user_id` não é de ninguém que autentica (0031) — e a RPC que o substitui
+ * ------------------------------------------------------------------ */
+
+/** As nove colunas do GRANT de 0031 — as mesmas que o painel pede. */
+const COLUNAS_DO_PAINEL =
+  "id, sku, nota, titulo, texto, nome_exibicao, status, criado_em, moderado_em";
+
+test("NINGUÉM que autentica alcança `user_id` — nem o dono, nem o admin, nem `select=*`", async () => {
+  // O BURACO QUE 0031 FECHA: até ela, `authenticated` tinha SELECT de TABELA
+  // (0014:234), e a política pública mostra toda aprovada a qualquer sessão.
+  // Numa instância COMPARTILHADA isso entregava o uuid de todo avaliador a um
+  // token de outro projeto — e o uuid é a mesma chave de `auth.users` da
+  // instância inteira, ou seja, o vínculo entre a pessoa e a compra.
+  //
+  // Privilégio de coluna é por PAPEL: a Alice administra e continua sem ler a
+  // coluna, exatamente como o `custo` de `produtos` em 0006. Quem precisa do
+  // vínculo é o serviço, pelo `service_role`.
+  for (const [quem, sub] of [
+    ["dono", ANA],
+    ["vizinho", BRUNO],
+    ["admin", ALICE],
+    ["token de outro projeto", INTRUSO],
+  ]) {
+    for (const sql of [
+      "SELECT user_id FROM canastra.avaliacoes",
+      "SELECT * FROM canastra.avaliacoes",
+      // A forma que a vitrine usava, e é por isso que a RPC abaixo existe:
+      // coluna em WHERE exige o mesmo privilégio que coluna em projeção.
+      "SELECT id FROM canastra.avaliacoes WHERE user_id IS NOT NULL",
+    ]) {
+      await assert.rejects(
+        comoPapel(bd.pool, { papel: "authenticated", sub }, (c) => c.query(sql)),
+        (erro) => erro.code === PERMISSAO_NEGADA,
+        `${quem}: ${sql}`,
+      );
+    }
+  }
+});
+
+test("a tela de moderação continua inteira: as nove colunas, a contagem e o UPDATE", async () => {
+  // O recorte só é aceitável porque o painel não precisa de `user_id` —
+  // conferido em AvaliacoesManager.jsx, que lista estas nove e modera por `id`.
+  // Este teste é o que impede o recorte de estreitar mais um dia sem ninguém
+  // perceber que a tela de moderação morre junto.
+  await comoPapel(bd.pool, { papel: "authenticated", sub: ALICE }, async (c) => {
+    const lista = await c.query(
+      `SELECT ${COLUNAS_DO_PAINEL} FROM canastra.avaliacoes
+        ORDER BY criado_em DESC`,
+    );
+    assert.equal(lista.rows.length, 2);
+    assert.deepEqual(Object.keys(lista.rows[0]).includes("user_id"), false);
+
+    const fila = await c.query(
+      "SELECT count(*)::int AS n FROM canastra.avaliacoes WHERE status = 'pendente'",
+    );
+    assert.equal(fila.rows[0].n, 1);
+
+    const moderado = await c.query(
+      `UPDATE canastra.avaliacoes SET status = 'aprovada', moderado_em = now()
+        WHERE id = ANY($1::uuid[])`,
+      [[lista.rows[0].id]],
+    );
+    assert.equal(moderado.rowCount, 1);
+  });
+});
+
+test("a RPC devolve as MINHAS avaliações — e não devolve `user_id` junto", async () => {
+  // A substituta do `.eq("user_id", uid)` que o REVOKE acima tornou impossível.
+  // SECURITY DEFINER para poder LER a coluna no WHERE; `user_id` fica fora da
+  // projeção de propósito — quem chama já sabe o próprio uuid, e devolvê-lo
+  // faria da função um jeito indireto de ler a coluna que se acabou de fechar.
+  const minhas = await comoPapel(
+    bd.pool,
+    { papel: "authenticated", sub: ANA },
+    async (c) => {
+      const { rows } = await c.query("SELECT * FROM canastra.minhas_avaliacoes()");
+      return rows;
+    },
+  );
+
+  assert.equal(minhas.length, 1);
+  assert.equal(minhas[0].sku, SKU2);
+  // O ponto da tela: a pendente APARECE para o dono. É assim que a página do
+  // pedido sabe que aquele café já foi avaliado e não oferece o formulário.
+  assert.equal(minhas[0].status, "pendente");
+  assert.deepEqual(
+    Object.keys(minhas[0]).sort(),
+    ["criado_em", "id", "nota", "sku", "status", "texto", "titulo"],
+    "a projeção da RPC é o contrato da vitrine — `user_id` não entra nela",
+  );
+});
+
+test("a RPC não responde sobre terceiros: outro projeto e anônimo não recebem nada", async () => {
+  // O INTRUSO tem token válido da instância compartilhada e `auth.uid()`
+  // preenchido. `eh_cliente()` na frente da função é a Regra 2 de 0006: a
+  // resposta vazia é uma DECISÃO ("você não é cliente desta loja"), e não o
+  // acidente de ele não ter linhas.
+  const doIntruso = await comoPapel(
+    bd.pool,
+    { papel: "authenticated", sub: INTRUSO },
+    async (c) => {
+      const { rows } = await c.query("SELECT * FROM canastra.minhas_avaliacoes()");
+      return rows;
+    },
+  );
+  assert.deepEqual(doIntruso, []);
+
+  // O vizinho é cliente de verdade e mesmo assim só vê o que é dele — aqui,
+  // nada. Sem esta linha, a função poderia devolver a tabela inteira e os dois
+  // testes acima continuariam verdes.
+  const doBruno = await comoPapel(
+    bd.pool,
+    { papel: "authenticated", sub: BRUNO },
+    async (c) => {
+      const { rows } = await c.query("SELECT * FROM canastra.minhas_avaliacoes()");
+      return rows;
+    },
+  );
+  assert.deepEqual(doBruno, []);
+
+  // `anon` nem executa: o EXECUTE é só de `authenticated`. 42501 aqui quer
+  // dizer "entre na sua conta", que é a frase certa para quem não tem sessão.
+  await assert.rejects(
+    comoPapel(bd.pool, { papel: "anon" }, (c) =>
+      c.query("SELECT * FROM canastra.minhas_avaliacoes()"),
+    ),
+    (erro) => erro.code === PERMISSAO_NEGADA,
+  );
+});
+
+test("a RPC não aceita uid de terceiro: ela não TEM parâmetro", async () => {
+  // A defesa é a ASSINATURA, não o corpo. Uma `minhas_avaliacoes(uid uuid)`
+  // executável por `authenticated` seria o mesmo vazamento por outra porta —
+  // varrer uuids e ler as avaliações de quem quisesse. O mesmo argumento de
+  // `eh_admin()` em 0006:96, e por isso ele é afirmado no CATÁLOGO: assim
+  // "melhorar" a função acrescentando um parâmetro fica vermelho aqui.
+  const { rows } = await bd.pool.query(
+    `SELECT pg_get_function_identity_arguments(p.oid) AS args, p.prosecdef, p.proconfig
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'canastra' AND p.proname = 'minhas_avaliacoes'`,
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].args, "", "a função não pode ganhar parâmetro nenhum");
+  assert.equal(rows[0].prosecdef, true);
+  // `search_path` fixo é obrigatório em SECURITY DEFINER (0006:88), e
+  // `row_security = off` é o que tira a mudez do modo de falha com FORCE.
+  assert.ok(rows[0].proconfig.includes("search_path=canastra, pg_temp"));
+  assert.ok(rows[0].proconfig.includes("row_security=off"));
+});
+
+/* ------------------------------------------------------------------ *
  * Moderação — GRANT de coluna + política de admin
  * ------------------------------------------------------------------ */
 
 test("admin aprova: UPDATE de status + moderado_em passa", async () => {
+  // O WHERE É POR `id` DESDE 0031, e não é detalhe de teste: privilégio de
+  // coluna vale para a consulta inteira, então um `WHERE user_id = ...` daqui
+  // passaria a responder 42501 mesmo para a admin. A tela real já modera assim
+  // (`update(...).in("id", ids)` em AvaliacoesManager.jsx) — quem escrever uma
+  // consulta nova de moderação tem de chavear por `id`, nunca por autor.
   await comoPapel(bd.pool, { papel: "authenticated", sub: ALICE }, async (c) => {
+    const { rows: pendentes } = await c.query(
+      "SELECT id FROM canastra.avaliacoes WHERE sku = $1 AND status = 'pendente'",
+      [SKU2],
+    );
+    assert.equal(pendentes.length, 1);
+
     const { rowCount } = await c.query(
       `UPDATE canastra.avaliacoes
           SET status = 'aprovada', moderado_em = now()
-        WHERE user_id = $1 AND sku = $2`,
-      [ANA, SKU2],
+        WHERE id = $1`,
+      [pendentes[0].id],
     );
     assert.equal(rowCount, 1);
   });

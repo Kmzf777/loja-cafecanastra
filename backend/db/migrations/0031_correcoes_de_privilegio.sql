@@ -121,3 +121,138 @@ GRANT UPDATE (nome, telefone) ON canastra.clientes TO authenticated;
  * migracao so tira a clareza do diff que fecha o buraco.
  */
 REVOKE DELETE ON canastra.config_loja FROM authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * 3. `avaliacoes.user_id`: o vinculo pessoa-compra aberto para a instancia
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O QUE ESTAVA ABERTO. 0014:234 deu `GRANT SELECT` de TABELA a `authenticated`
+ * — a tabela inteira, `user_id` incluso — e a politica
+ * `avaliacoes_aprovadas_publicas` mostra toda avaliacao aprovada a qualquer
+ * `authenticated`. Numa instancia compartilhada, "qualquer authenticated" quer
+ * dizer tambem um token emitido para OUTRO projeto da VPS: ele lia, de uma vez,
+ * o uuid de todos os avaliadores da loja.
+ *
+ * E O UUID E O DADO. Ele e a MESMA chave de `auth.users` da instancia inteira,
+ * entao ele liga a avaliacao ("comprei este cafe, recebi em agosto") a qualquer
+ * outra tabela de qualquer outro projeto que guarde o mesmo uuid. O texto da
+ * avaliacao ja e publico de proposito; o vinculo com a PESSOA nao era para ser.
+ *
+ * O RECORTE E O MESMO QUE `anon` JA TINHA (0014:232), mais `moderado_em`. Nao e
+ * arbitrario: sao exatamente as nove colunas que a tela de moderacao do painel
+ * pede (`AvaliacoesManager.jsx`, constante `COLUNAS`), verificadas uma a uma —
+ * ela nao le `user_id` em lugar nenhum, e modera por `id`
+ * (`update(...).in("id", ids)`). O admin autentica como `authenticated` como
+ * todo mundo, entao o GRANT dele e este mesmo.
+ *
+ * O QUE ISTO QUEBROU, E POR QUE A FUNCAO ABAIXO EXISTE. Privilegio de coluna
+ * vale para a consulta INTEIRA, nao so para a projecao: `WHERE user_id = ...`
+ * exige SELECT em `user_id` do mesmo jeito que `SELECT user_id` exigiria. E a
+ * vitrine tinha exatamente essa consulta — `minhasAvaliacoes()`, em
+ * `frontend/lib/avaliacoes/avaliacoes.ts`, fazia `.eq("user_id", uid)` para
+ * saber quais cafes a pessoa JA avaliou. Medido: depois do REVOKE ela responde
+ * 42501, e o modo de falha daquele modulo e devolver `[]` com um `console.warn`
+ * — ou seja, a pagina do pedido voltaria a oferecer formulario para cafe ja
+ * avaliado, em silencio, e o envio morreria em 23505.
+ *
+ * O MESMO VALE PARA ESCRITA, e isto morde o painel: um
+ * `UPDATE avaliacoes SET status = ... WHERE user_id = ...` passa a responder
+ * 42501 ATE para o admin, porque o `user_id` do WHERE e leitura. A tela real ja
+ * modera por `id` (`update(...).in("id", ids)`), entao nada quebrou hoje — mas
+ * quem escrever consulta nova de moderacao tem de chavear por `id`, nunca por
+ * autor. Esta frase existe porque o sintoma (42501 numa tela de admin que
+ * "sempre funcionou") manda procurar o erro na politica, e o erro nao esta la.
+ *
+ * NAO DA PARA RESOLVER ISSO COM POLITICA, e vale escrever por que para ninguem
+ * tentar: politica corta LINHA, GRANT corta COLUNA, e o que se queria aqui era
+ * "esta coluna, so nas linhas que sao suas" — um corte que o Postgres nao faz
+ * em nenhuma das duas camadas. Por isso a pergunta muda de forma: em vez de o
+ * navegador FILTRAR por `user_id`, ele PERGUNTA "quais sao as minhas", e quem
+ * responde e uma funcao que ja sabe quem esta perguntando.
+ */
+REVOKE SELECT ON canastra.avaliacoes FROM authenticated;
+
+GRANT SELECT (id, sku, nota, titulo, texto, nome_exibicao, status, criado_em,
+              moderado_em)
+  ON canastra.avaliacoes TO authenticated;
+
+/**
+ * "Quais avaliacoes sao minhas?" — a substituta do `.eq("user_id", uid)`.
+ *
+ * SECURITY DEFINER, e aqui e PRIVILEGIO MESMO (o caso de 0008, nao o de
+ * 0006/0014): ela roda como o dono justamente para poder ler a coluna que o
+ * REVOKE acima acabou de tirar de quem chama. `user_id` entra no WHERE e NAO
+ * na projecao — o chamador recebe as proprias avaliacoes sem receber de volta o
+ * proprio uuid, que ele ja tem, e sem que a funcao vire um jeito indireto de
+ * ler a coluna.
+ *
+ * SEM ARGUMENTO, pelo motivo de `eh_admin()` em 0006:96: uma
+ * `minhas_avaliacoes(uid uuid)` executavel por `authenticated` seria o mesmo
+ * vazamento por outra porta — qualquer token da instancia varreria uuids e leria
+ * as avaliacoes de quem quisesse. Lendo so `auth.uid()`, ela nao responde nada
+ * sobre terceiros. Este e o ponto do arquivo inteiro e nao pode ser "melhorado"
+ * depois por conveniencia de tela.
+ *
+ * `auth.uid()` NULO (sessao `anon`, ou claim vazio) casa `user_id = NULL`, que e
+ * NULL e nunca TRUE: zero linhas, sem erro. E o desfecho certo — e o mesmo que a
+ * pessoa sem avaliacao nenhuma recebe.
+ *
+ * `canastra.eh_cliente()` NA FRENTE e a Regra 2 de 0006. Aqui ela e quase
+ * redundante (quem nao e cliente nunca conseguiu INSERIR uma avaliacao, entao
+ * nao teria linha para achar), e entra assim mesmo por duas razoes: a regra vale
+ * por si, sem depender de a politica de INSERT continuar exigindo cadastro; e
+ * ela torna a resposta a um token estrangeiro uma DECISAO ("voce nao e cliente
+ * desta loja") em vez de um acidente ("por acaso nao ha linhas suas").
+ *
+ * `SET search_path` e obrigatorio em DEFINER, com `pg_temp` por ultimo, e
+ * `auth.uid()` qualificado porque `auth` nao esta no caminho — as tres pelo que
+ * 0006:88 explica.
+ *
+ * `SET row_security = off` PELO MOTIVO DE 0006/0014, e ele morde exatamente
+ * aqui: se um dia ligarem `FORCE ROW LEVEL SECURITY` em `avaliacoes`, o dono
+ * deixa de ser isento, nenhuma politica daquela tabela e `TO` dono, o SELECT
+ * volta ZERO LINHAS — e a tela do pedido diria "voce ainda nao avaliou nada"
+ * para todo mundo, sem erro nenhum, que e a mesma mudez que 0006 documentou.
+ * Com o SET, a mesma situacao responde 42501 nomeando a tabela.
+ *
+ * ORDER BY DENTRO DA FUNCAO: a ordenacao faz parte da resposta, e nao um
+ * detalhe do chamador. Um `.order()` do supabase-js sobre o retorno de uma RPC
+ * nao vira ORDER BY nenhum — sem isto aqui, a lista chegaria na ordem que o
+ * Postgres quisesse e a tela mais nova/mais velha mudaria sozinha.
+ */
+CREATE FUNCTION canastra.minhas_avaliacoes()
+  RETURNS TABLE (
+    id        uuid,
+    sku       text,
+    nota      integer,
+    titulo    text,
+    texto     text,
+    status    text,
+    criado_em timestamptz
+  )
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
+  SET row_security = off
+AS $$
+  SELECT a.id, a.sku, a.nota, a.titulo, a.texto, a.status, a.criado_em
+    FROM canastra.avaliacoes a
+   WHERE canastra.eh_cliente()
+     AND a.user_id = auth.uid()
+   ORDER BY a.criado_em DESC
+$$;
+
+-- `proacl` nasce nulo (EXECUTE para PUBLIC), o que numa funcao SECURITY DEFINER
+-- e higiene mal feita mesmo quando inofensivo: REVOKE primeiro, lista explicita
+-- depois — 0006, 0008 e 0014 fazem igual.
+--
+-- SO `authenticated`, e a lista curta e a mesma de `garantir_cliente` (0008),
+-- nao a de `pode_avaliar` (0014). O criterio e o que a funcao responde: esta
+-- so fala sobre `auth.uid()`, entao para `anon` ela devolveria sempre zero
+-- linhas (fingir resposta) e para `service_role` nao ha uid nenhum na sessao.
+-- Nenhuma politica deste schema a chama, entao nao ha o caso de 0006:136 — o
+-- 42501 que `anon` recebe e a frase correta: "entre na sua conta".
+REVOKE EXECUTE ON FUNCTION canastra.minhas_avaliacoes() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.minhas_avaliacoes() TO authenticated;

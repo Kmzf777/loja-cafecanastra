@@ -457,6 +457,15 @@ export type Database = {
       avaliacoes: {
         Row: {
           id: string;
+          /**
+           * FORA DO ALCANCE DO NAVEGADOR DESDE 0031, e o tipo não tem como
+           * dizer isso: `authenticated` perdeu o SELECT desta coluna (ela
+           * entregava o vínculo pessoa-compra a qualquer token da instância
+           * compartilhada). Continua no `Row` porque o serviço, pelo
+           * `service_role`, lê a tabela inteira — mas pedi-la daqui, na
+           * projeção OU no filtro, responde 42501. Para "as minhas", use
+           * `minhas_avaliacoes()`.
+           */
           user_id: string | null;
           nome_exibicao: string;
           sku: string;
@@ -603,6 +612,34 @@ export type Database = {
       eh_admin: {
         Args: Record<PropertyKey, never>;
         Returns: boolean;
+      };
+
+      /**
+       * 0031. As avaliações do `auth.uid()` da sessão, em qualquer status.
+       *
+       * SUBSTITUI `.from("avaliacoes").eq("user_id", uid)`, que deixou de ser
+       * possível quando 0031 tirou `user_id` do GRANT de `authenticated` —
+       * filtro também é leitura, então aquela consulta responde 42501 hoje.
+       *
+       * SEM ARGUMENTO, e isso é a segurança e não um detalhe de assinatura:
+       * uma versão que aceitasse um uid deixaria qualquer token da instância
+       * compartilhada varrer uuids e ler as avaliações de quem quisesse. O
+       * `Returns` também não traz `user_id` — quem chama já sabe o próprio.
+       *
+       * Já vem ordenada por `criado_em` decrescente (é `ORDER BY` de dentro da
+       * função): `.order()` sobre o retorno de uma RPC não faz nada.
+       */
+      minhas_avaliacoes: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          id: string;
+          sku: string;
+          nota: number;
+          titulo: string | null;
+          texto: string | null;
+          status: "pendente" | "aprovada" | "oculta";
+          criado_em: string;
+        }[];
       };
     };
 
