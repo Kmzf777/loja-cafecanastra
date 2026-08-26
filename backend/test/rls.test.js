@@ -50,8 +50,29 @@ const PED_BRUNO = "b3333333-0000-0000-0000-000000000002";
 // Pedido de cliente ja apagado: `pedidos.user_id` e ON DELETE SET NULL (0005).
 const PED_ORFAO = "03333333-0000-0000-0000-000000000009";
 
-/** As quatro relacoes genuinamente publicas da loja. */
-const PUBLICAS = ["config_loja", "produto_opcoes", "produtos", "promocoes"];
+/**
+ * As relacoes genuinamente publicas da loja — as unicas em que um
+ * `FOR SELECT USING (true)` e aceito pela invariante mais abaixo.
+ *
+ * ESTA LISTA E UMA DECISAO, NAO UM INVENTARIO, e por isso ela mora aqui e nao
+ * sai de `pg_policies`: derivar "o que e publico" das proprias politicas faria
+ * o teste concordar com qualquer politica que alguem escrevesse. Acrescentar um
+ * nome aqui e afirmar, no diff, que aquela relacao pode ser lida por quem nao
+ * tem conta.
+ *
+ * `vitrine_heroi` e `vitrine_texto` (0030) entraram porque o heroi e a barra de
+ * aviso sao a PRIMEIRA coisa que a home mostra, antes de qualquer login — sem
+ * leitura anonima a loja abre com o topo em branco. Elas nao guardam vinculo
+ * com pessoa nenhuma; a escrita continua so de admin, como as outras quatro.
+ */
+const PUBLICAS = [
+  "config_loja",
+  "produto_opcoes",
+  "produtos",
+  "promocoes",
+  "vitrine_heroi",
+  "vitrine_texto",
+];
 
 const SESSAO_ANA = { papel: "authenticated", sub: ANA };
 const SESSAO_BRUNO = { papel: "authenticated", sub: BRUNO };
