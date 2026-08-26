@@ -352,6 +352,13 @@ test("campanhas: criar, listar e filtrar", async () => {
     sub: DORA,
   });
   assert.equal(ativas.corpo.total, 1);
+
+  // A criação deixa rastro: campanha é orçamento, e "quem cadastrou a campanha
+  // de R$ 2.500?" tem de ter resposta.
+  const linhas = await logs();
+  assert.equal(linhas.length, 2);
+  assert.ok(linhas.every((l) => l.acao === "campanha_criada"));
+  assert.ok(linhas.every((l) => l.admin_user_id === DORA));
 });
 
 test("O UPSERT DE CAMPANHA REPETE O `WHERE` DO ÍNDICE PARCIAL — sem 42P10", async () => {
@@ -677,6 +684,15 @@ test("marcar como enviado e depois entregue carimba as DUAS datas na ordem", asy
   assert.ok(entregue.corpo.entregue_em);
   assert.ok(
     new Date(entregue.corpo.entregue_em) >= new Date(entregue.corpo.enviado_em),
+  );
+
+  // Cada transição de estado deixa a sua linha, com o antes e o depois.
+  const linhas = await logs();
+  const alteracoes = linhas.filter((l) => l.acao === "envio_alterado");
+  assert.equal(alteracoes.length, 2);
+  assert.deepEqual(
+    new Set(alteracoes.map((l) => l.depois.estado)),
+    new Set(["enviado", "entregue"]),
   );
 });
 

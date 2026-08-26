@@ -3,6 +3,7 @@ const pool = require("../pgPool");
 const isAuthenticated = require("../middleware/isAuthenticated");
 const isAdmin = require("../middleware/isAdmin");
 const { ehUuid } = require("../utils/formatoUuid");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * Atendimento a titular de dados (LGPD art. 18), pelo administrador.
@@ -306,6 +307,31 @@ async function redigirTitular(req, res, { conexao = pool } = {}) {
       "SELECT canastra.redigir_dados_do_titular($1::uuid) AS n",
       [userId],
     );
+
+    /**
+     * O LOG NO BANCO, e não só no processo. A linha do `console.log` acima
+     * sobrevive ao rodízio do log do container e a mais nada; esta rota é
+     * DESTRUTIVA e IRREVERSÍVEL (um UPDATE que apaga o dado pessoal dos pedidos
+     * de outra pessoa, sem confirmação e sem desfazer), e "quem redigiu o
+     * titular X, e quando?" é exatamente a pergunta de um atendimento de
+     * titular contestado.
+     *
+     * Fora da transação da função, e sem escolha: `redigir_dados_do_titular` é
+     * uma chamada única que commita sozinha pelo `conexao` recebido. Falhar em
+     * registrar vira 500 no catch — com a redação já feita, o que é o lado
+     * seguro do erro (a redação é idempotente; o log perdido não).
+     */
+    await registrar(conexao, {
+      adminUserId: req.user?.userId ?? null,
+      acao: ACOES.TITULAR_REDIGIDO,
+      entidade: ENTIDADES.TITULAR,
+      entidadeId: userId,
+      // Sem `antes`: o que foi redigido É dado pessoal, e copiá-lo para o log
+      // desfaria a redação — a linha diria em texto claro o que o UPDATE
+      // acabou de apagar. O número de pedidos alcançados é o que se pode
+      // registrar sem recriar o problema.
+      depois: { pedidos_redigidos: rows[0].n },
+    });
 
     return res.json({
       message: "Dados pessoais redigidos dos pedidos do titular.",

@@ -535,6 +535,17 @@ test("as rotas de leitura PÚBLICAS continuam públicas depois da Onda 4", async
 
   const config = await chamar(productsRoutes, { url: "/config" });
   assert.equal(config.codigo, 200);
+
+  // As outras duas do quinteto vivem em routers próprios, montados COM prefixo
+  // (`/promotions` e `/options`), então o caminho que chega ao router é "/".
+  const promocoes = require("../src/routes/promotions.routes.js");
+  const opcoes = require("../src/routes/options.routes.js");
+
+  const listaDePromocoes = await chamar(promocoes, { url: "/" });
+  assert.equal(listaDePromocoes.codigo, 200);
+
+  const listaDeOpcoes = await chamar(opcoes, { url: "/" });
+  assert.equal(listaDeOpcoes.codigo, 200);
 });
 
 test("index.js monta o router do painel, e monta DEPOIS dos que têm `:id`", () => {

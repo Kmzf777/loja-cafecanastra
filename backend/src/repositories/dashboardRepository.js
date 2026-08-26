@@ -120,15 +120,21 @@ class DashboardRepository {
     }
 
     const image = request.file ? request.file.path : null;
+    const produtoId = v4();
 
+    // A auditoria entra na MESMA transação da criação (ver services/adminLog):
+    // ou o produto e o registro de quem o criou existem juntos, ou nenhum dos
+    // dois. Antes disto, a criação saía commitada sozinha.
+    const client = await pool.connect();
     try {
-      await pool.query(
+      await client.query("BEGIN");
+      await client.query(
         `INSERT INTO canastra.produtos
            (produto_id, nome, tamanho, categoria, preco, imagem, destacado_em,
             quantidade, descricao, peso, largura, altura, comprimento, sku)
          VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10, $11, $12, $13)`,
         [
-          v4(),
+          produtoId,
           valores.name,
           valores.size,
           valores.category,
@@ -144,8 +150,26 @@ class DashboardRepository {
         ],
       );
 
+      await registrar(client, {
+        adminUserId: request.user?.userId ?? null,
+        acao: ACOES.PRODUTO_CRIADO,
+        entidade: ENTIDADES.PRODUTO,
+        entidadeId: produtoId,
+        // Criação tem só `depois`, e ele guarda o que a pessoa DECIDIU — não a
+        // linha inteira do banco: descrição longa e URL de imagem inflariam
+        // todo relatório sem responder nenhuma pergunta de gestão.
+        depois: {
+          nome: valores.name,
+          sku: valores.sku,
+          preco: valores.price,
+          quantidade: valores.quantity,
+        },
+      });
+
+      await client.query("COMMIT");
       response.status(201).json({ message: "Produto criado com sucesso!" });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       // `produtos_sku_idx` é único: SKU repetido é conflito do pedido, não
       // erro do servidor.
       if (err.code === "23505") {
@@ -157,6 +181,8 @@ class DashboardRepository {
       // ao navegador entrega o schema do banco a quem estiver olhando.
       console.error("createProduct error:", err);
       response.status(500).json({ message: "Erro ao criar o produto." });
+    } finally {
+      client.release();
     }
   }
 
@@ -294,18 +320,42 @@ class DashboardRepository {
         .json({ error: "Identificador de produto inválido." });
     }
 
+    const client = await pool.connect();
     try {
-      const resultado = await pool.query(
-        "DELETE FROM canastra.produtos WHERE produto_id = $1",
+      await client.query("BEGIN");
+
+      // `RETURNING` por NOME, nunca `*`: em `canastra.produtos` — a única
+      // relação do schema com privilégio de SELECT por COLUNA — o `*` alcança
+      // `custo` e responde 42501 até para a admin (0006). A lista explícita é
+      // também o que decide o que vai para o log.
+      const resultado = await client.query(
+        `DELETE FROM canastra.produtos WHERE produto_id = $1
+         RETURNING nome, sku, preco, quantidade`,
         [id],
       );
       if (resultado.rowCount === 0) {
+        await client.query("ROLLBACK");
         return response.status(404).json({ error: "Produto não encontrado." });
       }
+
+      // Remoção tem só `antes` — e é o único lugar onde o que o produto ERA
+      // ainda existe: depois do COMMIT, a linha não está em lugar nenhum.
+      await registrar(client, {
+        adminUserId: request.user?.userId ?? null,
+        acao: ACOES.PRODUTO_REMOVIDO,
+        entidade: ENTIDADES.PRODUTO,
+        entidadeId: id,
+        antes: resultado.rows[0],
+      });
+
+      await client.query("COMMIT");
       response.status(204).send();
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       console.error("deleteProduct error:", err);
       response.status(500).json({ message: "Erro ao deletar produto." });
+    } finally {
+      client.release();
     }
   }
 
@@ -344,13 +394,24 @@ class DashboardRepository {
         .json({ error: "Identificador de produto inválido." });
     }
 
+    const client = await pool.connect();
     try {
-      const existing = await pool.query(
-        `SELECT imagem, sku, peso, largura, altura, comprimento
-           FROM canastra.produtos WHERE produto_id = $1`,
+      await client.query("BEGIN");
+
+      // `nome`, `preco` e `quantidade` entram na leitura por causa do LOG: o
+      // `antes` de uma alteração de preço é a metade que responde "quem mudou o
+      // preço do micro-lote na sexta à noite, e de quanto para quanto?".
+      // A linha é travada porque o `antes` tem de ser o valor que ESTA edição
+      // substituiu — sem a trava, duas edições simultâneas gravariam dois logs
+      // dizendo que partiram do mesmo número.
+      const existing = await client.query(
+        `SELECT imagem, sku, peso, largura, altura, comprimento,
+                nome, preco, quantidade
+           FROM canastra.produtos WHERE produto_id = $1 FOR UPDATE`,
         [id],
       );
       if (!existing.rows.length) {
+        await client.query("ROLLBACK");
         return response.status(404).json({ error: "Produto não encontrado." });
       }
       const atual = existing.rows[0];
@@ -364,6 +425,7 @@ class DashboardRepository {
         length: Number(atual.comprimento),
       });
       if (erros.length) {
+        await client.query("ROLLBACK");
         return response.status(400).json({ message: erros.join(" ") });
       }
 
@@ -373,7 +435,7 @@ class DashboardRepository {
       // nem tem o campo.
       const novoSku = request.body.sku !== undefined ? valores.sku : atual.sku;
 
-      await pool.query(
+      await client.query(
         `UPDATE canastra.produtos
             SET nome = $1, tamanho = $2, categoria = $3, preco = $4, imagem = $5,
                 quantidade = $6, descricao = $7, peso = $8, largura = $9,
@@ -396,8 +458,32 @@ class DashboardRepository {
         ],
       );
 
+      await registrar(client, {
+        adminUserId: request.user?.userId ?? null,
+        acao: ACOES.PRODUTO_ALTERADO,
+        entidade: ENTIDADES.PRODUTO,
+        entidadeId: id,
+        // Os dois lados guardam o MESMO conjunto de campos, e só os que
+        // respondem pergunta de gestão: comparar `antes` com `depois` no
+        // relatório tem de ser uma leitura, não um diff de objeto grande.
+        antes: {
+          nome: atual.nome,
+          sku: atual.sku,
+          preco: Number(atual.preco),
+          quantidade: atual.quantidade,
+        },
+        depois: {
+          nome: valores.name,
+          sku: novoSku,
+          preco: valores.price,
+          quantidade: valores.quantity,
+        },
+      });
+
+      await client.query("COMMIT");
       response.status(200).json({ message: "Produto editado com sucesso!" });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       if (err.code === "23505") {
         return response
           .status(409)
@@ -405,6 +491,8 @@ class DashboardRepository {
       }
       console.error("editProduct error:", err);
       response.status(500).json({ message: "Erro ao atualizar produto!" });
+    } finally {
+      client.release();
     }
   }
 

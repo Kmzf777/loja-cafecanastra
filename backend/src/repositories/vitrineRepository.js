@@ -1,6 +1,7 @@
 "use strict";
 
 const pool = require("../pgPool");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * O conteúdo editável da vitrine: o herói da home e a barra de aviso.
@@ -291,6 +292,25 @@ async function gravarVitrine(req, res) {
     // acabou de gravar, sem depender de uma segunda ida ao servidor nem correr
     // com outra escrita simultânea.
     const estado = await buscarVitrine(cliente);
+
+    /**
+     * O log guarda o que foi TOCADO, e não o conteúdo inteiro da vitrine: um
+     * herói e três idiomas de texto por linha de auditoria fariam o relatório
+     * pesar mais que a tabela. As chaves alteradas respondem a pergunta que se
+     * faz ("quem trocou a barra de aviso na sexta?") e o estado atual está a
+     * um GET de distância.
+     */
+    await registrar(cliente, {
+      adminUserId: req.user?.userId ?? null,
+      acao: ACOES.VITRINE_ALTERADA,
+      entidade: ENTIDADES.VITRINE,
+      entidadeId: null,
+      depois: {
+        heroi: Object.keys(alteracoes.heroi),
+        textos: alteracoes.textos.map((t) => `${t.chave}.${t.locale}`),
+      },
+    });
+
     await cliente.query("COMMIT");
     return res.json(estado);
   } catch (erro) {

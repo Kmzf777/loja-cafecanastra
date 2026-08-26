@@ -4,6 +4,7 @@ const pool = require("../pgPool");
 const isAuthenticated = require("../middleware/isAuthenticated");
 const isAdmin = require("../middleware/isAdmin");
 const { ehUuid } = require("../utils/formatoUuid");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * O que sobrou da conta no Express: SO o que o GoTrue nao faz.
@@ -519,7 +520,12 @@ async function excluirClientePeloAdmin(
       `SELECT
          EXISTS (SELECT 1 FROM canastra.clientes WHERE user_id = $1) AS eh_cliente,
          EXISTS (SELECT 1 FROM canastra.admins   WHERE user_id = $1) AS eh_admin,
-         (SELECT count(*) FROM canastra.admins) AS total_admins`,
+         (SELECT count(*) FROM canastra.admins) AS total_admins,
+         -- Para a linha de auditoria: depois do DELETE, o nome não existe mais
+         -- em lugar nenhum, e "quem apagou quem?" sem o "quem" não responde
+         -- nada. O CPF e o telefone NÃO entram — o registro da exclusão não
+         -- pode ser a cópia que sobrou do dado que se apagou.
+         (SELECT nome FROM canastra.clientes WHERE user_id = $1) AS nome`,
       [id],
     );
 
@@ -581,6 +587,24 @@ async function excluirClientePeloAdmin(
     // 404 = a conta ja nao existe no GoTrue; a cascata ja levou clientes e
     // admins junto. O efeito pedido ja aconteceu.
     if (resposta.ok || resposta.status === 404) {
+      /**
+       * O REGISTRO VEM DEPOIS DA EXCLUSAO, e nao antes: registrar antes deixaria
+       * no log uma exclusao que o GoTrue pode ter recusado. O `antes` foi lido
+       * la em cima, quando a linha ainda existia — depois da cascata nao ha de
+       * onde tira-lo.
+       *
+       * Fora de transacao porque a exclusao acontece em OUTRO sistema (a Admin
+       * API do GoTrue): nao ha transacao a compartilhar. Uma falha aqui vira
+       * 500 com a conta ja apagada — o troco conhecido, e o lado seguro do erro
+       * (a exclusao e o efeito pedido; o log e a prestacao de contas dela).
+       */
+      await registrar(conexao, {
+        adminUserId: req.user?.userId ?? null,
+        acao: ACOES.CLIENTE_EXCLUIDO,
+        entidade: ENTIDADES.CLIENTE,
+        entidadeId: id,
+        antes: { nome: rows[0].nome ?? null, era_admin: rows[0].eh_admin },
+      });
       return res.status(200).json({ message: "Cliente excluído com sucesso." });
     }
 

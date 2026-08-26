@@ -230,12 +230,38 @@ test("estado: vocabulario fechado, e as linhas antigas nascem 'ativo'", async ()
  * Privilegio: quem le o bloco fiscal
  * ------------------------------------------------------------------------- */
 
-test("a vitrine anonima nao muda: a view publica continua com as mesmas 14 colunas", async () => {
+test("a vitrine anonima nao muda: a view publica so ganhou `estado`, e com GRANT", async () => {
+  /**
+   * ERAM 14 COLUNAS ATE A 0037, E VIRARAM 15 POR UM MOTIVO ESTRUTURAL, nao por
+   * alguem ter achado que `estado` era interessante de mostrar.
+   *
+   * Aquela migracao passou a filtrar `estado <> 'arquivado'` na view. Com
+   * `security_invoker = true` (0006), a view roda com os privilegios de QUEM
+   * CHAMA, e o Postgres confere privilegio de COLUNA sobre tudo que a consulta
+   * referencia — inclusive o que so aparece no WHERE. Sem `GRANT SELECT
+   * (estado)` a vitrine inteira responderia 42501; e uma vez que a coluna
+   * precisa do GRANT, projeta-la e o que mantem a invariante de 0006 que
+   * test/rls.test.js afirma: a lista publica de colunas de `produtos` e
+   * EXATAMENTE a projecao da view.
+   *
+   * O que este teste continua guardando e o mesmo de antes: coluna FISCAL
+   * nenhuma (ncm, cest, gtin, csosn, codigo_bling...) entrou na view. O bloco
+   * fiscal continua ilegivel pelo PostgREST — o teste seguinte mede isso.
+   */
   const { rows } = await bd.pool.query(
     `SELECT count(*)::int AS n FROM information_schema.columns
       WHERE table_schema = 'canastra' AND table_name = 'produtos_publicos'`,
   );
-  assert.equal(rows[0].n, 14, "coluna nova na view sem GRANT quebraria a vitrine com 42501");
+  assert.equal(rows[0].n, 15, "coluna nova na view sem GRANT quebraria a vitrine com 42501");
+
+  const { rows: fiscais } = await bd.pool.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'canastra' AND table_name = 'produtos_publicos'
+        AND column_name IN ('ncm','cest','gtin','gtin_embalagem','csosn',
+                            'cfop_padrao','origem_fiscal','tipo_item',
+                            'codigo_bling','custo')`,
+  );
+  assert.deepEqual(fiscais, [], "nada do bloco fiscal pode entrar na view publica");
 
   const publicos = await comoPapel(bd.pool, SESSAO_ANON, async (cliente) => {
     const { rows: r } = await cliente.query(

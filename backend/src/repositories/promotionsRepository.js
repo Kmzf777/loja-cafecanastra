@@ -7,6 +7,7 @@ const { v4: uuidv4 } = require("uuid");
 // segunda que carregava uma cópia literal da regex, e cópia divergindo é
 // questão de tempo, como `utils/formatoUuid.js` já explica.
 const { ehUuid } = require("../utils/formatoUuid");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * Promoções, contra `canastra.promocoes_legado`. O contrato HTTP segue o que o
@@ -90,39 +91,45 @@ class PromotionsRepository {
       end_date,
     } = request.body;
 
+    // As validações ficam FORA do try: nenhuma delas fala com o banco, e
+    // envolvê-las num catch de 500 confundiria "pedido errado" com "servidor
+    // quebrado" — a distinção que este arquivo inteiro persegue.
+    if (!title || !value || !type) {
+      return response
+        .status(400)
+        .json({ error: "Campos obrigatórios faltando." });
+    }
+
+    const erroDeDesconto = validarDesconto(type, value);
+    if (erroDeDesconto) {
+      return response.status(400).json({ error: erroDeDesconto });
+    }
+
+    const categoryFixed = applies_to === "category" ? category : null;
+    let productIdFixed = null;
+    if (applies_to === "product") {
+      // `ehUuid` já embute o `String(... || "")`, então `undefined`, `null` e
+      // `""` respondem false sem precisar do teste separado que estava aqui.
+      if (!ehUuid(product_id)) {
+        return response.status(400).json({
+          error:
+            "Para promoção por produto, você deve fornecer o ID (UUID) válido do produto.",
+        });
+      }
+      productIdFixed = product_id;
+    }
+
+    const promocaoId = uuidv4();
+    const client = await pool.connect();
     try {
-      if (!title || !value || !type) {
-        return response
-          .status(400)
-          .json({ error: "Campos obrigatórios faltando." });
-      }
-
-      const erroDeDesconto = validarDesconto(type, value);
-      if (erroDeDesconto) {
-        return response.status(400).json({ error: erroDeDesconto });
-      }
-
-      const categoryFixed = applies_to === "category" ? category : null;
-      let productIdFixed = null;
-      if (applies_to === "product") {
-        // `ehUuid` já embute o `String(... || "")`, então `undefined`, `null` e
-        // `""` respondem false sem precisar do teste separado que estava aqui.
-        if (!ehUuid(product_id)) {
-          return response.status(400).json({
-            error:
-              "Para promoção por produto, você deve fornecer o ID (UUID) válido do produto.",
-          });
-        }
-        productIdFixed = product_id;
-      }
-
-      await pool.query(
+      await client.query("BEGIN");
+      await client.query(
         `INSERT INTO canastra.promocoes_legado (
            id, titulo, descricao, tipo, valor, aplica_a,
            categoria, produto_id, inicio_em, fim_em, ativa
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [
-          uuidv4(),
+          promocaoId,
           title,
           description,
           type,
@@ -135,10 +142,32 @@ class PromotionsRepository {
           true,
         ],
       );
+
+      // "Quem aprovou este desconto de 50%?" é a primeira das três perguntas
+      // que a 0035 diz não terem resposta hoje. Esta linha é a resposta.
+      await registrar(client, {
+        adminUserId: request.user?.userId ?? null,
+        acao: ACOES.PROMOCAO_CRIADA,
+        entidade: ENTIDADES.PROMOCAO,
+        entidadeId: promocaoId,
+        depois: {
+          titulo: title,
+          tipo: type,
+          valor: value,
+          aplica_a: applies_to,
+          inicio_em: dataOuNull(start_date),
+          fim_em: dataOuNull(end_date),
+        },
+      });
+
+      await client.query("COMMIT");
       response.status(201).json({ message: "Promoção criada com sucesso." });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       console.error("createPromotion:", err);
       response.status(500).json({ error: "Erro ao criar promoção." });
+    } finally {
+      client.release();
     }
   }
 
@@ -227,16 +256,24 @@ class PromotionsRepository {
         .json({ error: "Nenhum campo para atualizar." });
     }
 
+    const client = await pool.connect();
     try {
+      await client.query("BEGIN");
+
       // A validação de desconto precisa do PAR completo (tipo e valor): editar
       // só o `value` de uma promoção percentual tem de continuar barrando 150%,
       // e o tipo, nesse PUT, só existe no banco. Por isso a leitura vem antes —
       // ela também é a que distingue "id inexistente" de "nada mudou".
-      const atual = await pool.query(
-        "SELECT tipo, valor FROM canastra.promocoes_legado WHERE id = $1",
+      //
+      // `titulo` e `ativa` entram na leitura por causa do LOG: o `antes` de uma
+      // promoção desligada é o que responde "quem tirou esta campanha do ar?".
+      const atual = await client.query(
+        `SELECT titulo, tipo, valor, ativa FROM canastra.promocoes_legado
+          WHERE id = $1 FOR UPDATE`,
         [id],
       );
       if (!atual.rows.length) {
+        await client.query("ROLLBACK");
         return response.status(404).json({ error: "Promoção não encontrada." });
       }
 
@@ -250,27 +287,43 @@ class PromotionsRepository {
           veio("value") ? corpo.value : atual.rows[0].valor,
         );
         if (erroDeDesconto) {
+          await client.query("ROLLBACK");
           return response.status(400).json({ error: erroDeDesconto });
         }
       }
 
       values.push(id);
-      const resultado = await pool.query(
+      const resultado = await client.query(
         `UPDATE canastra.promocoes_legado SET ${atribuicoes.join(", ")}
-          WHERE id = $${values.length}`,
+          WHERE id = $${values.length}
+        RETURNING titulo, tipo, valor, ativa`,
         values,
       );
 
       // A linha existia na leitura acima e sumiu antes do UPDATE: 404 também,
       // porque "atualizada" continuaria sendo mentira.
       if (resultado.rowCount === 0) {
+        await client.query("ROLLBACK");
         return response.status(404).json({ error: "Promoção não encontrada." });
       }
 
+      await registrar(client, {
+        adminUserId: request.user?.userId ?? null,
+        acao: ACOES.PROMOCAO_ALTERADA,
+        entidade: ENTIDADES.PROMOCAO,
+        entidadeId: id,
+        antes: atual.rows[0],
+        depois: resultado.rows[0],
+      });
+
+      await client.query("COMMIT");
       response.status(200).json({ message: "Promoção atualizada." });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       console.error("updatePromotion:", err);
       response.status(500).json({ error: "Erro ao atualizar promoção." });
+    } finally {
+      client.release();
     }
   }
 

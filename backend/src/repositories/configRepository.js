@@ -1,4 +1,5 @@
 const pool = require("../pgPool");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * A linha única de `canastra.config_loja`, no contrato que o painel legado já
@@ -82,13 +83,27 @@ class ConfigRepository {
       }
     }
 
+    const client = await pool.connect();
     try {
+      await client.query("BEGIN");
+
       // Garante a linha 1 antes do UPDATE: numa instalação em que o seed ainda
       // não rodou, o UPDATE da versão antiga era um no-op silencioso e o admin
       // "salvava" configurações que não iam a lugar nenhum.
-      await pool.query(
+      await client.query(
         "INSERT INTO canastra.config_loja (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
       );
+
+      // O `antes` da configuração da LOJA INTEIRA. É a linha que responde "quem
+      // desligou o frete grátis?" — a pergunta que a 0035 nomeia, e cuja
+      // resposta hoje não existe em lugar nenhum. Travada, para o `antes` ser o
+      // valor que ESTE salvamento substituiu.
+      const anterior = (
+        await client.query(
+          `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.config_loja
+            WHERE id = 1 FOR UPDATE`,
+        )
+      ).rows[0];
 
       // CADA campo é condicional, não só os banners: um PUT parcial (o painel
       // salvando só o piso do frete grátis, por exemplo) não pode NULAR o
@@ -108,17 +123,59 @@ class ConfigRepository {
       atribui("banner_mobile", bannerMobile);
       atribui("frete_gratis_minimo_centavos", freteGratis);
 
-      await pool.query(
-        `UPDATE canastra.config_loja SET ${atribuicoes.join(", ")} WHERE id = 1`,
-        values,
-      );
+      const atualizado = (
+        await client.query(
+          `UPDATE canastra.config_loja SET ${atribuicoes.join(", ")} WHERE id = 1
+         RETURNING ${COLUNAS_DO_CONTRATO}`,
+          values,
+        )
+      ).rows[0];
 
+      /**
+       * O LOG GUARDA SÓ O QUE MUDOU DE FATO, dos dois lados.
+       *
+       * Este PUT é parcial de um jeito peculiar (campo em branco é ausência,
+       * ver acima), então gravar o corpo recebido registraria intenção e não
+       * efeito. Comparar a linha antes com a linha depois é o que responde a
+       * pergunta que faz esta rota valer um log: "quem zerou o piso do frete
+       * grátis?" — um `0` ali libera frete grátis para a loja inteira, e hoje
+       * não há em lugar nenhum um registro de quem o escreveu.
+       */
+      const mudou = {};
+      for (const coluna of Object.keys(atualizado)) {
+        // `updated_at` é o alias de `atualizado_em`, que muda em TODO
+        // salvamento por construção — incluí-lo faria todo PUT parecer uma
+        // alteração, inclusive o que não mudou nada.
+        if (coluna === "updated_at" || coluna === "id") continue;
+        if (String(anterior?.[coluna] ?? "") !== String(atualizado[coluna] ?? "")) {
+          mudou[coluna] = true;
+        }
+      }
+      const campos = Object.keys(mudou);
+
+      if (campos.length) {
+        await registrar(client, {
+          adminUserId: req.user?.userId ?? null,
+          acao: ACOES.CONFIG_ALTERADA,
+          entidade: ENTIDADES.CONFIG_LOJA,
+          // A linha 1, sempre — `entidade_id` é `text` justamente porque nem
+          // toda entidade tem uuid, e `config_loja` é o exemplo que a 0035 dá.
+          entidadeId: "1",
+          antes: Object.fromEntries(campos.map((c) => [c, anterior?.[c] ?? null])),
+          depois: Object.fromEntries(campos.map((c) => [c, atualizado[c]])),
+        });
+      }
+
+      await client.query("COMMIT");
       res.json({ message: "Configurações atualizadas!" });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       // O objeto de erro do pg carrega SQL e nome de coluna; ao navegador vai
       // só a frase, o resto fica no log.
       console.error("updateConfig:", err);
       res.status(500).json({ error: "Erro ao atualizar configs" });
+    } finally {
+      client.release();
     }
   }
 }

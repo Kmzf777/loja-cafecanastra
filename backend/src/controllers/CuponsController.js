@@ -8,6 +8,7 @@ const { precoComPromocao, somarCentavos } = require("../utils/preco");
 // identidade que faz a tela e a cobrança não discordarem sobre um código.
 const { calcularDescontos } = require("../utils/motor");
 const motorRepository = require("../repositories/motorRepository");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 const promotionsRepo = new PromotionsRepository();
 
@@ -417,16 +418,43 @@ class CuponsController {
       });
       if (problema) return res.status(400).json({ error: problema });
 
-      const cupom = await cuponsRepository.criar({
-        codigo,
-        tipo: corpo.tipo,
-        valor: Number(corpo.valor),
-        descricao: corpo.descricao || null,
-        minimoCentavos,
-        limiteUsos,
-        inicioEm: dataOuNull(corpo.inicio_em),
-        fimEm: dataOuNull(corpo.fim_em),
-      });
+      // O cupom e o registro de quem o criou nascem na MESMA transação: um
+      // código de desconto é dinheiro, e "quem criou o CAFE50?" não pode
+      // depender de um segundo INSERT que a rede derruba no meio.
+      const client = await pool.connect();
+      let cupom;
+      try {
+        await client.query("BEGIN");
+        cupom = await cuponsRepository.criar({
+          codigo,
+          tipo: corpo.tipo,
+          valor: Number(corpo.valor),
+          descricao: corpo.descricao || null,
+          minimoCentavos,
+          limiteUsos,
+          inicioEm: dataOuNull(corpo.inicio_em),
+          fimEm: dataOuNull(corpo.fim_em),
+          client,
+        });
+        await registrar(client, {
+          adminUserId: req.user?.userId ?? null,
+          acao: ACOES.CUPOM_CRIADO,
+          entidade: ENTIDADES.CUPOM,
+          entidadeId: cupom.id,
+          depois: {
+            codigo: cupom.codigo,
+            tipo: cupom.tipo,
+            valor: cupom.valor,
+            limite_usos: cupom.limite_usos,
+          },
+        });
+        await client.query("COMMIT");
+      } catch (erro) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw erro;
+      } finally {
+        client.release();
+      }
       return res.status(201).json(cupom);
     } catch (erro) {
       if (erro.code === "23505") {
@@ -502,7 +530,32 @@ class CuponsController {
       });
       if (problema) return res.status(400).json({ error: problema });
 
-      const atualizado = await cuponsRepository.atualizar(id, campos);
+      const client = await pool.connect();
+      let atualizado;
+      try {
+        await client.query("BEGIN");
+        atualizado = await cuponsRepository.atualizar(id, campos, client);
+        await registrar(client, {
+          adminUserId: req.user?.userId ?? null,
+          acao: ACOES.CUPOM_ALTERADO,
+          entidade: ENTIDADES.CUPOM,
+          entidadeId: id,
+          // Os dois lados guardam SÓ os campos tocados: um PUT parcial que
+          // desliga o cupom não deve produzir um diff de linha inteira.
+          antes: Object.fromEntries(
+            Object.keys(campos).map((chave) => [chave, existente[chave] ?? null]),
+          ),
+          depois: Object.fromEntries(
+            Object.keys(campos).map((chave) => [chave, atualizado[chave] ?? null]),
+          ),
+        });
+        await client.query("COMMIT");
+      } catch (erro) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw erro;
+      } finally {
+        client.release();
+      }
       return res.status(200).json(atualizado);
     } catch (erro) {
       if (erro.code === "23505") {
