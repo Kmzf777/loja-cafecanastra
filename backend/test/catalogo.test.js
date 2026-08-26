@@ -390,10 +390,25 @@ test("a vitrine deixa de ver o produto ARQUIVADO", async () => {
 
   assert.ok(!nomes.includes("Canastra Aposentado"), "arquivado não pode aparecer");
   assert.ok(nomes.includes("Canastra Classico"), "o catálogo ativo continua de pé");
-  // `<> 'arquivado'` e NÃO `= 'ativo'`: o rascunho continua visível, e isso é
-  // uma decisão de produto que a tela da Onda 5 precisa conhecer — se ela
-  // salvar rascunho, o rascunho aparece na loja.
-  assert.ok(nomes.includes("Canastra Em Estudo"));
+
+  /**
+   * O RASCUNHO NÃO VAI PARA A LOJA — e a inversão é da 0038.
+   *
+   * A 0037 recortou por `<> 'arquivado'`, o que deixava 'rascunho' visível, e
+   * registrou no arquivo que trocar por `= 'ativo'` seria uma linha. Enquanto
+   * nada escrevia 'rascunho' os dois predicados eram o mesmo no-op; a tela de
+   * produto acaba com isso, e com o predicado antigo o rascunho iria para a
+   * loja NO PRIMEIRO SALVAMENTO — café sem foto, sem descrição e com preço
+   * provisório, publicado por quem achava que estava rascunhando.
+   *
+   * `= 'ativo'` é lista BRANCA, e é essa a defesa: um estado novo no CHECK
+   * amanhã nasce invisível. Com `<> 'arquivado'` ele nasceria PÚBLICO por
+   * omissão, e a falha seria por esquecimento — a que ninguém revisa.
+   */
+  assert.ok(
+    !nomes.includes("Canastra Em Estudo"),
+    "rascunho não pode aparecer na vitrine",
+  );
 });
 
 test("o SEGUNDO leitor continua resolvendo o SKU do produto arquivado", async () => {
