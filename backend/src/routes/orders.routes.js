@@ -44,4 +44,23 @@ paymentRoutes.put(
   OrderController.updateStatus
 );
 
+/**
+ * O detalhe do pedido para o painel — ACRESCENTADA NO FIM, e o lugar e a metade
+ * do trabalho.
+ *
+ * `/admin/orders/export` esta registrada LA EM CIMA e precisa continuar la: o
+ * Express casa na ordem de registro, e "export" e um id perfeitamente valido
+ * para esta rota. Invertidos, o botao de exportar responderia
+ * "Identificador de pedido invalido" e ninguem procuraria a causa numa linha
+ * que nao mudou. Mesma familia dos outros dois pares que este repositorio
+ * carrega: `/dashboard/summary` antes de `/dashboard/:id` e `/users/me` antes
+ * de `/users/:id`.
+ */
+paymentRoutes.get(
+  "/admin/orders/:id",
+  isAuthenticated,
+  isAdmin,
+  OrderController.getOrderByIdAdmin
+);
+
 module.exports = paymentRoutes;

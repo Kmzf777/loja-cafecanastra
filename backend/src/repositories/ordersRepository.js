@@ -45,6 +45,93 @@ const COLUNAS_DO_CONTRATO = `
   atualizado_em      AS updated_at
 `;
 
+/**
+ * A projeção do PAINEL — a linha da listagem de `/admin/orders` e, desde a
+ * Onda 4, também a de `/admin/orders/:id`.
+ *
+ * ESTÁ NUMA CONSTANTE PORQUE OS DOIS TÊM DE SER IGUAIS. O detalhe nasceu para
+ * dar deep-link à `/dashboard/pedidos/[id]`, e uma tela que mostra MENOS quando
+ * a pessoa recarrega a página do que quando ela clica na linha é pior que não
+ * ter deep-link nenhum: o gestor volta para a listagem para ver o cliente. Duas
+ * listas de colunas divergiriam na primeira coluna nova.
+ *
+ * Os campos do Bling e os do cliente continuam FORA de `COLUNAS_DO_CONTRATO`
+ * pelo motivo escrito lá: aquele é o contrato do CLIENTE, e nada na vitrine
+ * mostra ERP nem o CPF de quem comprou.
+ */
+const COLUNAS_DO_PAINEL = `
+  p.pedido_id        AS order_id,
+  p.total            AS total_amount,
+  p.status,
+  p.criado_em        AS created_at,
+  p.metodo_pagamento AS payment_method,
+  p.itens            AS items,
+  p.endereco_json    AS address,
+  p.frete            AS shipping_cost,
+  p.metodo_envio     AS shipping_method,
+  p.codigo_rastreio  AS tracking_code,
+  p.cupom_codigo     AS coupon_code,
+  p.desconto         AS discount,
+  p.bling_id,
+  p.bling_situacao,
+  p.bling_sincronizado_em,
+  p.nfe_numero,
+  p.nfe_chave,
+  p.nfe_url,
+  COALESCE(c.nome, 'Cliente removido') AS user_name,
+  COALESCE(u.email, '—')               AS user_email,
+  c.cpf                                AS user_cpf
+`;
+
+/**
+ * O join que `COLUNAS_DO_PAINEL` pressupõe.
+ *
+ * LEFT JOIN, não INNER — a lição é a mesma desde a versão antiga: `user_id`
+ * aceita NULL (cliente apagado, 0005 preserva a venda) e um pedido órfão sumir
+ * da tela do admin seria faturamento sumindo junto. O e-mail vem de
+ * `auth.users`: é o GoTrue quem o guarda desde a F2, e o pool conecta como dono
+ * do banco, que lê `auth` sem cerimônia.
+ */
+const DE_PEDIDOS_COM_CLIENTE = `
+  FROM canastra.pedidos p
+  LEFT JOIN canastra.clientes c ON c.user_id = p.user_id
+  LEFT JOIN auth.users u        ON u.id      = p.user_id
+`;
+
+/**
+ * O RECORTE DE PERÍODO, EM UM LUGAR SÓ — a listagem filtrada e a exportação
+ * medem o mesmo dia.
+ *
+ * `ate` é INCLUSIVO no dia: quem pede "até 2026-08-20" espera os pedidos
+ * daquele dia dentro, por isso `< ate + 1 dia` e não `<= ate` (que cortaria
+ * tudo depois da meia-noite).
+ *
+ * E O DIA É O DE SÃO PAULO, não o de UTC, porque é o fuso em que a tela e o CSV
+ * imprimem a data (`csvDePedidos.dataBr`). Sem o `AT TIME ZONE`, um pedido das
+ * 23h de 20/08 (02h de 21/08 em UTC) apareceria no relatório "até 20/08" com
+ * data 20/08... ou ficaria de fora dele, dependendo do fuso do servidor — as
+ * duas metades do relatório discordando do próprio título. A expressão continua
+ * sargável: o índice em `criado_em` compara contra uma constante calculada uma
+ * vez.
+ *
+ * O formato de `de`/`ate` (YYYY-MM-DD) é validado no controller; o cast `::date`
+ * é a última linha de defesa.
+ */
+function filtrosDePeriodo({ de, ate }, filtros, values) {
+  if (de) {
+    values.push(de);
+    filtros.push(
+      `p.criado_em >= ($${values.length}::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
+    );
+  }
+  if (ate) {
+    values.push(ate);
+    filtros.push(
+      `p.criado_em < ($${values.length}::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
+    );
+  }
+}
+
 class OrderRepository {
   /**
    * Cria o pedido. `chaveIdempotencia` é obrigatória por desenho: o índice
@@ -177,75 +264,114 @@ class OrderRepository {
     return rows;
   }
 
-  async getAllOrders(page = 1, limit = 10) {
-    const countRes = await pool.query("SELECT COUNT(*) FROM canastra.pedidos");
+  /**
+   * A listagem do painel, FILTRADA NO BANCO.
+   *
+   * Até a Onda 4 esta rota aceitava só `page` e `limit`, e a tela filtrava o
+   * que tinha em memória: uma página de 100 linhas com uma caixa de "status" em
+   * cima MENTE duas vezes — esconde o pedido que casa e está na página 3, e
+   * mostra um `total` que é o total geral, oferecendo páginas vazias. O filtro
+   * tem de acontecer onde estão todas as linhas.
+   *
+   * OS CAMPOS DO BLING (0012) ENTRAM AQUI, E SÓ AQUI (ver `COLUNAS_DO_PAINEL`):
+   * a tela de Bling e o modal de detalhe leem a linha DESTA listagem — é ela
+   * que precisa dizer se o pedido já foi ao ERP, em que situação está lá e se a
+   * nota saiu. Sem isso, a fila do painel faria uma ida por pedido só para
+   * descobrir o que já está na mesma linha. `nfe_id` e `bling_claim_em` ficam
+   * de fora: são mecânica interna da retentativa e do claim de idempotência,
+   * não informação de gestão.
+   *
+   * @param {object} [filtro] `status` (lista já validada pelo controller),
+   *   `de`/`ate` (YYYY-MM-DD) e `q` (texto livre).
+   */
+  async getAllOrders(page = 1, limit = 10, filtro = {}) {
+    const filtros = [];
+    const values = [];
+
+    if (Array.isArray(filtro.status) && filtro.status.length) {
+      values.push(filtro.status);
+      filtros.push(`p.status = ANY($${values.length})`);
+    }
+    filtrosDePeriodo(filtro, filtros, values);
+
+    /**
+     * A BUSCA OLHA O QUE O GESTOR TEM NA MÃO quando alguém liga: o nome que a
+     * pessoa disse, o e-mail do pedido de confirmação, o CPF da nota e o número
+     * do pedido colado do e-mail. Os quatro num `OR` só, e o conjunto todo
+     * entre parênteses — sem eles, o `OR` se espalharia sobre o `AND` do status
+     * e a busca devolveria a base inteira com um filtro aplicado pela metade.
+     */
+    const q = String(filtro.q || "").trim();
+    if (q) {
+      values.push(`%${q}%`);
+      const i = values.length;
+      filtros.push(
+        `(c.nome ILIKE $${i} OR u.email ILIKE $${i} OR c.cpf ILIKE $${i}
+          OR p.pedido_id::text ILIKE $${i})`,
+      );
+    }
+
+    const where = filtros.length ? `WHERE ${filtros.join(" AND ")}` : "";
+
+    // A CONTAGEM USA O MESMO WHERE E O MESMO JOIN. Contar sem o join daria um
+    // total maior que a lista sempre que a busca casasse por cliente.
+    const countRes = await pool.query(
+      `SELECT COUNT(*) ${DE_PEDIDOS_COM_CLIENTE} ${where}`,
+      values,
+    );
     const total = parseInt(countRes.rows[0].count, 10);
     const totalPages = Math.ceil(total / limit);
     const offset = (page - 1) * limit;
 
-    /**
-     * LEFT JOIN, não INNER — a lição continua a mesma da versão antiga:
-     * `user_id` aceita NULL (cliente apagado, 0005 preserva a venda) e um
-     * pedido órfão sumir da tela do admin seria faturamento sumindo junto.
-     *
-     * O e-mail vem de `auth.users`: é o GoTrue quem o guarda desde a F2. O
-     * pool conecta como dono do banco, que lê `auth` sem cerimônia.
-     *
-     * OS CAMPOS DO BLING (0012) ENTRAM AQUI, E SÓ AQUI. A tela de Bling do
-     * painel e o modal de detalhe de Pedidos leem a linha DESTA listagem —
-     * é ela que precisa dizer se o pedido já foi ao ERP, em que situação
-     * está lá e se a nota saiu. Sem isso, a fila do painel teria de fazer
-     * uma ida por pedido só para descobrir o que já está na mesma linha.
-     *
-     * Os nomes saem SEM alias de propósito: `bling_id`, `bling_situacao` e
-     * `nfe_*` são identificadores de OUTRO sistema — não têm tradução para
-     * o vocabulário da loja, e são exatamente as chaves que as rotas de
-     * `/bling` já devolvem no `pedido` da resposta (`COLUNAS_COM_BLING` em
-     * services/blingPedidos.js). Iguais dos dois lados, o painel mescla a
-     * resposta de uma ação na linha da lista sem mapa de conversão.
-     *
-     * `nfe_id` e `bling_claim_em` ficam de fora: são mecânica interna da
-     * retentativa e do claim de idempotência, não informação de gestão —
-     * quem os lê é o serviço, que consulta a tabela direto.
-     *
-     * `COLUNAS_DO_CONTRATO` (o detalhe de `/my-orders/:id` e o que o
-     * checkout devolve) NÃO ganhou os campos: aquele contrato é do CLIENTE,
-     * e nada na vitrine mostra ERP. Um dia que a vitrine queira exibir o
-     * DANFE ao comprador, entra lá — como decisão de produto, não como
-     * efeito colateral desta tela.
-     */
     const { rows } = await pool.query(
-      `SELECT
-         p.pedido_id        AS order_id,
-         p.total            AS total_amount,
-         p.status,
-         p.criado_em        AS created_at,
-         p.metodo_pagamento AS payment_method,
-         p.itens            AS items,
-         p.endereco_json    AS address,
-         p.frete            AS shipping_cost,
-         p.metodo_envio     AS shipping_method,
-         p.codigo_rastreio  AS tracking_code,
-         p.cupom_codigo     AS coupon_code,
-         p.desconto         AS discount,
-         p.bling_id,
-         p.bling_situacao,
-         p.bling_sincronizado_em,
-         p.nfe_numero,
-         p.nfe_chave,
-         p.nfe_url,
-         COALESCE(c.nome, 'Cliente removido') AS user_name,
-         COALESCE(u.email, '—')               AS user_email,
-         c.cpf                                AS user_cpf
-       FROM canastra.pedidos p
-       LEFT JOIN canastra.clientes c ON c.user_id = p.user_id
-       LEFT JOIN auth.users u        ON u.id      = p.user_id
+      `SELECT ${COLUNAS_DO_PAINEL}
+       ${DE_PEDIDOS_COM_CLIENTE}
+       ${where}
        ORDER BY p.criado_em DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset],
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, limit, offset],
     );
 
     return { data: rows, total, totalPages, page };
+  }
+
+  /**
+   * UM pedido, na projeção do painel — o que `GET /admin/orders/:id` devolve.
+   *
+   * Existe para a página `/dashboard/pedidos/[id]` renderizada no servidor: ali
+   * não há lista em memória de onde tirar a linha, e sem esta consulta o
+   * detalhe só existia como um modal aberto a partir da listagem.
+   */
+  async getOrderForAdmin(orderId, client = pool) {
+    const { rows } = await client.query(
+      `SELECT ${COLUNAS_DO_PAINEL}
+       ${DE_PEDIDOS_COM_CLIENTE}
+       WHERE p.pedido_id = $1::uuid`,
+      [orderId],
+    );
+    return rows[0];
+  }
+
+  /**
+   * QUANTAS linhas a exportação alcançaria — a pergunta que o CSV passou a
+   * fazer ANTES de montar o arquivo (Onda 4).
+   *
+   * Serve a duas recusas que só existem juntas: o teto de linhas e a
+   * confirmação de "a base inteira". Sem contar antes, a única forma de saber
+   * que a exportação era grande demais seria já ter carregado tudo na memória
+   * do processo — com CPF e e-mail dentro.
+   */
+  async contarPedidosParaExport({ de, ate } = {}) {
+    const filtros = [];
+    const values = [];
+    filtrosDePeriodo({ de, ate }, filtros, values);
+    const where = filtros.length ? `WHERE ${filtros.join(" AND ")}` : "";
+
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) FROM canastra.pedidos p ${where}`,
+      values,
+    );
+    return parseInt(rows[0].count, 10);
   }
 
   async getOrderById(orderId, client = pool) {
@@ -267,39 +393,17 @@ class OrderRepository {
   }
 
   /**
-   * Todos os pedidos do período, SEM paginação, para o CSV do admin.
+   * Todos os pedidos do período, SEM paginação, para o CSV do admin. A ordem é
+   * cronológica crescente porque é assim que uma planilha de conferência se lê.
    *
-   * `ate` é INCLUSIVO no dia: o gestor que pede "até 2026-08-20" espera os
-   * pedidos daquele dia dentro — por isso `< ate + 1 dia`, e não `<= ate`
-   * (que cortaria tudo depois da meia-noite). A ordem é cronológica
-   * crescente porque é assim que uma planilha de conferência se lê.
-   *
-   * O DIA É O DE SÃO PAULO, não o de UTC — porque é o fuso em que o CSV
-   * imprime a coluna `data` (csvDePedidos.dataBr). Sem o `AT TIME ZONE`,
-   * um pedido de 23h de 20/08 (02h de 21/08 em UTC) apareceria no arquivo
-   * "até 20/08" com data 20/08... ou ficaria de fora dele, dependendo do
-   * fuso do servidor — as duas metades do relatório discordando do próprio
-   * título. A expressão continua sargável: o índice em `criado_em` compara
-   * contra uma constante calculada uma vez.
-   *
-   * O formato de `de`/`ate` (YYYY-MM-DD) é validado no controller; aqui o
-   * cast `::date` é a última linha de defesa.
+   * O recorte de período é o `filtrosDePeriodo` compartilhado com a listagem —
+   * o dia de São Paulo, inclusivo no fim. Duas cópias divergindo fariam a tela
+   * e o arquivo discordarem sobre o mesmo "de/até".
    */
   async getOrdersForExport({ de, ate } = {}) {
     const filtros = [];
     const values = [];
-    if (de) {
-      values.push(de);
-      filtros.push(
-        `p.criado_em >= ($${values.length}::date)::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
-      );
-    }
-    if (ate) {
-      values.push(ate);
-      filtros.push(
-        `p.criado_em < ($${values.length}::date + 1)::timestamp AT TIME ZONE 'America/Sao_Paulo'`,
-      );
-    }
+    filtrosDePeriodo({ de, ate }, filtros, values);
     const where = filtros.length ? `WHERE ${filtros.join(" AND ")}` : "";
 
     const { rows } = await pool.query(

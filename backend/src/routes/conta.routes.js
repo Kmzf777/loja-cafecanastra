@@ -418,10 +418,39 @@ async function listarClientes(req, res, { conexao = pool } = {}) {
   const limit = Math.min(100, Math.max(1, limitBruto));
   const offset = (page - 1) * limit;
 
+  /**
+   * A BUSCA, E ELA E O QUE FAZ ESTA TELA PARAR DE MENTIR (Onda 4).
+   *
+   * Ate aqui a rota aceitava so `page` e `limit`, e a tela filtrava o que tinha
+   * carregado: uma caixa de busca sobre uma pagina de 100 linhas esconde o
+   * cliente que casa e esta na pagina 3, e mostra um `total` que e o total
+   * geral. O filtro tem de acontecer onde estao todas as linhas.
+   *
+   * Os quatro campos sao o que o gestor tem na mao quando alguem liga: o nome
+   * que a pessoa disse, o e-mail com que ela comprou, o telefone do WhatsApp e
+   * o CPF da nota. O `ILIKE` cobre o comeco, o meio e a caixa trocada.
+   */
+  const q = String(req.query.q || "").trim();
+  const filtro = q
+    ? `WHERE (c.nome ILIKE $1 OR u.email ILIKE $1 OR c.telefone ILIKE $1
+              OR c.cpf ILIKE $1)`
+    : "";
+  const valores = q ? [`%${q}%`] : [];
+
   try {
+    // A CONTAGEM USA O MESMO WHERE E O MESMO JOIN da listagem — contar em
+    // `clientes` cru daria um total maior que a lista sempre que a busca
+    // casasse por e-mail, e a paginacao ofereceria paginas vazias.
     const total = Number(
-      (await conexao.query("SELECT count(*) FROM canastra.clientes")).rows[0]
-        .count,
+      (
+        await conexao.query(
+          `SELECT count(*)
+             FROM canastra.clientes c
+             LEFT JOIN auth.users u ON u.id = c.user_id
+             ${filtro}`,
+          valores,
+        )
+      ).rows[0].count,
     );
     const totalPages = Math.ceil(total / limit);
 
@@ -436,9 +465,10 @@ async function listarClientes(req, res, { conexao = pool } = {}) {
            WHERE p.user_id = c.user_id) AS purchases
        FROM canastra.clientes c
        LEFT JOIN auth.users u ON u.id = c.user_id
+       ${filtro}
        ORDER BY c.criado_em DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset],
+       LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,
+      [...valores, limit, offset],
     );
 
     return res.json({ users: rows, total, totalPages, page });
