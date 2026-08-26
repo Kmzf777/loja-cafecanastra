@@ -18,6 +18,7 @@ const { aplicarMigracoes } = require("../db/migrar.js");
 let bd;
 let ConfigRepository;
 let PromotionsRepository;
+let DashboardRepository;
 
 /** Dublê de `res` no padrão de f4_repositorios.test.js, com send() para o 204. */
 function respostaFalsa() {
@@ -50,6 +51,7 @@ before(async () => {
 
   ConfigRepository = require("../src/repositories/configRepository.js");
   PromotionsRepository = require("../src/repositories/promotionsRepository.js");
+  DashboardRepository = require("../src/repositories/dashboardRepository.js");
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -312,4 +314,160 @@ test("promoções: o teto de 90% vale mesmo quando o PUT manda só o valor", asy
     [antes.id],
   );
   assert.equal(Number(rows[0].valor), 10);
+});
+
+/* --------------------------------------------------------------------------
+ * PUT /dashboard/:id — peso e dimensões sobrevivem à edição
+ * -------------------------------------------------------------------------- */
+
+/** Cria um produto e devolve a linha crua do banco. */
+async function produtoCriado(repo, body) {
+  const res = respostaFalsa();
+  await repo.createProduct({ body, file: undefined }, res);
+  assert.equal(res.codigo, 201, JSON.stringify(res.corpo));
+
+  const { rows } = await bd.pool.query(
+    "SELECT * FROM canastra.produtos WHERE sku = $1",
+    [body.sku],
+  );
+  return rows[0];
+}
+
+test("produto: criar sem peso usa o padrão da caixa (0,3 kg / 20 / 5 / 20)", async () => {
+  const repo = new DashboardRepository();
+  const criado = await produtoCriado(repo, {
+    name: "Canastra Clássico 250g",
+    price: 42.9,
+    quantity: 10,
+    sku: "MEDIDA-PADRAO",
+  });
+
+  // Na CRIAÇÃO não há valor anterior a preservar: o padrão é o que existe.
+  assert.equal(Number(criado.peso), 0.3);
+  assert.equal(Number(criado.largura), 20);
+  assert.equal(Number(criado.altura), 5);
+  assert.equal(Number(criado.comprimento), 20);
+});
+
+test("produto: editar só o preço MANTÉM o peso de 1,2 kg", async () => {
+  const repo = new DashboardRepository();
+  const criado = await produtoCriado(repo, {
+    name: "Kit Canastra 4x250g",
+    price: 159.9,
+    quantity: 5,
+    sku: "MEDIDA-KIT",
+    weight: 1.2,
+    width: 30,
+    height: 12,
+    length: 30,
+  });
+  assert.equal(Number(criado.peso), 1.2);
+
+  // O formulário do painel manda nome/preço/estoque e NENHUM campo de medida.
+  const res = respostaFalsa();
+  await repo.editProduct(
+    {
+      params: { id: criado.produto_id },
+      body: { name: "Kit Canastra 4x250g", price: 149.9, quantity: 5 },
+      file: undefined,
+    },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+
+  const { rows } = await bd.pool.query(
+    "SELECT * FROM canastra.produtos WHERE produto_id = $1",
+    [criado.produto_id],
+  );
+  assert.equal(Number(rows[0].preco), 149.9, "o preço mudou, que era o pedido");
+  assert.equal(
+    Number(rows[0].peso),
+    1.2,
+    "corrigir o preço não pode devolver a caixa ao padrão: a loja passaria a cotar frete errado sem sinal na tela",
+  );
+  assert.equal(Number(rows[0].largura), 30);
+  assert.equal(Number(rows[0].altura), 12);
+  assert.equal(Number(rows[0].comprimento), 30);
+});
+
+test('produto: a string "undefined" no peso MANTÉM o valor atual, não vira padrão', async () => {
+  const repo = new DashboardRepository();
+  const criado = await produtoCriado(repo, {
+    name: "Canastra Grão 1kg",
+    price: 99.9,
+    quantity: 3,
+    sku: "MEDIDA-GRAO",
+    weight: 1.05,
+    width: 25,
+    height: 10,
+    length: 25,
+  });
+
+  // Isto é literalmente o que Form.jsx:394-397 envia: os quatro campos vão
+  // no FormData sem ter input nenhum, e `undefined` serializa como texto.
+  // A string vazia entra junto porque é o que um input vazio entregaria.
+  const res = respostaFalsa();
+  await repo.editProduct(
+    {
+      params: { id: criado.produto_id },
+      body: {
+        name: "Canastra Grão 1kg",
+        price: 99.9,
+        quantity: 3,
+        weight: "undefined",
+        width: "undefined",
+        height: "",
+        length: "   ",
+      },
+      file: undefined,
+    },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+
+  const { rows } = await bd.pool.query(
+    "SELECT * FROM canastra.produtos WHERE produto_id = $1",
+    [criado.produto_id],
+  );
+  assert.equal(Number(rows[0].peso), 1.05);
+  assert.equal(Number(rows[0].largura), 25);
+  assert.equal(Number(rows[0].altura), 10);
+  assert.equal(Number(rows[0].comprimento), 25);
+});
+
+test("produto: medida enviada DE VERDADE continua sendo gravada", async () => {
+  const repo = new DashboardRepository();
+  const criado = await produtoCriado(repo, {
+    name: "Canastra Coado 500g",
+    price: 64.9,
+    quantity: 8,
+    sku: "MEDIDA-COADO",
+    weight: 0.55,
+  });
+
+  // Preservar o atual não pode virar "ignorar o que veio": a tela nova, que
+  // terá os quatro inputs, precisa conseguir corrigir uma caixa.
+  const res = respostaFalsa();
+  await repo.editProduct(
+    {
+      params: { id: criado.produto_id },
+      body: {
+        name: "Canastra Coado 500g",
+        price: 64.9,
+        quantity: 8,
+        weight: "0.62",
+        width: "22",
+      },
+      file: undefined,
+    },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+
+  const { rows } = await bd.pool.query(
+    "SELECT * FROM canastra.produtos WHERE produto_id = $1",
+    [criado.produto_id],
+  );
+  assert.equal(Number(rows[0].peso), 0.62);
+  assert.equal(Number(rows[0].largura), 22);
 });

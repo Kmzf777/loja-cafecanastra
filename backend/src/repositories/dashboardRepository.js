@@ -34,15 +34,40 @@ const COLUNAS_DO_CONTRATO = `
  * Número positivo com valor padrão. `Number("abc")` é NaN — e NaN passa num
  * `?`, então ia para o banco; e nada impedia valor NEGATIVO, que num preço
  * significa produto que paga o cliente para levar.
+ *
+ * A string VAZIA precisa de teste próprio, antes do `Number`: `Number('')` é
+ * `0`, que é finito e não é negativo — passaria pelas duas guardas abaixo e
+ * gravaria uma caixa de peso zero, que é a mesma cotação errada que este
+ * arquivo tenta evitar. Campo em branco é ausência; quem quiser mesmo zerar
+ * manda `0`.
  */
 function numeroPositivo(valor, padrao) {
+  if (valor === undefined || valor === null) return padrao;
+  if (String(valor).trim() === "") return padrao;
   const n = Number(valor);
   if (!Number.isFinite(n) || n < 0) return padrao;
   return n;
 }
 
-/** Valida o que o painel manda ao cadastrar ou editar um produto. */
-function validarProduto(corpo) {
+/**
+ * Peso e dimensões de uma caixa de café quando o formulário não os informa.
+ *
+ * Valem SÓ NA CRIAÇÃO. Na edição o padrão é o valor que já está no banco — ver
+ * `editProduct`, e o porquê está lá: o formulário legado envia os quatro campos
+ * sem ter input para nenhum deles, `undefined` vira a string `"undefined"` no
+ * FormData, e aplicar estes números aqui em toda edição fazia a loja cotar
+ * frete errado sem nenhum sinal na tela.
+ */
+const MEDIDAS_PADRAO = { weight: 0.3, width: 20, height: 5, length: 20 };
+
+/**
+ * Valida o que o painel manda ao cadastrar ou editar um produto.
+ *
+ * `padroesDeMedida` é o que vale quando peso/largura/altura/comprimento chegam
+ * ausentes, vazios ou não-numéricos: os padrões da caixa na criação, e os
+ * valores ATUAIS do produto na edição.
+ */
+function validarProduto(corpo, padroesDeMedida = MEDIDAS_PADRAO) {
   const erros = [];
 
   const nome = String(corpo.name ?? "").trim();
@@ -72,10 +97,10 @@ function validarProduto(corpo) {
       price: preco,
       quantity: estoque,
       description: corpo.description ? String(corpo.description) : "",
-      weight: numeroPositivo(corpo.weight, 0.3),
-      width: numeroPositivo(corpo.width, 20),
-      height: numeroPositivo(corpo.height, 5),
-      length: numeroPositivo(corpo.length, 20),
+      weight: numeroPositivo(corpo.weight, padroesDeMedida.weight),
+      width: numeroPositivo(corpo.width, padroesDeMedida.width),
+      height: numeroPositivo(corpo.height, padroesDeMedida.height),
+      length: numeroPositivo(corpo.length, padroesDeMedida.length),
       // O SKU é a chave que costura vitrine e banco (0003). O formulário do
       // painel ainda não o envia (Onda 2E), mas o contrato já o aceita.
       sku: corpo.sku ? String(corpo.sku).trim() : null,
@@ -251,27 +276,55 @@ class DashboardRepository {
     }
   }
 
+  /**
+   * NA EDIÇÃO, O PADRÃO DE PESO E DIMENSÕES É O QUE JÁ ESTÁ NO BANCO.
+   *
+   * O formulário legado (GProducts/form/Form.jsx) envia `weight`, `width`,
+   * `height` e `length` sem ter input para nenhum dos quatro: `undefined` vira
+   * a string `"undefined"` no FormData, `Number("undefined")` é NaN, e a versão
+   * anterior caía nos padrões da caixa (0,3 kg / 20 / 5 / 20 cm) em TODA
+   * edição. Um produto de 1,2 kg voltava a 0,3 kg quando alguém corrigia o
+   * preço, e a loja passava a cotar frete errado sem nenhum sinal na tela.
+   *
+   * O conserto mora AQUI, e não no formulário, porque aqui ele é durável: vale
+   * para o painel legado, para a tela nova e para qualquer cliente futuro. Os
+   * padrões de `MEDIDAS_PADRAO` continuam valendo só na CRIAÇÃO, onde não há
+   * valor anterior a preservar.
+   *
+   * Por isso a leitura da linha vem ANTES da validação: é ela que traz os
+   * padrões desta edição.
+   */
   async editProduct(request, response) {
-    const { erros, valores } = validarProduto(request.body);
-    if (erros.length) {
-      return response.status(400).json({ message: erros.join(" ") });
-    }
     const { id } = request.params;
 
     try {
       const existing = await pool.query(
-        "SELECT imagem, sku FROM canastra.produtos WHERE produto_id = $1",
+        `SELECT imagem, sku, peso, largura, altura, comprimento
+           FROM canastra.produtos WHERE produto_id = $1`,
         [id],
       );
       if (!existing.rows.length) {
         return response.status(404).json({ error: "Produto não encontrado." });
       }
+      const atual = existing.rows[0];
 
-      const newImage = request.file ? request.file.path : existing.rows[0].imagem;
+      // `numeric` volta do pg como STRING ("1.200"); sem o Number aqui, o
+      // padrão entraria como texto e a comparação de "mudou algo?" mentiria.
+      const { erros, valores } = validarProduto(request.body, {
+        weight: Number(atual.peso),
+        width: Number(atual.largura),
+        height: Number(atual.altura),
+        length: Number(atual.comprimento),
+      });
+      if (erros.length) {
+        return response.status(400).json({ message: erros.join(" ") });
+      }
+
+      const newImage = request.file ? request.file.path : atual.imagem;
       // Sem `sku` no corpo, o que está no banco fica: o SKU é a costura com o
       // catálogo editorial e não pode ser apagado por um formulário que ainda
       // nem tem o campo.
-      const novoSku = request.body.sku !== undefined ? valores.sku : existing.rows[0].sku;
+      const novoSku = request.body.sku !== undefined ? valores.sku : atual.sku;
 
       await pool.query(
         `UPDATE canastra.produtos
