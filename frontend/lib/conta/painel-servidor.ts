@@ -239,6 +239,17 @@ export type AcessoDoPainel = {
   falhouConsulta: boolean;
   /** Para a tela de entrada dizer QUAL conta está logada quando ela não serve. */
   email: string | null;
+  /**
+   * O `auth.users.id` de quem está logado, `null` quando não há ninguém.
+   *
+   * Não serve à decisão de acesso — quem decide é `decidirAcessoAoPainel`, e
+   * ela não olha para cá. Serve à AUDITORIA: toda Server Action do painel
+   * escreve em nome de alguém, e `admin_log` precisa saber de quem. Sai daqui
+   * porque este já é o único lugar do módulo que fala com o GoTrue; pedir o
+   * usuário de novo lá na ação seria uma segunda leitura que pode discordar
+   * desta.
+   */
+  userId: string | null;
 };
 
 /**
@@ -285,6 +296,7 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
         ehAdmin: false,
         falhouConsulta: falhou,
         email: null,
+        userId: null,
       };
     }
 
@@ -300,7 +312,13 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
         "[painel] Não foi possível conferir canastra.admins; fechando o " +
           `acesso. ${consulta.error.code ?? ""} ${consulta.error.message ?? ""}`.trim(),
       );
-      return { temSessao: true, ehAdmin: false, falhouConsulta: true, email };
+      return {
+        temSessao: true,
+        ehAdmin: false,
+        falhouConsulta: true,
+        email,
+        userId: data.user.id,
+      };
     }
 
     return {
@@ -308,6 +326,7 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
       ehAdmin: Boolean(consulta.data),
       falhouConsulta: false,
       email,
+      userId: data.user.id,
     };
   } catch (erro) {
     /**
@@ -331,6 +350,7 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
       ehAdmin: false,
       falhouConsulta: true,
       email: null,
+      userId: null,
     };
   }
 }
@@ -364,6 +384,52 @@ export async function exigirAdminNoPainel(rotaPedida: string): Promise<void> {
   const acesso = await lerAcessoDoPainel();
   const decisao = decidirAcessoAoPainel({ ...acesso, rotaPedida });
   if (decisao.tipo === "redireciona") redirect(decisao.destino);
+}
+
+/**
+ * A checagem que Server Action e Route Handler precisam chamar SOZINHOS.
+ *
+ * `exigirAdminNoPainel` existe para PÁGINA e faz `redirect()`, que é o certo
+ * quando há uma tela para onde mandar a pessoa. Aqui não há: uma Server Action
+ * que falha precisa PARAR, não navegar — e `redirect()` dentro de action tem
+ * semântica diferente e some do `try/catch` de quem chamou.
+ *
+ * O layout de `(protegido)` NÃO cobre nenhum dos dois. Handler não passa por
+ * layout, e Server Action executa ANTES de a página re-renderizar — ou seja, a
+ * checagem do layout roda depois de a ação já ter gravado. Por isso a regra é
+ * chamar isto na PRIMEIRA linha, antes de ler o corpo e antes de tocar no banco.
+ *
+ * `painel-servidor.test.ts` lê o diretório e falha se algum arquivo com
+ * `"use server"` ou algum `route.ts` sob /dashboard não chamar esta função.
+ *
+ * A CONDIÇÃO É ESCRITA PELO LADO DO "PODE", NEGADA — a mesma disciplina de
+ * `decidirAcessoAoPainel`: só passa quem tem sessão, é admin, teve a consulta
+ * respondida E tem identidade conhecida. Qualquer coisa fora dessa lista lança.
+ * `falhouConsulta` entra explicitamente porque `ehAdmin` pode vir `false` por
+ * falta de linha em `admins` OU por queda do PostgREST, e as duas devem fechar.
+ * `userId` entra porque quem grava precisa assinar: uma ação que não sabe em
+ * nome de quem age não tem o que escrever em `admin_log`, e o tipo de retorno
+ * promete `string`, não `string | null` — a promessa é cumprida aqui e não com
+ * um `!` no chamador.
+ *
+ * NÃO REUSA `decidirAcessoAoPainel` de propósito: aquela função responde "para
+ * onde mando essa pessoa", e destino é o que aqui não existe. Duplicar o
+ * veredito é menos frágil que traduzir um redirecionamento em exceção.
+ *
+ * A mensagem é um CÓDIGO e não uma frase: quem chama pode mostrá-la, e o que o
+ * navegador de um não-admin recebe deve dizer o mínimo sobre a cerca.
+ */
+export async function exigirAdminEmAcao(): Promise<{ userId: string }> {
+  const acesso = await lerAcessoDoPainel();
+  if (
+    !acesso.temSessao ||
+    !acesso.ehAdmin ||
+    acesso.falhouConsulta ||
+    !acesso.userId
+  ) {
+    throw new Error("SEM_PERMISSAO_NO_PAINEL");
+  }
+  return { userId: acesso.userId };
 }
 
 /**

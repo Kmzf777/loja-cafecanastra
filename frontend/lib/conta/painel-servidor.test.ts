@@ -28,7 +28,7 @@ vi.mock("../supabase/servidor", () => ({
   criarClienteServidor: vi.fn(),
 }));
 
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -368,18 +368,53 @@ describe("estrutura de rotas de /dashboard", () => {
   });
 
   /**
-   * ROUTE HANDLER NÃO PASSA POR LAYOUT. Um `(protegido)/exportar/route.ts`
-   * nasceria ABERTO apesar do nome do grupo — layouts envolvem páginas, não
-   * handlers. Como o nome `(protegido)` promete mais do que o mecanismo
-   * entrega, a promessa é sustentada aqui: nenhum `route.ts` sob /dashboard.
-   * Quem precisar de um tem de chamar a checagem dentro da própria função, e
-   * este teste é onde essa conversa começa.
+   * ROUTE HANDLER E SERVER ACTION NÃO PASSAM POR LAYOUT.
+   *
+   * O caso do handler já era conhecido. O da Server Action é pior porque é
+   * INVISÍVEL: a ação POSTa para a própria rota, EXECUTA, e só então a página
+   * re-renderiza — momento em que o layout finalmente chama
+   * `exigirAdminNoPainel`. Ou seja, a checagem roda DEPOIS de a ação ter
+   * gravado no banco. O painel novo é feito de Server Actions.
+   *
+   * A regra deixou de ser "não existe" e passou a ser "todo mundo chama a
+   * checagem", porque proibir era proibir o painel de funcionar.
+   *
+   * `arquivosRecursivos` é a mesma varredura que o teste antigo usava — ela
+   * devolve o caminho relativo à RAIZ, e é esse caminho que entra na mensagem
+   * de falha. Quem quebrar isto precisa ler o NOME DO ARQUIVO na saída
+   * vermelha, senão a trava obriga a caçar o culpado.
    */
-  it("não há Route Handler sob /dashboard — layout não protegeria um", () => {
+  it("todo Route Handler sob /dashboard chama a checagem na própria função", () => {
     const handlers = arquivosRecursivos(RAIZ).filter((a) =>
       /(^|\/)route\.(ts|tsx|js|jsx)$/.test(a),
     );
-    expect(handlers).toEqual([]);
+    for (const h of handlers) {
+      const fonte = readFileSync(join(RAIZ, h), "utf8");
+      expect(fonte, `${h} não chama exigirAdminEmAcao`).toMatch(
+        /exigirAdminEmAcao\s*\(/,
+      );
+    }
+  });
+
+  /**
+   * A diretiva vale no topo do ARQUIVO (todas as exportações viram ações) e no
+   * topo de uma FUNÇÃO (só ela vira). Por isso a regex é `/m` e ancorada em
+   * início de linha, não em início de arquivo — e aceita as duas aspas, porque
+   * `'use server'` e `"use server"` são a mesma diretiva para o compilador e
+   * seria absurdo a trava depender de qual delas a pessoa digitou.
+   */
+  it('todo arquivo com "use server" sob /dashboard chama a checagem', () => {
+    const suspeitos = arquivosRecursivos(RAIZ).filter((a) =>
+      /\.(ts|tsx)$/.test(a),
+    );
+    for (const arquivo of suspeitos) {
+      const fonte = readFileSync(join(RAIZ, arquivo), "utf8");
+      if (!/^\s*["']use server["']/m.test(fonte)) continue;
+      expect(
+        fonte,
+        `${arquivo} declara "use server" e não chama exigirAdminEmAcao`,
+      ).toMatch(/exigirAdminEmAcao\s*\(/);
+    }
   });
 });
 
