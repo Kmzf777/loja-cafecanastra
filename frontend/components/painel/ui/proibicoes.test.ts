@@ -173,6 +173,7 @@ describe("as proibições do painel", () => {
       "logica/data.ts",
       "logica/dinheiro.ts",
       "logica/filtros.ts",
+      "logica/home/home.logica.ts",
       "logica/paginacao.ts",
       "logica/resposta.ts",
       "logica/status.ts",
@@ -183,6 +184,7 @@ describe("as proibições do painel", () => {
       // para esta lista uma vez. É o mesmo mecanismo do teste de estrutura em
       // `lib/conta/painel-servidor.test.ts` — a onda seguinte não nasce fora da
       // varredura por distração.
+      "tela/GraficoDeReceita.tsx",
       "tela/assinaturas/page.tsx",
       "tela/clientes/page.tsx",
       "tela/layout.tsx",
