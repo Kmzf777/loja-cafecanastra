@@ -4,6 +4,7 @@ import { Rodape } from "@/components/layout/Rodape";
 import { BannerCookies } from "@/components/layout/BannerCookies";
 import { BotaoWhatsApp } from "@/components/layout/BotaoWhatsApp";
 import { ScriptsAnalytics } from "@/components/analytics/ScriptsAnalytics";
+import { CapturaDeOrigem } from "@/components/analytics/CapturaDeOrigem";
 import { Grao } from "@/components/ui/Grao";
 import { ProvedorDaSacola } from "@/lib/sacola/sacola";
 import { LOCALE_PADRAO, TAG_BCP47, type Locale } from "@/lib/i18n/tipos";
@@ -139,6 +140,13 @@ export function MolduraDaLoja({
         <BotaoWhatsApp locale={locale} />
         <BannerCookies locale={locale} />
         <ScriptsAnalytics />
+        {/* De onde veio esta visita. Não pinta nada e não depende de
+            consentimento — é a moldura da LOJA, então a captura acontece tanto
+            na vitrine quanto na sacola e no checkout, que é onde a origem
+            precisa estar viva na hora de fechar o pedido. Um efeito de cliente
+            e nada mais: `searchParams` ou `useSearchParams` aqui derrubariam as
+            três homes de SSG para render sob demanda. */}
+        <CapturaDeOrigem />
       </div>
     </ProvedorDaSacola>
   );

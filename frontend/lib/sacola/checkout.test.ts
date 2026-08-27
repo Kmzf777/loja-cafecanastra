@@ -12,6 +12,7 @@ import {
 } from "./checkout";
 import type { ItemDaSacola } from "./sacola";
 import type { DadosDoCartao } from "./cartao";
+import type { Atribuicao } from "../atribuicao/atribuicao";
 
 /**
  * O CONTRATO do process_payment, fixado: é o corpo que o PaymentController
@@ -350,6 +351,90 @@ describe("subtotal declarado", () => {
     expect(erro).toBeInstanceOf(ErroDoPagamento);
     expect(erro.message).toBe("Estoque insuficiente");
     expect(erro.codigo).toBeUndefined();
+  });
+});
+
+/**
+ * A ORIGEM DA VENDA NO CORPO — e a regra dura que a acompanha.
+ *
+ * O dado é perecível: não há como reconstruir depois de onde veio um pedido.
+ * Mas a captura não pode custar uma cobrança dupla, e é isso que os dois
+ * últimos casos deste bloco travam.
+ */
+describe("atribuição", () => {
+  const origem: Atribuicao = {
+    utm_source: "instagram",
+    utm_medium: "social",
+    utm_campaign: "black",
+    canal: "indicacao",
+    referrer: "https://l.instagram.com/",
+    landing_page: "/cafes",
+    capturadaEm: 1_772_000_000_000,
+  };
+
+  it("as dez colunas viajam num objeto, como `address`", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", { ...dadosBase, atribuicao: origem }, f);
+    expect(corpoEnviado(f).atribuicao).toEqual({
+      utm_source: "instagram",
+      utm_medium: "social",
+      utm_campaign: "black",
+      canal: "indicacao",
+      referrer: "https://l.instagram.com/",
+      landing_page: "/cafes",
+    });
+  });
+
+  it("`capturadaEm` fica de fora — é o relógio do cliente, e não há coluna", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", { ...dadosBase, atribuicao: origem }, f);
+    expect(corpoEnviado(f).atribuicao).not.toHaveProperty("capturadaEm");
+  });
+
+  it("sem origem guardada o campo não viaja", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", dadosBase, f);
+    expect(corpoEnviado(f)).not.toHaveProperty("atribuicao");
+  });
+
+  it("o cartão manda exatamente o mesmo objeto que o Pix", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComCartao(
+      "t",
+      { ...dadosBase, atribuicao: origem, cartao },
+      f,
+    );
+    expect(corpoEnviado(f).atribuicao).toMatchObject({ utm_source: "instagram" });
+  });
+
+  it("A ORIGEM NÃO ENTRA NA CHAVE DE IDEMPOTÊNCIA — e isso vale dinheiro", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", dadosBase, f);
+    await pagarComPix("t", { ...dadosBase, atribuicao: origem }, f);
+    // Chave diferente numa retentativa é exatamente o que cobra duas vezes
+    // quando a primeira resposta se perde na rede. De onde a pessoa VEIO não
+    // muda o que ela está comprando.
+    expect(headersEnviados(f, 0)["Idempotency-Key"]).toBe(
+      headersEnviados(f, 1)["Idempotency-Key"],
+    );
+  });
+
+  it("origens DIFERENTES no mesmo pedido continuam com a mesma chave", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", { ...dadosBase, atribuicao: origem }, f);
+    await pagarComPix(
+      "t",
+      {
+        ...dadosBase,
+        atribuicao: { ...origem, utm_source: "google", canal: "pago" },
+      },
+      f,
+    );
+    // O caso real: a pessoa reabre a loja por outro anúncio noutra aba e
+    // reenvia o mesmo pedido. É a MESMA tentativa.
+    expect(headersEnviados(f, 0)["Idempotency-Key"]).toBe(
+      headersEnviados(f, 1)["Idempotency-Key"],
+    );
   });
 });
 

@@ -75,13 +75,26 @@ describe("Preco com promoção", () => {
     expect(saida).toContain("de 60 reais, por 59 reais e 99 centavos");
   });
 
-  it("os três tamanhos existem e mudam só a escala, nunca o conteúdo", () => {
+  it("os quatro tamanhos existem e mudam só a escala, nunca o conteúdo", () => {
+    const miudo = html(<Preco preco={promo} tamanho="miudo" />);
     const compacto = html(<Preco preco={promo} tamanho="compacto" />);
     const destaque = html(<Preco preco={promo} tamanho="destaque" />);
+    expect(miudo).toContain("text-[15px]");
     expect(compacto).toContain("text-[17px]");
     expect(destaque).toContain("text-[26px]");
-    expect(compacto).toContain("−10%");
-    expect(destaque).toContain("−10%");
+    for (const saida of [miudo, compacto, destaque]) {
+      expect(saida).toContain("−10%");
+    }
+  });
+
+  it("OS DOIS RAMOS SÃO inline-flex — inline ignora margem vertical", () => {
+    // Quem chama passa `mt-1.5` (a aba da PDP) contando que ela valha. Um ramo
+    // inline e outro flex daria espaçamento diferente conforme houvesse ou não
+    // campanha no ar — um defeito que só aparece com promoção ativa.
+    expect(html(<Preco preco={{ de: null, por: 6000 }} />)).toContain(
+      "inline-flex",
+    );
+    expect(html(<Preco preco={promo} />)).toContain("inline-flex");
   });
 });
 

@@ -35,6 +35,7 @@ import {
   type PrecoRelido,
   type RespostaDoPagamento,
 } from "@/lib/sacola/checkout";
+import { lerAtribuicao } from "@/lib/atribuicao/armazenamento";
 import type { ItemDaSacola } from "@/lib/sacola/sacola";
 import { eventoPurchase } from "@/lib/analytics";
 
@@ -512,6 +513,7 @@ export default function PaginaCheckout() {
         endereco,
         frete: freteEscolhido,
         cupom: cupom?.codigo,
+        atribuicao: lerAtribuicao(),
       });
       await concluir(resposta);
     } catch (e) {
@@ -543,6 +545,13 @@ export default function PaginaCheckout() {
         endereco,
         frete: freteEscolhido,
         cupom: cupom?.codigo,
+        /**
+         * LIDA NA HORA DE PAGAR, não guardada em estado: o `localStorage` é a
+         * verdade, e um valor capturado na montagem ficaria velho se a pessoa
+         * abrisse a loja de novo por um anúncio noutra aba. Ela também NÃO
+         * entra na chave de idempotência — ver `chaveDestePedido`.
+         */
+        atribuicao: lerAtribuicao(),
         cartao: dadosCartao,
       });
       await concluir(resposta);

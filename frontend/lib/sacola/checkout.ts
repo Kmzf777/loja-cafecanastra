@@ -7,6 +7,7 @@ import { deviceIdDoNavegador } from "./cartao";
 import { assinaturaDoPedido, chaveDeIdempotencia } from "./idempotencia";
 // Relativo pelo mesmo motivo do `API_BASE` acima: o Vitest não resolve o alias.
 import { precoPromocionalDaApi } from "../catalogo/promocao";
+import { corpoDeAtribuicao, type Atribuicao } from "../atribuicao/atribuicao";
 
 /**
  * Chamadas do checkout.
@@ -283,6 +284,14 @@ type DadosDoPedido = {
   frete: OpcaoDeFrete;
   /** Código já validado por /cupons/validar; o servidor revalida. */
   cupom?: string;
+  /**
+   * DE ONDE VEIO ESTA VENDA — capturada no primeiro contato e guardada junto
+   * da sacola (`lib/atribuicao/`).
+   *
+   * Entra no CORPO e nunca na assinatura da chave de idempotência. Ver
+   * `chaveDestePedido` logo abaixo, onde a razão está escrita por extenso.
+   */
+  atribuicao?: Atribuicao | null;
 };
 
 /**
@@ -298,6 +307,13 @@ type DadosDoPedido = {
  * recarga ganharia chave nova; e uma retentativa com chave nova é exatamente o
  * que cobra duas vezes quando a primeira resposta se perde na rede. O 409 não
  * chega a criar pedido nenhum, então reusar a chave é seguro por construção.
+ *
+ * A ATRIBUIÇÃO TAMBÉM NÃO ENTRA, e essa é a regra dura da Onda 6. `utm_*`,
+ * `canal`, `referrer`, `landing_page`, `gclid` e `fbclid` descrevem de onde a
+ * pessoa VEIO, não o que ela está comprando: o MESMO pedido tentado duas vezes
+ * não vira outro pedido porque a segunda aba tinha outro utm. Chave nova numa
+ * retentativa é exatamente o que cobra duas vezes quando a primeira resposta se
+ * perde na rede.
  */
 function chaveDestePedido(dados: DadosDoPedido): string {
   return chaveDeIdempotencia(
@@ -338,6 +354,7 @@ function chaveDestePedido(dados: DadosDoPedido): string {
  */
 function corpoComum(dados: DadosDoPedido) {
   const deviceId = deviceIdDoNavegador();
+  const atribuicao = corpoDeAtribuicao(dados.atribuicao ?? null);
   return {
     items: dados.itens.map((i) => ({
       product_id: i.product_id,
@@ -368,6 +385,17 @@ function corpoComum(dados: DadosDoPedido) {
       ? { subtotalPromocionalCentavos: subtotalPromocionalCentavos(dados.itens) }
       : {}),
     ...(dados.cupom ? { cupom: dados.cupom } : {}),
+    /**
+     * As dez colunas de `pedidos` da 0033, num objeto só — mesmo formato de
+     * `address`, que também fala o vocabulário do banco. Ausente quando não há
+     * nada a dizer, para o corpo não carregar objeto vazio.
+     *
+     * O SERVIDOR AINDA NÃO AS LÊ: o INSERT do checkout não menciona nenhuma
+     * delas. Enquanto isso o Express ignora o campo e a loja não muda de
+     * comportamento — mas a captura já roda, que é o que importa num dado que
+     * não se reconstrói depois.
+     */
+    ...(atribuicao ? { atribuicao } : {}),
     // Fingerprint do Mercado Pago. Vale para Pix e cartão — o motor de risco
     // lê o device nos dois. Ausente quando o security.js não carregou, e a
     // ausência é tratada como normal em todo o caminho.

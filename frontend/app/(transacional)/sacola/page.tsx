@@ -131,7 +131,7 @@ export default function PaginaSacola() {
                     travessia é explícita. */}
                 <Preco
                   className="shrink-0 justify-end"
-                  tamanho="compacto"
+                  tamanho="miudo"
                   preco={precoExibido({
                     preco:
                       Math.round(Number(item.price) * 100) *

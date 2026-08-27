@@ -48,11 +48,14 @@ import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
  * técnica que `<CardProduto>` já usava para o anúncio de "adicionado".
  */
 
-/** Os três tamanhos que a vitrine de fato usa — nada além do que tem chamador. */
-type Tamanho = "compacto" | "padrao" | "destaque";
+/** Os quatro tamanhos que a vitrine de fato usa — nada além do que tem chamador. */
+type Tamanho = "miudo" | "compacto" | "padrao" | "destaque";
 
 const ESCALA: Record<Tamanho, { por: string; de: string; selo: string }> = {
-  // Card de linha (`<CardCafe>`) e a linha de item da sacola.
+  // A linha de item da sacola, onde o preço da linha precisa ficar ABAIXO do
+  // subtotal de 19px — senão os dois números competem e nenhum é o total.
+  miudo: { por: "text-[15px]", de: "text-[11px]", selo: "text-[10px]" },
+  // Card de linha (`<CardCafe>`) e a barra fixa de compra do celular.
   compacto: { por: "text-[17px]", de: "text-[12px]", selo: "text-[10px]" },
   // Card de SKU (`<CardProduto>`).
   padrao: { por: "text-[18px]", de: "text-[13px]", selo: "text-[11px]" },
@@ -86,8 +89,12 @@ export function Preco({
    */
   if (preco.de === null) {
     return (
+      // `inline-flex` E NÃO `inline`, nos dois ramos: elemento inline IGNORA
+      // margem vertical, e quem chama passa `mt-1.5` (a aba da PDP) contando
+      // que ela valha. Um ramo inline e outro flex daria espaçamento diferente
+      // conforme houvesse ou não campanha no ar.
       <span
-        className={`font-dado tracking-[0.02em] ${escala.por} ${className}`}
+        className={`inline-flex font-dado tracking-[0.02em] ${escala.por} ${className}`}
         aria-label={precoParaLeitor(preco.por)}
       >
         {formatarPreco(preco.por)}
