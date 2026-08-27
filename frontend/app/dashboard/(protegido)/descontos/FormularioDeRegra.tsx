@@ -422,7 +422,16 @@ export function FormularioDeRegra({
         </div>
 
         <div className="min-w-0 xl:sticky xl:top-[132px]">
-          <Simulador forma={forma} produtos={produtos} />
+          {/* `errosDeVerdade` e não `erros`: o simulador precisa saber se a
+              regra é válida AGORA, e não se a pessoa já tentou salvar. Passar
+              `erros` deixaria o botão simular uma regra inválida enquanto ela
+              nunca tivesse sido submetida — que é exatamente o estado de quem
+              acabou de montar a regra e quer conferir o número. */}
+          <Simulador
+            forma={forma}
+            produtos={produtos}
+            problemasDaRegra={Object.keys(errosDeVerdade).length}
+          />
         </div>
       </div>
 

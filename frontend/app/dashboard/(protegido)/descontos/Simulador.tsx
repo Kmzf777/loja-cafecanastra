@@ -73,9 +73,21 @@ const RESUMO = "flex items-baseline justify-between gap-4 py-1.5 text-[13px]";
 export function Simulador({
   forma,
   produtos,
+  problemasDaRegra,
 }: {
   forma: FormularioDeDesconto;
   produtos: ProdutoDoSeletor[];
+  /**
+   * Quantos erros a REGRA tem agora — não o carrinho.
+   *
+   * Uma regra inválida não pode ser simulada, e a razão não é burocrática: o
+   * motor receberia `mecanica: 'brinde'` ou um percentual de 95 e devolveria ou
+   * um erro do banco ou, pior, um número. Um número calculado sobre uma regra
+   * que não pode existir é a única saída deste componente que seria mais
+   * perigosa do que não ter simulador nenhum — ele diria "desconta R$ 114" para
+   * uma regra que o `CHECK promocoes_percentual_ate_90` vai recusar no Salvar.
+   */
+  problemasDaRegra: number;
 }) {
   const [carrinho, setCarrinho] = useState<CarrinhoNoSimulador>(CARRINHO_VAZIO);
   const [resposta, setResposta] = useState<RespostaDaSimulacao | null>(null);
@@ -107,6 +119,14 @@ export function Simulador({
 
   async function simular() {
     setTentou(true);
+
+    if (problemasDaRegra > 0) {
+      setErro(
+        "A regra ainda tem campos a corrigir nos passos acima. Simular agora daria um número sobre uma regra que não pode ser salva — a simulação não foi feita.",
+      );
+      return;
+    }
+
     if (Object.keys(validarCarrinho(carrinho)).length) {
       setErro("Confira o carrinho de teste — a simulação não foi feita.");
       return;

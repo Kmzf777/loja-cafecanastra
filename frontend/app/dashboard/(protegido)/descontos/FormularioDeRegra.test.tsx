@@ -129,6 +129,25 @@ function montarNova() {
   );
 }
 
+/**
+ * Uma regra JÁ VÁLIDA, para os testes do simulador.
+ *
+ * Ele recusa simular enquanto a regra tem erro — um número calculado sobre uma
+ * regra que o banco vai rejeitar é a saída mais perigosa que este componente
+ * poderia ter. Os testes do simulador precisam, então, partir de uma regra que
+ * passa na validação; é o que este helper monta.
+ */
+function montarValida() {
+  return renderizar(
+    <FormularioDeRegra
+      inicial={{ ...FORMULARIO_VAZIO, nome: "Dez por cento", valor: "10" }}
+      produtos={PRODUTOS}
+      categorias={["torrado"]}
+      agoraEmMs={AGORA}
+    />,
+  );
+}
+
 function montarExistente(parcial: Partial<RegraCompleta> = {}) {
   const regra = regraCompleta(parcial);
   return {
@@ -329,13 +348,13 @@ describe("os avisos", () => {
 
 describe("o simulador chama o motor, e não calcula nada por conta própria", () => {
   it("não mostra resultado nenhum antes de alguém clicar em Simular", () => {
-    const { queryByText } = montarNova();
+    const { queryByText } = montarValida();
     expect(queryByText(/esta regra desconta/)).toBeNull();
     expect(simularDesconto).not.toHaveBeenCalled();
   });
 
   it("clicar em Simular manda a regra e o carrinho ao servidor", async () => {
-    const { usuario, getByRole, getByLabelText, getAllByLabelText } = montarNova();
+    const { usuario, getByRole, getByLabelText, getAllByLabelText } = montarValida();
 
     await usuario.selectOptions(getByLabelText("Produto"), PRODUTOS[0].product_id);
     const qtd = getAllByLabelText("Qtd.")[0];
@@ -353,7 +372,7 @@ describe("o simulador chama o motor, e não calcula nada por conta própria", ()
   });
 
   it("a frase que volta é a do motor, com o carrinho dentro", async () => {
-    const { usuario, getByRole, getByLabelText, findByText } = montarNova();
+    const { usuario, getByRole, getByLabelText, findByText } = montarValida();
     await usuario.selectOptions(getByLabelText("Produto"), PRODUTOS[0].product_id);
     await usuario.click(getByRole("button", { name: "Simular" }));
 
@@ -362,7 +381,7 @@ describe("o simulador chama o motor, e não calcula nada por conta própria", ()
 
   it("mudar o carrinho MATA o resultado — um número velho mente com autoridade", async () => {
     const { usuario, getByRole, getByLabelText, getAllByLabelText, findByText, queryByText } =
-      montarNova();
+      montarValida();
 
     await usuario.selectOptions(getByLabelText("Produto"), PRODUTOS[0].product_id);
     await usuario.click(getByRole("button", { name: "Simular" }));
@@ -373,12 +392,23 @@ describe("o simulador chama o motor, e não calcula nada por conta própria", ()
   });
 
   it("carrinho vazio não vai ao servidor, e a tela diz que a simulação não foi feita", async () => {
-    const { usuario, getByRole, getAllByRole } = montarNova();
+    const { usuario, getByRole, getAllByRole } = montarValida();
     await usuario.click(getByRole("button", { name: "Simular" }));
 
     expect(simularDesconto).not.toHaveBeenCalled();
     const alertas = getAllByRole("alert").map((n) => n.textContent ?? "");
     expect(alertas.some((t) => t.includes("a simulação não foi feita"))).toBe(true);
+  });
+
+  it("regra inválida NÃO é simulada — um número sobre uma regra que o banco recusa é pior que nenhum", async () => {
+    // A regra nova nasce sem nome e sem valor: dois erros.
+    const { usuario, getByRole, getByLabelText, getAllByRole } = montarNova();
+    await usuario.selectOptions(getByLabelText("Produto"), PRODUTOS[0].product_id);
+    await usuario.click(getByRole("button", { name: "Simular" }));
+
+    expect(simularDesconto).not.toHaveBeenCalled();
+    const alertas = getAllByRole("alert").map((n) => n.textContent ?? "");
+    expect(alertas.some((t) => t.includes("campos a corrigir nos passos acima"))).toBe(true);
   });
 });
 
