@@ -1,7 +1,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Lote } from "@/lib/catalogo/tipos";
-import { precoMinimo, formatarPreco, temEstoque } from "@/lib/catalogo/repositorio";
+import { temEstoque } from "@/lib/catalogo/repositorio";
+import { precoMinimoExibido } from "@/lib/catalogo/promocao";
+import { Preco } from "@/components/ui/Preco";
 import { COR_DA_LINHA, rotuloNota } from "@/lib/catalogo/rotulos";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { href } from "@/lib/i18n/rotas";
@@ -47,7 +49,13 @@ export function CardCafe({
 }) {
   const d = dicionario(locale);
   const corDaLinha = COR_DA_LINHA[lote.linha];
-  const preco = precoMinimo(lote);
+  /**
+   * O "a partir de" agora é o menor preço EFETIVO, e o par sai inteiro da
+   * mesma variante — ver `precoMinimoExibido`, que existe justamente porque
+   * casar o "de" de um SKU com o "por" de outro anunciaria um desconto que não
+   * existe em nenhum dos dois.
+   */
+  const preco = precoMinimoExibido(lote);
   const disponivel = temEstoque(lote);
 
   return (
@@ -133,14 +141,7 @@ export function CardCafe({
                 <span className="text-[11px] uppercase tracking-[0.14em] text-fuligem-55">
                   {d.comum.aPartirDe}
                 </span>
-                <span
-                  className="font-dado text-[17px] tracking-[0.02em]"
-                  aria-label={
-                    formatarPreco(preco).replace("R$", "").trim() + " reais"
-                  }
-                >
-                  {formatarPreco(preco)}
-                </span>
+                <Preco preco={preco} tamanho="compacto" locale={locale} />
                 {!disponivel ? (
                   <span className="text-[11px] uppercase tracking-[0.14em] text-vermelho">
                     {d.comum.esgotado}

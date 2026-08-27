@@ -3,14 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Lote, Moagem, PesoGramas } from "@/lib/catalogo/tipos";
 import { MOAGENS } from "@/lib/catalogo/tipos";
-import {
-  acharVariante,
-  embalagensDe,
-  formatarPreco,
-  precoParaLeitor,
-} from "@/lib/catalogo/repositorio";
+import { acharVariante, embalagensDe } from "@/lib/catalogo/repositorio";
+import { precoExibido } from "@/lib/catalogo/promocao";
 import { arteDaLinha } from "@/lib/catalogo/produtos";
 import { Botao, BotaoLink } from "@/components/ui/Botao";
+import { Preco } from "@/components/ui/Preco";
 // Só o nome da variável CSS, não o componente: é o contrato de quem manda na
 // base da janela. Ver o comentário longo em BannerCookies.tsx.
 import { VAR_ALTURA_DO_AVISO } from "@/components/layout/BannerCookies";
@@ -197,6 +194,10 @@ export function PainelCompra({
         // Identidade estável do funil GA4 — o begin_checkout da sacola reporta
         // este mesmo id. Ver o comentário de `sku` em lib/sacola/sacola.tsx.
         sku: variante.skuLoja,
+        // AO LADO de `price`, nunca no lugar dele — ver `ItemDaSacola`.
+        ...(variante.precoPromocional === undefined
+          ? {}
+          : { precoPromocionalCentavos: variante.precoPromocional }),
       });
       // Depois do sucesso, nunca antes: um add_to_cart de item que a sacola
       // recusou seria numero inventado no funil. No-op sem gtag (consentimento
@@ -204,7 +205,12 @@ export function PainelCompra({
       eventoAddToCart({
         id: variante.skuLoja,
         nome: `${lote.nome} — ${variante.rotuloEmbalagem}`,
-        precoCentavos: variante.preco,
+        // O VALOR DO FUNIL É O PREÇO EFETIVO, não o de catálogo: o GA4 mede
+        // receita, e um `add_to_cart` a preço cheio seguido de um `purchase`
+        // com desconto faz o relatório acusar uma queda de conversão que é só
+        // a promoção da própria loja. `begin_checkout` na página da sacola usa
+        // a mesma base, senão os dois eventos discordariam do mesmo carrinho.
+        precoCentavos: precoAvulso.por,
         quantidade,
         // Também em português: é dimensão de funil do GA4, e um relatório que
         // recebesse "Ground" e "Moído" contaria o mesmo produto duas vezes.
@@ -219,7 +225,27 @@ export function PainelCompra({
 
   const desconto = lote.assinatura?.desconto ?? 0;
   const precoBase = variante?.preco ?? 0;
-  const preco = assinando ? Math.round(precoBase * (1 - desconto)) : precoBase;
+
+  /**
+   * O PAR "DE/POR" DA COMPRA AVULSA — e a assinatura NÃO o herda.
+   *
+   * `precoComPromocao` (backend, utils/preco.js) tem exatamente três
+   * chamadores: cotação de frete, validação de cupom e a cobrança do checkout.
+   * O Clube não é nenhum dos três — a assinatura cobra por outro caminho, e o
+   * desconto dela é o `lote.assinatura.desconto`, sobre o preço de CATÁLOGO.
+   * Aplicar a promoção na aba de assinatura anunciaria um preço que a cobrança
+   * recorrente não pratica, que é o mesmo tipo de botão-que-mente que esta
+   * página já corrigiu uma vez.
+   */
+  const precoAvulso = precoExibido({
+    preco: precoBase,
+    ...(variante?.precoPromocional === undefined
+      ? {}
+      : { precoPromocional: variante.precoPromocional }),
+  });
+  const precoDoClube = { de: null, por: Math.round(precoBase * (1 - desconto)) };
+  /** O que a barra fixa do celular imprime: o preço da aba escolhida. */
+  const preco = assinando ? precoDoClube : precoAvulso;
 
   /** Pesos que existem para a moagem escolhida — muda a cada troca de moagem. */
   const pesosValidos = useMemo(
@@ -245,14 +271,14 @@ export function PainelCompra({
           className="grid grid-cols-2 border border-fuligem"
         >
           {[
-            { id: false, rotulo: d.pdp.compraUnica, valor: precoBase },
+            { id: false, rotulo: d.pdp.compraUnica, valor: precoAvulso },
             {
               // O desconto vem colado ao rótulo da navegação — "Assinatura",
               // "Subscription", "Suscripción" — em vez de ter chave própria:
               // é a mesma palavra que o cabeçalho usa para a mesma porta.
               id: true,
               rotulo: `${d.nav.assinatura} −${Math.round(desconto * 100)}%`,
-              valor: Math.round(precoBase * (1 - desconto)),
+              valor: precoDoClube,
             },
           ].map((aba) => (
             <button
@@ -269,16 +295,17 @@ export function PainelCompra({
               <span className="block text-[11px] font-semibold uppercase tracking-[0.12em]">
                 {aba.rotulo}
               </span>
-              <span className="mt-1.5 block font-dado text-[17px]">
-                {formatarPreco(aba.valor)}
-              </span>
+              <Preco
+                preco={aba.valor}
+                tamanho="compacto"
+                locale={locale}
+                className="mt-1.5"
+              />
             </button>
           ))}
         </div>
       ) : (
-        <p className="font-dado text-[26px]" aria-label={precoParaLeitor(preco)}>
-          {formatarPreco(preco)}
-        </p>
+        <Preco preco={preco} tamanho="destaque" locale={locale} />
       )}
 
       {/* Até a Onda 3J esta aba FINGIA a compra: mostrava o preço com -10% e
@@ -520,9 +547,7 @@ export function PainelCompra({
             <p className="truncate text-[12px] uppercase tracking-[0.12em] text-fuligem-55">
               {lote.nome}
             </p>
-            <p className="font-dado text-[17px] leading-tight">
-              {formatarPreco(preco)}
-            </p>
+            <Preco preco={preco} tamanho="compacto" locale={locale} />
           </div>
           {assinando ? (
             <BotaoLink

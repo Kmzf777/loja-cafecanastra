@@ -291,6 +291,26 @@ export function limparItens(bruto: unknown[]): ItemDaSacola[] {
       // O selo atravessa a limpeza: sem isto, passar a sacola por aqui apagaria
       // a prova de que ela já está na conta, e a fusão seguinte dobraria tudo.
       ...(typeof item.selo === "string" && item.selo ? { selo: item.selo } : {}),
+      /**
+       * O PROMOCIONAL TAMBÉM ATRAVESSA, e não por simetria: é para o corpo do
+       * checkout não mentir.
+       *
+       * `subtotalPromocionalCentavos` declara ao servidor o que a tela exibiu,
+       * e é conferido com tolerância zero contra a soma de `precoComPromocao`.
+       * Se a limpeza apagasse este campo de UM item de três, a tela continuaria
+       * exibindo os outros dois com desconto e a declaração sairia com um item
+       * a preço cheio — 409 numa sacola que está perfeitamente certa. Passar
+       * pela fusão é o caminho de quem entra na conta com a sacola montada, ou
+       * seja, o caminho de quem compra.
+       *
+       * INTEIRO POSITIVO ou nada: em centavos, fracionado não existe, e um
+       * valor torto vindo do `localStorage` vira ausência (a mesma disciplina
+       * de `price` logo acima), que devolve a linha ao preço de catálogo.
+       */
+      ...(Number.isInteger(item.precoPromocionalCentavos) &&
+      (item.precoPromocionalCentavos as number) > 0
+        ? { precoPromocionalCentavos: item.precoPromocionalCentavos as number }
+        : {}),
     });
   }
 

@@ -6,6 +6,7 @@ import {
   pagarComCartao,
   pagarComPix,
   subtotalDosItensCentavos,
+  subtotalPromocionalCentavos,
   CODIGO_PRECO_MUDOU,
   ErroDoPagamento,
 } from "./checkout";
@@ -249,6 +250,79 @@ describe("subtotal declarado", () => {
     );
   });
 
+  it("A PROMOÇÃO NÃO ENTRA EM `subtotalCentavos` — a mina da §5.1", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix(
+      "t",
+      {
+        ...dadosBase,
+        itens: [{ ...itens[0], precoPromocionalCentavos: 3573 }],
+      },
+      f,
+    );
+    // 2 × R$ 39,70 de CATÁLOGO. Se a promoção entrasse aqui, o servidor —
+    // que compara contra o catálogo com tolerância zero — recusaria com 409
+    // `PRECO_MUDOU` TODA venda com campanha ativa.
+    expect(corpoEnviado(f).subtotalCentavos).toBe(7940);
+  });
+
+  it("o promocional viaja em campo PRÓPRIO, e só quando existe", async () => {
+    const semPromocao = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", dadosBase, semPromocao);
+    // Sem campanha o campo seria uma cópia de `subtotalCentavos` — um segundo
+    // número dizendo a mesma coisa e uma segunda chance de recusar um pedido
+    // correto.
+    expect(corpoEnviado(semPromocao)).not.toHaveProperty(
+      "subtotalPromocionalCentavos",
+    );
+
+    const comPromocao = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix(
+      "t",
+      {
+        ...dadosBase,
+        itens: [{ ...itens[0], precoPromocionalCentavos: 3573 }],
+      },
+      comPromocao,
+    );
+    expect(corpoEnviado(comPromocao).subtotalPromocionalCentavos).toBe(7146);
+  });
+
+  it("item sem campanha entra no promocional pelo preço de catálogo", () => {
+    expect(
+      subtotalPromocionalCentavos([
+        { ...itens[0], precoPromocionalCentavos: 3573 },
+        { ...itens[0], product_id: "b2", price: 10.5, quantity: 1 },
+      ]),
+    ).toBe(7146 + 1050);
+  });
+
+  it("sem promoção nenhuma os dois subtotais são o MESMO número", () => {
+    expect(subtotalPromocionalCentavos(itens)).toBe(
+      subtotalDosItensCentavos(itens),
+    );
+    expect(subtotalPromocionalCentavos([])).toBe(0);
+  });
+
+  it("A PROMOÇÃO NÃO TROCA A CHAVE DE IDEMPOTÊNCIA — e isso vale dinheiro", async () => {
+    const f = fetchComResposta(RESPOSTA_OK);
+    await pagarComPix("t", dadosBase, f);
+    await pagarComPix(
+      "t",
+      {
+        ...dadosBase,
+        itens: [{ ...itens[0], precoPromocionalCentavos: 3573 }],
+      },
+      f,
+    );
+    // Mesmos cafés, mesma quantidade, mesmo CEP: é a MESMA tentativa. Chave
+    // nova numa retentativa é exatamente o que cobra duas vezes quando a
+    // primeira resposta se perde na rede.
+    expect(headersEnviados(f, 0)["Idempotency-Key"]).toBe(
+      headersEnviados(f, 1)["Idempotency-Key"],
+    );
+  });
+
   it("o 409 de preço chega com o CÓDIGO, não só com a frase", async () => {
     const f = fetchComResposta(
       {
@@ -290,9 +364,40 @@ describe("buscarPrecosAtuais", () => {
     const precos = await buscarPrecosAtuais(itens, f);
 
     expect(String(f.mock.calls[0][0])).toContain("/dashboard?limit=200");
-    expect(precos.get("a1")).toBe(44.9);
+    expect(precos.get("a1")).toEqual({ precoReais: 44.9 });
     // Catálogo inteiro na resposta, sacola pequena: o resto não interessa.
     expect(precos.has("zzz")).toBe(false);
+  });
+
+  it("relê a PROMOÇÃO junto, e é ela que quebra o segundo laço de 409", async () => {
+    const f = fetchComResposta({
+      products: [{ product_id: "a1", price: "44.90", promotional_price: "40.41" }],
+    });
+    expect((await buscarPrecosAtuais(itens, f)).get("a1")).toEqual({
+      precoReais: 44.9,
+      precoPromocionalCentavos: 4041,
+    });
+  });
+
+  it("promoção que EXPIROU volta ausente — a tela precisa poder apagá-la", async () => {
+    // Sem este caso, uma campanha encerrada entre montar a sacola e pagar
+    // ficaria colada no item e a declaração `subtotalPromocionalCentavos`
+    // sairia com um desconto que o servidor já não pratica.
+    const f = fetchComResposta({
+      products: [{ product_id: "a1", price: "44.90", promotional_price: null }],
+    });
+    expect((await buscarPrecosAtuais(itens, f)).get("a1")).toEqual({
+      precoReais: 44.9,
+    });
+  });
+
+  it("promocional que não desconta é descartado como qualquer dado torto", async () => {
+    const f = fetchComResposta({
+      products: [{ product_id: "a1", price: "44.90", promotional_price: "50.00" }],
+    });
+    expect(
+      (await buscarPrecosAtuais(itens, f)).get("a1"),
+    ).toEqual({ precoReais: 44.9 });
   });
 
   it("preço torto é descartado, e resposta ruim LANÇA em vez de mentir", async () => {

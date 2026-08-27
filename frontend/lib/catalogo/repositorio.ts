@@ -13,6 +13,7 @@ import {
   escolhaDoProdutor,
   ehCaixaOuKit,
 } from "./curadoria";
+import { precoMinimoExibido, precoPromocionalDaApi } from "./promocao";
 import type {
   Filtros,
   Kit,
@@ -72,6 +73,27 @@ type ProdutoDaApi = {
   sku: string | null;
   price: string | number;
   quantity: number;
+  /**
+   * O PREÇO JÁ COM A PROMOÇÃO ATIVA APLICADA, em reais — e ele AINDA NÃO EXISTE
+   * na resposta de `GET /dashboard`.
+   *
+   * O cálculo existe e é usado três vezes no backend (`precoComPromocao`, em
+   * `utils/preco.js`: cotação de frete, validação de cupom e cobrança), mas
+   * `COLUNAS_DO_CONTRATO` do `dashboardRepository` devolve só `preco AS price`.
+   * Enquanto a rota não o expuser, o campo chega `undefined`, `precoExibido`
+   * devolve `{ de: null }` e a vitrine desenha exatamente o que sempre
+   * desenhou: nada quebra, e nada aparece.
+   *
+   * ESTÁ DECLARADO ANTES DE EXISTIR DE PROPÓSITO. O caminho inteiro da vitrine
+   * — tipo, sobreposição, dois cards, PDP, sacola e corpo do checkout — está
+   * pronto e testado; falta uma coluna a mais num SELECT. É o que separa "a
+   * loja passa a mostrar promoção no dia em que a rota mudar" de "a loja
+   * precisa de outra onda de trabalho na vitrine".
+   *
+   * OPCIONAL PARA SEMPRE, mesmo depois de a rota mudar: produto sem campanha
+   * ativa não tem preço promocional, e a ausência é o caso comum.
+   */
+  promotional_price?: string | number | null;
 };
 
 async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
@@ -106,15 +128,31 @@ async function buscarDadosAoVivo(): Promise<Map<string, ProdutoDaApi>> {
  * tres caminhos usarem exatamente a mesma regra de casamento por SKU.
  */
 function sobreporAoVivo<
-  T extends { skuLoja: string; preco: number; estoque: number },
+  T extends {
+    skuLoja: string;
+    preco: number;
+    precoPromocional?: number;
+    estoque: number;
+  },
 >(v: T, aoVivo: Map<string, ProdutoDaApi>): T {
   const vivo = aoVivo.get(v.skuLoja);
   if (!vivo) return v;
+
+  const preco = Math.round(Number(vivo.price) * 100);
+  /**
+   * O promocional só entra quando de fato desconta — `precoPromocionalDaApi`
+   * recusa ausente, torto e qualquer valor que não seja MENOR que o catálogo.
+   * Assim o campo nunca existe "vazio" atravessando a sacola e o corpo do
+   * checkout, e a tela não precisa repetir a mesma pergunta em cinco lugares.
+   */
+  const precoPromocional = precoPromocionalDaApi(vivo.promotional_price, preco);
+
   return {
     ...v,
     produtoId: vivo.product_id,
-    preco: Math.round(Number(vivo.price) * 100),
+    preco,
     estoque: Number(vivo.quantity),
+    ...(precoPromocional === undefined ? {} : { precoPromocional }),
   };
 }
 
@@ -259,9 +297,18 @@ export function precoMinimo(lote: Lote): number | null {
   return precos.length ? Math.min(...precos) : null;
 }
 
-/** Como `precoMinimo`, mas com um valor alto no lugar do nulo, para ordenação. */
+/**
+ * Como `precoMinimo`, mas com um valor alto no lugar do nulo, para ordenação.
+ *
+ * ORDENA PELO PREÇO QUE A PESSOA VÊ, não pelo de catálogo. Quem pede "menor
+ * preço" na PLP espera a lista na ordem dos números impressos nos cards; com o
+ * catálogo, um café em promoção apareceria depois de outro mais caro que ele —
+ * e a ordenação passaria a mentir exatamente na página que existe para
+ * comparar preço. Sem campanha ativa os dois números são o mesmo e a ordem não
+ * muda.
+ */
 function precoOrdenavel(lote: Lote): number {
-  return precoMinimo(lote) ?? Number.MAX_SAFE_INTEGER;
+  return precoMinimoExibido(lote)?.por ?? Number.MAX_SAFE_INTEGER;
 }
 
 /** Há ao menos uma combinação comprável? */

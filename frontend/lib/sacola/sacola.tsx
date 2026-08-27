@@ -16,6 +16,7 @@ import {
   normalizarMoagem,
   reiniciarFusao,
 } from "./fusao";
+import { subtotalPromocionalCentavos } from "./checkout";
 
 /**
  * Sacola da vitrine.
@@ -63,6 +64,29 @@ export type ItemDaSacola = {
   image: string;
   /** Rótulo da embalagem ("Pacote com 250 g"), reaproveitando a coluna `size`. */
   size: string;
+  /**
+   * O PREÇO PROMOCIONAL DA UNIDADE, EM CENTAVOS — o "por" que a sacola exibe.
+   *
+   * ELE NÃO SUBSTITUI `price`, E ISSO É O CUIDADO CENTRAL DA ONDA 6. `price`
+   * continua sendo o preço de CATÁLOGO, em reais, porque é a soma dele que
+   * `subtotalCentavos` declara ao servidor — e `conferirSubtotal`
+   * (PaymentController) compara essa declaração com o subtotal de catálogo, com
+   * TOLERÂNCIA ZERO. Guardar o promocional aqui no lugar do de catálogo faria
+   * `subtotalCentavos` mudar de significado em silêncio, os dois lados
+   * passariam a calcular sobre bases diferentes, e toda venda com promoção
+   * morreria em 409 `PRECO_MUDOU`. Campo NOVO ao lado, nunca campo trocado.
+   *
+   * A UNIDADE ESTÁ NO NOME porque a vizinha não a tem: `price` é em REAIS (o
+   * contrato antigo do backend) e este é em CENTAVOS (o vocabulário do
+   * catálogo). Duas unidades no mesmo objeto só são seguras enquanto ninguém
+   * precisa adivinhar qual é qual.
+   *
+   * OPCIONAL de verdade: sacola montada antes desta onda não o tem, e produto
+   * sem campanha ativa nunca o terá. Ausente, a sacola mostra e declara o preço
+   * de catálogo — que é o lado seguro do erro (a pessoa vê o valor cheio e paga
+   * o promocional).
+   */
+  precoPromocionalCentavos?: number;
   /** Moagem escolhida. Não existe no backend legado; viaja só localmente. */
   moagem?: string;
   /**
@@ -98,6 +122,14 @@ export type ItemDaSacola = {
 type Sacola = {
   itens: ItemDaSacola[];
   quantidadeTotal: number;
+  /**
+   * O que a sacola custa em ITENS, com promoção já aplicada — o número que a
+   * tela imprime como "Subtotal" e a base da barra de frete grátis.
+   *
+   * NÃO é o `subtotalCentavos` do corpo do pagamento. Aquele é a soma do
+   * CATÁLOGO e existe só para o servidor perceber que a tela está velha; este
+   * é o que a pessoa paga. Ver `subtotalPromocionalCentavos` em `checkout.ts`.
+   */
   totalCentavos: number;
   adicionar: (item: ItemDaSacola) => Promise<void>;
   alterarQuantidade: (product_id: string, quantidade: number) => Promise<void>;
@@ -275,10 +307,12 @@ export function ProvedorDaSacola({ children }: { children: ReactNode }) {
     () => ({
       itens,
       quantidadeTotal: itens.reduce((s, i) => s + Number(i.quantity), 0),
-      totalCentavos: itens.reduce(
-        (s, i) => s + Math.round(Number(i.price) * 100) * Number(i.quantity),
-        0,
-      ),
+      // A FUNÇÃO DO CHECKOUT, não uma cópia da conta dela: é o mesmo número
+      // que o resumo do pagamento imprime, e duas somas do mesmo carrinho
+      // divergindo é exatamente o tipo de defeito que ninguém vê até alguém
+      // pagar diferente do que leu. O import não fecha ciclo — `checkout.ts`
+      // só toma daqui o TIPO `ItemDaSacola`, que some na compilação.
+      totalCentavos: subtotalPromocionalCentavos(itens),
       adicionar,
       alterarQuantidade,
       remover,

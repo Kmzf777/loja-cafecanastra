@@ -5,6 +5,8 @@ import type { ItemDaSacola } from "./sacola";
 import type { DadosDoCartao } from "./cartao";
 import { deviceIdDoNavegador } from "./cartao";
 import { assinaturaDoPedido, chaveDeIdempotencia } from "./idempotencia";
+// Relativo pelo mesmo motivo do `API_BASE` acima: o Vitest não resolve o alias.
+import { precoPromocionalDaApi } from "../catalogo/promocao";
 
 /**
  * Chamadas do checkout.
@@ -145,26 +147,53 @@ export async function cotarFrete(
  * vitrine, não a uma correção de preço em curso), e sem engolir a falha: quem
  * chama precisa saber que não conseguiu reler para poder mandar recarregar a
  * página em vez de prometer um total que não conferiu.
+ *
+ * O PROMOCIONAL VEM JUNTO, E ELE É METADE DO CONSERTO. Desde a Onda 6 a tela
+ * também declara `subtotalPromocionalCentavos`, conferido com a mesma
+ * tolerância zero contra a soma de `precoComPromocao` no servidor. Reler só o
+ * preço de catálogo deixaria a promoção VELHA colada no item — e a segunda
+ * tentativa levaria 409 pelo outro campo, que é o mesmo laço infinito que esta
+ * função existe para quebrar, com outro nome.
  */
+export type PrecoRelido = {
+  /** Preço de catálogo, em REAIS — o vocabulário de `ItemDaSacola.price`. */
+  precoReais: number;
+  /** Preço promocional em CENTAVOS, ou ausente quando não há campanha. */
+  precoPromocionalCentavos?: number;
+};
+
 export async function buscarPrecosAtuais(
   itens: ItemDaSacola[],
   fetchFn: typeof fetch = fetch,
-): Promise<Map<string, number>> {
+): Promise<Map<string, PrecoRelido>> {
   const r = await fetchFn(`${API_BASE}/dashboard?limit=200`, {
     cache: "no-store",
   });
   if (!r.ok) throw new Error("Não foi possível reler os preços agora.");
 
   const dados = await r.json();
-  const linhas: { product_id?: string; price?: string | number }[] =
-    dados?.products ?? [];
+  const linhas: {
+    product_id?: string;
+    price?: string | number;
+    promotional_price?: string | number | null;
+  }[] = dados?.products ?? [];
 
   const naSacola = new Set(itens.map((i) => i.product_id));
-  const precos = new Map<string, number>();
+  const precos = new Map<string, PrecoRelido>();
   for (const p of linhas) {
     if (!p?.product_id || !naSacola.has(p.product_id)) continue;
     const preco = Number(p.price);
-    if (Number.isFinite(preco) && preco >= 0) precos.set(p.product_id, preco);
+    if (!Number.isFinite(preco) || preco < 0) continue;
+    const promocional = precoPromocionalDaApi(
+      p.promotional_price,
+      Math.round(preco * 100),
+    );
+    precos.set(p.product_id, {
+      precoReais: preco,
+      ...(promocional === undefined
+        ? {}
+        : { precoPromocionalCentavos: promocional }),
+    });
   }
   return precos;
 }
@@ -180,6 +209,36 @@ export function subtotalDosItensCentavos(itens: ItemDaSacola[]): number {
     (soma, i) => soma + Math.round(Number(i.price) * 100) * Number(i.quantity),
     0,
   );
+}
+
+/**
+ * O SUBTOTAL QUE A PESSOA DE FATO PAGA PELOS ITENS — promoção já aplicada.
+ *
+ * É o número da TELA: resumo da sacola, resumo do checkout, base do teto do
+ * cupom, base da barra de frete grátis e valor com que o CardForm do Mercado
+ * Pago é montado. Item sem campanha entra pelo preço de catálogo, então sem
+ * promoção nenhuma este número é idêntico ao de `subtotalDosItensCentavos` e
+ * nada na loja muda de comportamento.
+ *
+ * O QUE ELE NÃO É: o `subtotalCentavos` do corpo do pagamento. Aquele continua
+ * sendo a soma do CATÁLOGO, porque é contra o catálogo que `conferirSubtotal`
+ * compara, com tolerância zero. Os dois números existem porque respondem a
+ * duas perguntas diferentes — "quanto custa" e "a tela está velha?" — e
+ * fundi-los num só é o caminho que mata toda venda com promoção em 409.
+ */
+export function subtotalPromocionalCentavos(itens: ItemDaSacola[]): number {
+  return itens.reduce(
+    (soma, i) =>
+      soma +
+      (i.precoPromocionalCentavos ?? Math.round(Number(i.price) * 100)) *
+        Number(i.quantity),
+    0,
+  );
+}
+
+/** Algum item da sacola está em campanha? */
+export function temItemEmPromocao(itens: ItemDaSacola[]): boolean {
+  return itens.some((i) => i.precoPromocionalCentavos !== undefined);
 }
 
 export type RespostaDoPagamento = {
@@ -290,6 +349,24 @@ function corpoComum(dados: DadosDoPedido) {
     shippingCost: dados.frete.price,
     shippingMethod: dados.frete.name,
     subtotalCentavos: subtotalDosItensCentavos(dados.itens),
+    /**
+     * A DECLARAÇÃO DO QUE A TELA EXIBIU, e ela só viaja quando há o que
+     * declarar.
+     *
+     * Sem nenhum item em campanha este número seria idêntico a
+     * `subtotalCentavos` — um segundo campo dizendo a mesma coisa, com uma
+     * segunda chance de divergir e recusar um pedido correto. Com campanha, ele
+     * é o que pega a classe de erro que a EXIBIÇÃO introduziu: a tela mostrando
+     * uma promoção que já expirou no servidor.
+     *
+     * O servidor confere contra a soma de `precoComPromocao`, com a mesma
+     * tolerância zero de `conferirSubtotal`. Enquanto essa conferência não
+     * existir do outro lado, o campo é inerte — o Express ignora corpo que não
+     * lê —, e é assim que esta onda entra sem depender da anterior.
+     */
+    ...(temItemEmPromocao(dados.itens)
+      ? { subtotalPromocionalCentavos: subtotalPromocionalCentavos(dados.itens) }
+      : {}),
     ...(dados.cupom ? { cupom: dados.cupom } : {}),
     // Fingerprint do Mercado Pago. Vale para Pix e cartão — o motor de risco
     // lê o device nos dois. Ausente quando o security.js não carregou, e a

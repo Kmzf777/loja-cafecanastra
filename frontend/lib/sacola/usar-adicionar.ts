@@ -65,6 +65,12 @@ export type ItemParaSacola = {
   /** Em português e sempre, pelo mesmo motivo. */
   rotuloGravado: string;
   precoCentavos: number;
+  /**
+   * O preço já com a promoção ativa, em centavos — ausente quando não há
+   * campanha. Vai para a sacola AO LADO de `precoCentavos`, nunca no lugar
+   * dele: ver `ItemDaSacola.precoPromocionalCentavos`.
+   */
+  precoPromocionalCentavos?: number;
   estoque: number;
   imagem: string;
 };
@@ -128,11 +134,20 @@ export function useAdicionarNaSacola(item: ItemParaSacola) {
         // Identidade estável do funil GA4 — o begin_checkout da sacola
         // reporta este mesmo id.
         sku: item.skuLoja,
+        ...(item.precoPromocionalCentavos === undefined
+          ? {}
+          : { precoPromocionalCentavos: item.precoPromocionalCentavos }),
       });
       eventoAddToCart({
         id: item.skuLoja,
         nome: item.nomeNaSacola,
-        precoCentavos: item.precoCentavos,
+        // O VALOR DO FUNIL É O PREÇO EFETIVO, não o de catálogo: o GA4 mede
+        // receita, e um `add_to_cart` a preço cheio seguido de um `purchase`
+        // com desconto faz o relatório acusar uma queda de conversão que é só
+        // a promoção da própria loja. `begin_checkout`, na página da sacola,
+        // usa a mesma base — senão os dois eventos discordariam do mesmo
+        // carrinho.
+        precoCentavos: item.precoPromocionalCentavos ?? item.precoCentavos,
         quantidade: 1,
       });
       setAdicionado(true);

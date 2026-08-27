@@ -89,6 +89,26 @@ export type Variante = {
   rotuloChave?: string;
   /** Em centavos. 3970 = R$ 39,70 */
   preco: number;
+  /**
+   * O PREÇO JÁ COM A PROMOÇÃO ATIVA APLICADA, em centavos — o "por" do card.
+   *
+   * Ausente é o caso normal: ou não há campanha, ou a API não respondeu e a
+   * vitrine está de pé com o JSON versionado, que não conhece promoção.
+   *
+   * NÃO SUBSTITUI `preco`, E ISSO É A DECISÃO INTEIRA. `preco` continua sendo
+   * o valor de CATÁLOGO, porque é ele que a sacola guarda e é a soma dele que
+   * `subtotalCentavos` declara ao servidor — o campo que `conferirSubtotal`
+   * confere com TOLERÂNCIA ZERO contra o catálogo. Trocar um pelo outro faria
+   * os dois lados calcularem sobre bases diferentes e toda venda com promoção
+   * morreria em 409 `PRECO_MUDOU`. Exibir é renderização; cobrar é do
+   * servidor. A regra de exibição vive em `lib/catalogo/promocao.ts`.
+   *
+   * Os quatro tipos vendáveis o declaram com o MESMO nome, pelo mesmo motivo
+   * que já compartilham `preco`, `estoque` e `produtoId`: é o que deixa um só
+   * mecanismo (`sobreporAoVivo`) e uma só regra de exibição servirem aos dois
+   * vocabulários de card, à PDP e à sacola.
+   */
+  precoPromocional?: number;
   estoque: number;
 };
 
@@ -122,6 +142,8 @@ export type FormatoEspecial = {
   unidades: number;
   /** Em centavos. 0 quando a loja não exibe preço por estar esgotado. */
   preco: number;
+  /** Ver o campo homônimo em `Variante`: exibição, nunca armazenamento. */
+  precoPromocional?: number;
   estoque: number;
 };
 
@@ -160,6 +182,8 @@ export type Kit = {
   imagem: string;
   /** Em centavos. 0 quando a loja não exibe preço por estar esgotado. */
   preco: number;
+  /** Ver o campo homônimo em `Variante`: exibição, nunca armazenamento. */
+  precoPromocional?: number;
   estoque: number;
   /** Quantos pacotes/caixas dentro do kit. */
   pacotes: number;
@@ -213,6 +237,8 @@ export type ProdutoVendavel = {
   imagemEstudio?: string;
   /** Em centavos. */
   preco: number;
+  /** Ver o campo homônimo em `Variante`: exibição, nunca armazenamento. */
+  precoPromocional?: number;
   estoque: number;
 };
 

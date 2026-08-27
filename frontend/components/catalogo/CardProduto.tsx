@@ -2,9 +2,10 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { formatarPreco, precoParaLeitor } from "@/lib/catalogo/repositorio";
 import { COR_DA_LINHA } from "@/lib/catalogo/rotulos";
+import { precoExibido } from "@/lib/catalogo/promocao";
 import { Botao } from "@/components/ui/Botao";
+import { Preco } from "@/components/ui/Preco";
 import { dimensaoDaArte } from "@/lib/catalogo/produtos";
 import { useAdicionarNaSacola } from "@/lib/sacola/usar-adicionar";
 import { dicionario } from "@/lib/i18n/dicionario";
@@ -51,6 +52,13 @@ export function CardProduto({
   const indisponivel = produto.estoque <= 0 || produto.preco <= 0;
 
   /**
+   * O par "de/por". `indisponivel` continua olhando `produto.preco`, o de
+   * CATÁLOGO: um SKU sem preço de catálogo não vende, e uma promoção sobre um
+   * preço que não existe não o ressuscita.
+   */
+  const preco = precoExibido(produto);
+
+  /**
    * A medida real dos dois arquivos, para o `next/image` reservar a caixa.
    * Vem de `produtos.ts`, que é quem conhece o acervo — os `500 × 500`
    * chumbados aqui eram verdade quando todo ele era packshot quadrado.
@@ -80,6 +88,11 @@ export function CardProduto({
     nomeNaSacola,
     rotuloGravado: produto.rotuloEmbalagem,
     precoCentavos: produto.preco,
+    // O promocional viaja AO LADO do de catálogo — a sacola guarda os dois, e
+    // só o de catálogo entra em `subtotalCentavos`. Ver `ItemDaSacola`.
+    ...(produto.precoPromocional === undefined
+      ? {}
+      : { precoPromocionalCentavos: produto.precoPromocional }),
     estoque: produto.estoque,
     imagem: produto.imagem,
   });
@@ -174,12 +187,7 @@ export function CardProduto({
             {d.comum.esgotado}
           </span>
         ) : (
-          <span
-            className="font-dado text-[18px]"
-            aria-label={precoParaLeitor(produto.preco)}
-          >
-            {formatarPreco(produto.preco)}
-          </span>
+          <Preco preco={preco} tamanho="padrao" locale={locale} />
         )}
 
         <Botao

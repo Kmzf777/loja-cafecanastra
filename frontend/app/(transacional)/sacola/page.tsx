@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useSacola } from "@/lib/sacola/sacola";
 import { formatarPreco } from "@/lib/catalogo/repositorio";
+import { precoExibido } from "@/lib/catalogo/promocao";
 import { BotaoLink } from "@/components/ui/Botao";
+import { Preco } from "@/components/ui/Preco";
 import { BarraFreteGratis } from "@/components/layout/BarraFreteGratis";
 import { eventoBeginCheckout } from "@/lib/analytics";
 
@@ -121,11 +123,28 @@ export default function PaginaSacola() {
                   </div>
                 </div>
 
-                <p className="shrink-0 font-dado text-[15px]">
-                  {formatarPreco(
-                    Math.round(Number(item.price) * 100) * Number(item.quantity),
-                  )}
-                </p>
+                {/* O "de/por" da LINHA já vem multiplicado pela quantidade: é
+                    o que aquela linha soma no resumo, e um preço unitário aqui
+                    obrigaria a pessoa a fazer a conta de cabeça para conferir o
+                    subtotal. `price` está em reais e o promocional em centavos
+                    — a unidade está no nome dos dois, e é por isso que a
+                    travessia é explícita. */}
+                <Preco
+                  className="shrink-0 justify-end"
+                  tamanho="compacto"
+                  preco={precoExibido({
+                    preco:
+                      Math.round(Number(item.price) * 100) *
+                      Number(item.quantity),
+                    ...(item.precoPromocionalCentavos === undefined
+                      ? {}
+                      : {
+                          precoPromocional:
+                            item.precoPromocionalCentavos *
+                            Number(item.quantity),
+                        }),
+                  })}
+                />
               </li>
             ))}
           </ul>
@@ -167,7 +186,13 @@ export default function PaginaSacola() {
                       // banco: item antigo no localStorage não carrega `sku`.
                       id: i.sku ?? i.product_id,
                       nome: i.name,
-                      precoCentavos: Math.round(Number(i.price) * 100),
+                      // O preço EFETIVO, a mesma base do `add_to_cart` — ver
+                      // `usar-adicionar.ts`. Dois eventos do mesmo carrinho com
+                      // bases diferentes viram uma queda de conversão fantasma
+                      // no relatório.
+                      precoCentavos:
+                        i.precoPromocionalCentavos ??
+                        Math.round(Number(i.price) * 100),
                       quantidade: Number(i.quantity),
                       variante: i.moagem,
                     })),
