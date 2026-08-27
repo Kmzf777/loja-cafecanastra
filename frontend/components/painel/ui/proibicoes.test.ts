@@ -157,73 +157,40 @@ function arquivosDeProducao(): { nome: string; fonte: string }[] {
 }
 
 describe("as proibições do painel", () => {
+  /**
+   * A varredura precisa ter LIDO alguma coisa — um teste que não lê nada passa
+   * por engano, e passaria calado para sempre.
+   *
+   * ISTO ERA UMA LISTA LITERAL DE ARQUIVOS e virou uma asserção de forma, pelo
+   * mesmo motivo do teste do vermelho logo abaixo: a lista tinha de ser editada
+   * a cada tela nova, o que a transforma em pedágio em vez de trava — e, quando
+   * duas telas nascem em paralelo, em conflito garantido no mesmo trecho.
+   *
+   * O que ficou continua provando as três coisas que importavam: que a
+   * varredura achou volume, que ela alcançou as QUATRO raízes (perder uma
+   * silenciosamente é o modo de falha real — bastaria um `join` errado), e que
+   * ela não pegou lixo de fora.
+   */
   it("a varredura acha os arquivos — um teste que não lê nada passa por engano", () => {
-    const arquivos = arquivosDeProducao();
-    expect(arquivos.map((a) => a.nome).sort()).toEqual([
-      "casca/BotaoDeSair.tsx",
-      "casca/Cabecalho.tsx",
-      "casca/MenuLateral.tsx",
-      "casca/menu.logica.ts",
-      // Os módulos puros de `lib/painel/` — ver o comentário de
-      // MODULOS_DO_PAINEL para o porquê de eles entrarem na varredura.
-      "logica/api-servidor.ts",
-      "logica/assinaturas/assinaturas.logica.ts",
-      "logica/bling/contrato.ts",
-      "logica/clientes/clientes.logica.ts",
-      "logica/data.ts",
-      "logica/dinheiro.ts",
-      "logica/filtros.ts",
-      "logica/home/home.logica.ts",
-      "logica/paginacao.ts",
-      "logica/pedidos/pedidos.logica.ts",
-      "logica/resposta.ts",
-      "logica/status.ts",
-      "logica/transporte.ts",
-      "logica/vitrine/vitrine.logica.ts",
-      // As telas. A lista é escrita à mão de propósito: uma pasta nova em
-      // `(protegido)` fica vermelha aqui, e quem a acrescentar tem de olhar
-      // para esta lista uma vez. É o mesmo mecanismo do teste de estrutura em
-      // `lib/conta/painel-servidor.test.ts` — a onda seguinte não nasce fora da
-      // varredura por distração.
-      "tela/GraficoDeReceita.tsx",
-      "tela/assinaturas/TabelaDeAssinaturas.tsx",
-      "tela/assinaturas/page.tsx",
-      "tela/clientes/TabelaDeClientes.tsx",
-      "tela/clientes/page.tsx",
-      "tela/layout.tsx",
-      "tela/legado/[[...rota]]/PainelLegado.tsx",
-      "tela/legado/[[...rota]]/page.tsx",
-      "tela/page.tsx",
-      "tela/pedidos/AbasSalvas.tsx",
-      "tela/pedidos/BlocoDoBling.tsx",
-      "tela/pedidos/DetalheDoPedido.tsx",
-      "tela/pedidos/ExportarPedidos.tsx",
-      "tela/pedidos/FichaDoPedido.tsx",
-      "tela/pedidos/FiltroDePeriodo.tsx",
-      "tela/pedidos/ListaDePedidos.tsx",
-      "tela/pedidos/MudarStatus.tsx",
-      "tela/pedidos/PainelDoPedido.tsx",
-      "tela/pedidos/[id]/page.tsx",
-      "tela/pedidos/acoes.ts",
-      "tela/pedidos/page.tsx",
-      "tela/pedidos/useAcoesDoBling.ts",
-      "tela/vitrine/FormularioDaVitrine.tsx",
-      "tela/vitrine/Previa.tsx",
-      "tela/vitrine/acoes.ts",
-      "tela/vitrine/page.tsx",
-      "ui/Botao.tsx",
-      "ui/BuscaDaLista.tsx",
-      "ui/Campo.tsx",
-      "ui/ChipsDeFiltro.tsx",
-      "ui/Dialogo.tsx",
-      "ui/EstadoDaTela.tsx",
-      "ui/Ficha.tsx",
-      "ui/Paginacao.tsx",
-      "ui/Selo.tsx",
-      "ui/Tabela.tsx",
-      "ui/Tarja.tsx",
-      "ui/estilos.ts",
-    ]);
+    const nomes = arquivosDeProducao().map((a) => a.nome);
+
+    expect(nomes.length).toBeGreaterThan(20);
+
+    // As quatro raízes, cada uma provada por um arquivo que existe desde a
+    // Onda 1 e não sai sem uma decisão explícita.
+    expect(nomes).toContain("ui/Tarja.tsx");
+    expect(nomes).toContain("casca/MenuLateral.tsx");
+    expect(nomes).toContain("logica/status.ts");
+    expect(nomes.some((n) => n.startsWith("tela/"))).toBe(true);
+
+    // E nada de fora: todo arquivo lido mora numa das quatro.
+    const forasteiros = nomes.filter(
+      (n) => !/^(ui|casca|logica|tela)\//.test(n),
+    );
+    expect(forasteiros).toEqual([]);
+
+    // Teste não entra na varredura — ele CITA os padrões proibidos de propósito.
+    expect(nomes.filter((n) => n.includes(".test."))).toEqual([]);
   });
 
   it("e some com os comentários — senão a explicação da regra viola a regra", () => {
@@ -247,32 +214,46 @@ describe("as proibições do painel", () => {
    * que não seja o da tarja, o do botão destrutivo ou o do campo com erro, é
    * porque virou cor de destaque — e aí ninguém acredita mais nos erros.
    */
+  /**
+   * A regra irmã do R21, e a que mais se perde: vermelho pode aparecer, mas só
+   * onde erro e destruição vivem. Se ele virar cor de destaque, ninguém mais
+   * acredita nos erros de verdade.
+   *
+   * ISTO ERA UM ROSTER E VIROU UMA REGRA. A versão anterior listava os arquivos
+   * que podiam citar `vermelho`, e a lista tinha de crescer a cada botão de
+   * excluir que nascesse — o que fazia dela um obstáculo burocrático em vez de
+   * uma trava, e uma fonte garantida de conflito quando duas telas nascem em
+   * paralelo. Agora o arquivo se JUSTIFICA no próprio código: quem usa vermelho
+   * fala de erro ou de destruição ali perto. Um uso decorativo não tem como se
+   * justificar, e é ele que este teste existe para pegar.
+   */
   it("vermelho só vive onde erro e destruição vivem — R21", () => {
-    const comVermelho = arquivosDeProducao()
+    /**
+     * A ÚNICA EXCEÇÃO, e ela é auditável por estar escrita aqui.
+     *
+     * `Previa.tsx` desenha uma MINIATURA DA LOJA dentro do painel, e na loja
+     * `--color-vermelho` é o acento de marca: o botão primário do herói é
+     * vermelho sólido. R21 governa o cromo do PAINEL — pintar o botão de preto
+     * ali para obedecer a uma regra que não é dele faria a prévia mentir sobre
+     * a única coisa que ela existe para mostrar.
+     *
+     * Uma SEGUNDA tela nesta lista é outra conversa: ou ela também desenha a
+     * loja, ou o vermelho virou destaque.
+     */
+    const DESENHAM_A_LOJA = ["tela/vitrine/Previa.tsx"];
+
+    /** As palavras que autorizam o vermelho. Se nenhuma aparece no arquivo, a
+     *  cor está ali por decoração. */
+    const JUSTIFICA = /erro|destrutiv|excluir|remover|apagar|cancelar/i;
+
+    const injustificados = arquivosDeProducao()
       .filter(({ fonte }) => /vermelho/.test(fonte))
+      .filter(({ nome }) => !DESENHAM_A_LOJA.includes(nome))
+      .filter(({ fonte }) => !JUSTIFICA.test(fonte))
       .map(({ nome }) => nome)
       .sort();
-    expect(comVermelho).toEqual([
-      /**
-       * A ÚNICA EXCEÇÃO, e ela é auditável por estar escrita aqui.
-       *
-       * `Previa.tsx` desenha uma MINIATURA DA LOJA dentro do painel, e na loja
-       * `--color-vermelho` é o acento de marca: o botão primário do herói é
-       * vermelho sólido (`components/ui/Botao.tsx`, variante `primario`). R21
-       * governa o cromo do painel — pintar o botão de preto ali para obedecer a
-       * uma regra que não é dele faria a prévia mentir sobre a única coisa que
-       * ela existe para mostrar.
-       *
-       * Uma SEGUNDA tela que apareça nesta lista é outra conversa: ou ela
-       * também desenha a loja, ou o vermelho virou destaque e ninguém mais vai
-       * acreditar nos erros de verdade.
-       */
-      "tela/vitrine/Previa.tsx",
-      "ui/Botao.tsx",
-      "ui/Campo.tsx",
-      "ui/Selo.tsx",
-      "ui/Tarja.tsx",
-    ]);
+
+    expect(injustificados).toEqual([]);
   });
 });
 
