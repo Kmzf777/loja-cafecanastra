@@ -57,9 +57,32 @@ export type EstadoDasCampanhas = {
    *  `"undefined"` na query string na primeira distração. */
   ativa: string;
   pagina: number;
+  /**
+   * QUAL FORMULÁRIO ESTÁ ABERTO — `""` nenhum, `"novo"` o de criação, ou o id
+   * de uma campanha da página atual.
+   *
+   * ELE VIVE NA URL, e não num `useState`, e é R2 levado a sério onde ele
+   * costuma ser abandonado: com o formulário na URL, o F5 no meio do preenchi-
+   * mento devolve o formulário aberto; o "voltar" do navegador fecha o
+   * formulário em vez de sair da tela; e um link colado para outra pessoa abre
+   * a campanha certa. Um formulário em estado local perde as três coisas, e a
+   * terceira é a que mais custa num painel operado por duas pessoas.
+   *
+   * NÃO HÁ `GET /admin/campanhas/:id` NO EXPRESS — só listagem, POST e PATCH.
+   * Então `editar` só resolve para uma campanha que esteja na PÁGINA carregada,
+   * o que é sempre verdade quando se chega pelo link da linha. Um id de outra
+   * página abre o formulário vazio em vez de mentir; a tela avisa.
+   */
+  editar: string;
 };
 
-const VAZIO: EstadoDasCampanhas = { busca: "", canal: "", ativa: "", pagina: 1 };
+const VAZIO: EstadoDasCampanhas = {
+  busca: "",
+  canal: "",
+  ativa: "",
+  pagina: 1,
+  editar: "",
+};
 
 export function lerEstado(
   parametros: Record<string, string | string[] | undefined>,
@@ -80,6 +103,7 @@ export function lerEstado(
     ativa: ativa === "true" || ativa === "false" ? ativa : "",
     // O teto real vem do backend; aqui só se impede página zero ou negativa.
     pagina: paginaValida(parametros.pagina, Number.MAX_SAFE_INTEGER),
+    editar: textoDoParametro(parametros.editar),
   };
 }
 
@@ -100,7 +124,29 @@ export function urlDaTela(estado: Partial<EstadoDasCampanhas>): string {
     canal: estado.canal || undefined,
     ativa: estado.ativa || undefined,
     pagina: pagina > 1 ? pagina : undefined,
+    editar: estado.editar || undefined,
   });
+}
+
+/**
+ * A campanha que o formulário deve mostrar — ou `null` para o de criação.
+ *
+ * Devolve `null` TAMBÉM quando o id não está na página carregada, e essa é a
+ * decisão que a ausência de `GET /admin/campanhas/:id` obriga: sem a rota, um
+ * id de outra página não tem como ser resolvido. Abrir o formulário VAZIO ali
+ * seria pior que não abrir — a pessoa preencheria achando que edita e criaria
+ * uma campanha nova. Quem chama recebe `{ aberto, campanha, perdida }` e a tela
+ * desenha o aviso quando `perdida` é verdadeiro.
+ */
+export function formularioAberto(
+  estado: EstadoDasCampanhas,
+  linhas: Campanha[],
+): { aberto: boolean; campanha: Campanha | null; perdida: boolean } {
+  if (estado.editar === "") return { aberto: false, campanha: null, perdida: false };
+  if (estado.editar === "novo") return { aberto: true, campanha: null, perdida: false };
+
+  const campanha = linhas.find((linha) => linha.id === estado.editar) ?? null;
+  return { aberto: campanha !== null, campanha, perdida: campanha === null };
 }
 
 /**
@@ -114,12 +160,22 @@ export function urlDaTela(estado: Partial<EstadoDasCampanhas>): string {
 export function chipsDasCampanhas(estado: EstadoDasCampanhas): ChipDeFiltro[] {
   const chips: ChipDeFiltro[] = [];
 
+  /*
+    REMOVER UM FILTRO FECHA O FORMULÁRIO (`editar: ""`), e isso não é
+    arbitrário: a campanha em edição está na página ATUAL, e mudar o filtro
+    refaz a página. Carregar `editar` adiante abriria a tela num estado
+    "perdido" — id na URL, linha fora da lista —, e o aviso de campanha não
+    encontrada apareceria logo depois de a pessoa ter clicado num chip, sem
+    nenhuma relação aparente com o que ela fez.
+  */
+  const semFormulario = { ...estado, editar: "", pagina: 1 };
+
   if (estado.busca) {
     chips.push({
       chave: "q",
       dimensao: "Busca",
       valor: estado.busca,
-      href: urlDaTela({ ...estado, busca: "", pagina: 1 }),
+      href: urlDaTela({ ...semFormulario, busca: "" }),
     });
   }
   if (estado.canal) {
@@ -127,7 +183,7 @@ export function chipsDasCampanhas(estado: EstadoDasCampanhas): ChipDeFiltro[] {
       chave: "canal",
       dimensao: "Canal",
       valor: rotuloDe(CANAIS_DE_CAMPANHA, estado.canal),
-      href: urlDaTela({ ...estado, canal: "", pagina: 1 }),
+      href: urlDaTela({ ...semFormulario, canal: "" }),
     });
   }
   if (estado.ativa) {
@@ -135,7 +191,7 @@ export function chipsDasCampanhas(estado: EstadoDasCampanhas): ChipDeFiltro[] {
       chave: "ativa",
       dimensao: "Situação",
       valor: estado.ativa === "true" ? "Ligada" : "Desligada",
-      href: urlDaTela({ ...estado, ativa: "", pagina: 1 }),
+      href: urlDaTela({ ...semFormulario, ativa: "" }),
     });
   }
   return chips;

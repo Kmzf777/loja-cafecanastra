@@ -14,6 +14,7 @@ import {
   custoEmCentavos,
   custoEmTexto,
   faseDaJanela,
+  formularioAberto,
   formularioDe,
   formularioVazio,
   lerEstado,
@@ -48,7 +49,7 @@ function campanha(sobrescreve: Partial<Campanha> = {}): Campanha {
 }
 
 function estado(sobrescreve: Partial<EstadoDasCampanhas> = {}): EstadoDasCampanhas {
-  return { busca: "", canal: "", ativa: "", pagina: 1, ...sobrescreve };
+  return { busca: "", canal: "", ativa: "", pagina: 1, editar: "", ...sobrescreve };
 }
 
 function formulario(
@@ -113,11 +114,23 @@ describe("lerEstado", () => {
   it("lê busca, canal, ativa e página da query", () => {
     expect(
       lerEstado({ q: " verao ", canal: "google", ativa: "true", pagina: "3" }),
-    ).toEqual({ busca: "verao", canal: "google", ativa: "true", pagina: 3 });
+    ).toEqual({
+      busca: "verao",
+      canal: "google",
+      ativa: "true",
+      pagina: 3,
+      editar: "",
+    });
   });
 
   it("nada na query é o estado vazio, na página 1", () => {
-    expect(lerEstado({})).toEqual({ busca: "", canal: "", ativa: "", pagina: 1 });
+    expect(lerEstado({})).toEqual({
+      busca: "",
+      canal: "",
+      ativa: "",
+      pagina: 1,
+      editar: "",
+    });
   });
 
   /**
@@ -149,6 +162,7 @@ describe("lerEstado", () => {
       canal: "",
       ativa: "",
       pagina: 1,
+      editar: "",
     });
   });
 });
@@ -248,6 +262,87 @@ describe("chipsDasCampanhas", () => {
       chipsDasCampanhas(estado({ busca: "v", canal: "meta", ativa: "true" })),
     ).toHaveLength(3);
     expect(temFiltro(estado({ ativa: "false" }))).toBe(true);
+  });
+});
+
+/* ========================================================================== *
+ * O formulário na URL — R2
+ * ========================================================================== */
+
+describe("o formulário vive na URL", () => {
+  /**
+   * Com o formulário na URL, o F5 no meio do preenchimento devolve o formulário
+   * aberto, o "voltar" do navegador o fecha em vez de sair da tela, e um link
+   * colado abre a campanha certa. Um `useState` perde as três.
+   */
+  it("«novo» e um id viajam na URL", () => {
+    expect(urlDaTela(estado({ editar: "novo" }))).toContain("editar=novo");
+    expect(urlDaTela(estado({ editar: "abc-123" }))).toContain("editar=abc-123");
+  });
+
+  it("sem formulário aberto, nada aparece na URL", () => {
+    expect(urlDaTela(estado())).toBe(ROTA_DE_MARKETING);
+  });
+
+  it("abrir o formulário preserva o filtro e a página", () => {
+    const url = urlDaTela(estado({ busca: "verao", pagina: 3, editar: "abc" }));
+    expect(url).toContain("q=verao");
+    expect(url).toContain("pagina=3");
+    expect(url).toContain("editar=abc");
+  });
+
+  it("o formulário aberto NÃO é um filtro — não vira chip nem conta em temFiltro", () => {
+    expect(chipsDasCampanhas(estado({ editar: "abc" }))).toEqual([]);
+    expect(temFiltro(estado({ editar: "abc" }))).toBe(false);
+  });
+
+  /**
+   * A campanha em edição está na página ATUAL, e mudar o filtro refaz a página.
+   * Carregar `editar` adiante abriria a tela num estado "perdido" logo depois
+   * de a pessoa clicar num chip, sem relação aparente com o que ela fez.
+   */
+  it("remover um filtro FECHA o formulário", () => {
+    const [chip] = chipsDasCampanhas(estado({ busca: "verao", editar: "abc" }));
+    expect(chip.href).not.toContain("editar");
+  });
+});
+
+describe("formularioAberto", () => {
+  const linhas = [campanha({ id: "a-1" }), campanha({ id: "a-2" })];
+
+  it("sem parâmetro, fechado", () => {
+    expect(formularioAberto(estado(), linhas)).toEqual({
+      aberto: false,
+      campanha: null,
+      perdida: false,
+    });
+  });
+
+  it("«novo» abre o formulário de criação, sem campanha", () => {
+    expect(formularioAberto(estado({ editar: "novo" }), linhas)).toEqual({
+      aberto: true,
+      campanha: null,
+      perdida: false,
+    });
+  });
+
+  it("um id da página abre aquela campanha", () => {
+    const r = formularioAberto(estado({ editar: "a-2" }), linhas);
+    expect(r.aberto).toBe(true);
+    expect(r.campanha?.id).toBe("a-2");
+    expect(r.perdida).toBe(false);
+  });
+
+  /**
+   * NÃO HÁ `GET /admin/campanhas/:id` NO EXPRESS. Um id de outra página não tem
+   * como ser resolvido — e abrir o formulário VAZIO ali seria pior que não
+   * abrir: a pessoa preencheria achando que edita e CRIARIA uma campanha nova.
+   */
+  it("um id fora da página não abre formulário vazio: marca «perdida»", () => {
+    const r = formularioAberto(estado({ editar: "de-outra-pagina" }), linhas);
+    expect(r.aberto).toBe(false);
+    expect(r.campanha).toBeNull();
+    expect(r.perdida).toBe(true);
   });
 });
 
