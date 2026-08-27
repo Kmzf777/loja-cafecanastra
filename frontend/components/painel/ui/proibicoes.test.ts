@@ -185,7 +185,9 @@ describe("as proibições do painel", () => {
       // `lib/conta/painel-servidor.test.ts` — a onda seguinte não nasce fora da
       // varredura por distração.
       "tela/GraficoDeReceita.tsx",
+      "tela/assinaturas/TabelaDeAssinaturas.tsx",
       "tela/assinaturas/page.tsx",
+      "tela/clientes/TabelaDeClientes.tsx",
       "tela/clientes/page.tsx",
       "tela/layout.tsx",
       "tela/legado/[[...rota]]/PainelLegado.tsx",
@@ -329,5 +331,76 @@ describe("contraste dos tokens semânticos", () => {
   it("a tarja de alerta escreve com o tom escuro, não com o da marca", () => {
     const tarja = readFileSync(join(__dirname, "Tarja.tsx"), "utf8");
     expect(tarja).toMatch(/texto:\s*"text-alerta-esc"/);
+  });
+});
+
+/**
+ * A FRONTEIRA SERVER->CLIENT, e o defeito que ela deixa passar em silencio.
+ *
+ * `<Tabela>` e `"use client"` e sua prop `colunas` carrega FUNCOES
+ * (`Coluna.celula`). Props de Server Component para Client Component atravessam
+ * SERIALIZADAS, e funcao nao serializa: um Server Component que declare as
+ * colunas e renderize `<Tabela>` faz o React lancar
+ *
+ *     Functions cannot be passed directly to Client Components unless you
+ *     explicitly expose it by marking it with "use server".
+ *
+ * ESTE TESTE EXISTE PORQUE O `next build` NAO PEGA ISSO. Toda rota sob
+ * `/dashboard` e dinamica (`f` na saida do build), entao nenhuma delas e
+ * prerenderizada durante a compilacao — o erro so apareceria em tempo de
+ * execucao, com a tela inteira em branco na frente do gestor. Aconteceu nesta
+ * onda: as telas de Clientes e de Assinaturas nasceram com as colunas dentro do
+ * `page.tsx`, a suite passou, o build passou, e as duas telas estavam
+ * quebradas. Foi medido com uma rota ESTATICA temporaria montando a mesma
+ * tabela — ai o build falhou, com a frase acima.
+ *
+ * A REGRA, ENTAO: quem importa um primitivo de cliente que recebe funcao tem de
+ * ser cliente tambem. A lista e fechada e escrita a mao de proposito — um
+ * primitivo novo com prop de funcao entra aqui, e quem o escrever tem de olhar
+ * para esta lista uma vez.
+ *
+ * A DETECCAO E POR `includes`, E NAO POR EXPRESSAO REGULAR. A primeira versao
+ * montava a regex com `new RegExp(\`from\s+...\`)` dentro de um template
+ * literal, e num template literal `\s` nao e escape conhecido: o backslash cai
+ * e a regex vira `froms+...`, que nao casa com nada. O teste ficava VERDE com a
+ * violacao presente — um guarda que nao guarda e pior que guarda nenhum, porque
+ * ensina que a mudanca passou. Conferido tirando o `"use client"` de
+ * `TabelaDeClientes.tsx`: com o `includes`, fica vermelho.
+ */
+describe("a fronteira Server->Client", () => {
+  const COM_PROP_DE_FUNCAO = ["Tabela"] as const;
+
+  function importa(fonte: string, modulo: string): boolean {
+    return fonte.includes(`/${modulo}"`) || fonte.includes(`/${modulo}'`);
+  }
+
+  function ehCliente(fonte: string): boolean {
+    const inicio = fonte.trimStart();
+    return inicio.startsWith('"use client"') || inicio.startsWith("'use client'");
+  }
+
+  it.each(COM_PROP_DE_FUNCAO)(
+    "quem importa <%s> declara 'use client' — funcao nao atravessa a fronteira",
+    (modulo) => {
+      const infratores = arquivosDeProducao()
+        .filter(({ nome }) => !nome.endsWith(`ui/${modulo}.tsx`))
+        .filter(({ fonte }) => importa(fonte, modulo))
+        .filter(({ fonte }) => !ehCliente(fonte))
+        .map(({ nome }) => nome);
+
+      expect(infratores).toEqual([]);
+    },
+  );
+
+  /**
+   * E a guarda da guarda: se um dia ninguem mais importar `<Tabela>`, o teste
+   * acima passaria por nao olhar para nada — que foi exatamente o que aconteceu
+   * com a regex quebrada.
+   */
+  it.each(COM_PROP_DE_FUNCAO)("e ha importadores de <%s> sendo conferidos", (modulo) => {
+    const importadores = arquivosDeProducao().filter(
+      ({ nome, fonte }) => !nome.endsWith(`ui/${modulo}.tsx`) && importa(fonte, modulo),
+    );
+    expect(importadores.length).toBeGreaterThanOrEqual(2);
   });
 });

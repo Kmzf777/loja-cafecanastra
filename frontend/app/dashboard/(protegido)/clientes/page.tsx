@@ -6,24 +6,22 @@ import { ChipsDeFiltro } from "@/components/painel/ui/ChipsDeFiltro";
 import { EstadoDaTela } from "@/components/painel/ui/EstadoDaTela";
 import { Ficha } from "@/components/painel/ui/Ficha";
 import { Paginacao } from "@/components/painel/ui/Paginacao";
-import { Tabela, type Coluna } from "@/components/painel/ui/Tabela";
 import { lerDaApi } from "@/lib/painel/api-servidor";
 import {
   POR_PAGINA,
   ROTA_DE_CLIENTES,
   chipsDosClientes,
   estadoCorrigido,
-  identificarCliente,
   lerEstado,
   montarConsulta,
   temFiltro,
-  textoOuTraco,
   urlDaTela,
-  type ClienteDaLista,
   type RespostaDeClientes,
 } from "@/lib/painel/clientes/clientes.logica";
 import { totalDePaginas } from "@/lib/painel/paginacao";
 import { lerAcessoDoPainel } from "@/lib/conta/painel-servidor";
+
+import { TabelaDeClientes } from "./TabelaDeClientes";
 
 /**
  * `/dashboard/clientes` — a lista de quem compra na loja.
@@ -54,54 +52,6 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-/**
- * As colunas, e a primeira delas é o R23.
- *
- * "primeira coluna é identificador humano, nunca UUID" — `identificarCliente`
- * devolve nome, ou o e-mail de quem nunca completou o cadastro, ou o texto "Sem
- * identificação". A <Tabela> transforma a primeira coluna em `<th scope="row">`
- * sozinha, o que faz o leitor de tela anunciar "Maria Souza, Compras, 3" ao
- * andar pela linha em vez de "3" solto.
- *
- * `dado: true` em TELEFONE E COMPRAS: os dois são número, e a monoespaçada com
- * numeral tabular do `globals.css` é o que faz comparar valores numa coluna ser
- * comparar POSIÇÃO e não comprimento de string. E-mail não é dado numérico — é
- * texto, e alinhado à direita ficaria ilegível.
- *
- * NENHUMA COLUNA É ORDENÁVEL, e isso é honestidade, não esquecimento:
- * `GET /auth/users` ordena por `criado_em DESC` e não aceita parâmetro de
- * ordenação. Um cabeçalho clicável que não ordena é pior que um cabeçalho
- * quieto — a <Tabela> desta casa só desenha a seta quando recebe `aoOrdenar`,
- * justamente para isso não acontecer por distração.
- */
-const COLUNAS: Coluna<ClienteDaLista>[] = [
-  {
-    chave: "cliente",
-    rotulo: "Cliente",
-    celula: (linha) => identificarCliente(linha),
-  },
-  {
-    chave: "email",
-    rotulo: "E-mail",
-    celula: (linha) => textoOuTraco(linha.email),
-  },
-  {
-    chave: "telefone",
-    rotulo: "Telefone",
-    dado: true,
-    celula: (linha) => textoOuTraco(linha.phone),
-  },
-  {
-    chave: "compras",
-    rotulo: "Compras",
-    dado: true,
-    // `purchases` é `count(*)::int` no backend, então zero é ZERO de verdade —
-    // conta criada e nada comprado. Não é ausência, e por isso não vira "—":
-    // trocar um zero medido por um travessão apagaria a informação mais útil
-    // desta coluna, que é quem se cadastrou e nunca voltou.
-    celula: (linha) => linha.purchases ?? 0,
-  },
-];
 
 export default async function PaginaDeClientes({
   searchParams,
@@ -196,12 +146,10 @@ export default async function PaginaDeClientes({
           vazioTexto="Quando alguém criar conta na loja, ela aparece aqui."
         >
           <Ficha semPreenchimento>
-            <Tabela
-              legenda="Clientes da loja"
-              colunas={COLUNAS}
-              linhas={linhas}
-              chaveDaLinha={(linha) => linha.user_id}
-            />
+            {/* A tabela mora num arquivo `"use client"` porque `Coluna.celula`
+                é uma FUNÇÃO, e função não atravessa a fronteira Server→Client.
+                O porquê inteiro está em `TabelaDeClientes.tsx`. */}
+            <TabelaDeClientes linhas={linhas} />
             <Paginacao
               pagina={estado.pagina}
               totalPaginas={dados?.totalPages ?? totalDePaginas(total, POR_PAGINA)}
