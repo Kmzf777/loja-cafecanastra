@@ -175,3 +175,55 @@ describe("Tabela", () => {
     expect(container.textContent).not.toMatch(/nenhum|vazio|sem resultado/i);
   });
 });
+
+/**
+ * A COLUNA DE SELEÇÃO — R25, acrescentada na Onda 5 pela tela de Pedidos.
+ *
+ * Ela é uma prop e não mais uma `Coluna` por causa da marcação: `colunas[0]`
+ * vira `<th scope="row">`, e uma caixa de seleção ali faria o leitor de tela
+ * anunciar "caixa não marcada" no lugar de "Maria Souza" a cada célula da
+ * linha. Estes testes travam as duas metades disso.
+ */
+describe("Tabela com seleção em massa", () => {
+  const selecao = {
+    cabecalho: <input type="checkbox" aria-label="Selecionar os desta página" />,
+    celula: (p: Pedido) => (
+      <input type="checkbox" aria-label={`Selecionar ${p.numero}`} />
+    ),
+  };
+
+  it("sem a prop, nenhuma célula extra nasce — quem não usa não paga", () => {
+    const { container } = renderizar(<Tabela {...base} />);
+    expect(container.querySelectorAll("thead th")).toHaveLength(3);
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+  });
+
+  it("com a prop, a caixa vem ANTES das colunas, num <td>", () => {
+    const { container } = renderizar(<Tabela {...base} selecao={selecao} />);
+    const primeiraLinha = container.querySelector("tbody tr")!;
+    expect(primeiraLinha.firstElementChild!.tagName).toBe("TD");
+    expect(
+      primeiraLinha.firstElementChild!.querySelector('input[type="checkbox"]'),
+    ).not.toBeNull();
+  });
+
+  /**
+   * O ponto todo da prop: o cabeçalho da LINHA continua sendo o identificador
+   * humano, e não a caixa.
+   */
+  it("o <th scope=\"row\"> continua sendo o nome do pedido, não a caixa", () => {
+    const { container } = renderizar(<Tabela {...base} selecao={selecao} />);
+    const linha = container.querySelector("tbody tr")!;
+    const cabecalhoDaLinha = linha.querySelector('th[scope="row"]')!;
+    expect(cabecalhoDaLinha.textContent).toContain("#1042 · Maria Souza");
+    expect(cabecalhoDaLinha.querySelector("input")).toBeNull();
+  });
+
+  it("o cabeçalho da coluna de seleção é <th scope=\"col\">, como os outros", () => {
+    const { container } = renderizar(<Tabela {...base} selecao={selecao} />);
+    const ths = [...container.querySelectorAll("thead th")];
+    expect(ths).toHaveLength(4);
+    expect(ths[0].getAttribute("scope")).toBe("col");
+    expect(ths[0].querySelector('input[type="checkbox"]')).not.toBeNull();
+  });
+});

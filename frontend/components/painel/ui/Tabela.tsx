@@ -17,6 +17,28 @@ export type Coluna<L> = {
 
 export type Ordenacao = { chave: string; direcao: "asc" | "desc" };
 
+/**
+ * A coluna de SELEÇÃO — R25, e ela é uma prop própria em vez de mais uma
+ * `Coluna` por uma razão de marcação, não de estilo.
+ *
+ * `colunas[0]` vira `<th scope="row">`, porque a primeira coluna é o
+ * identificador humano da linha (R23). Se a caixa de seleção fosse a coluna
+ * zero, o cabeçalho da linha passaria a ser a caixa — e o leitor de tela
+ * anunciaria "caixa de seleção, não marcada" no lugar de "Maria Souza" ao
+ * andar por cada célula. Enfiá-la DENTRO da primeira coluna tem o mesmo efeito
+ * pelo outro caminho: o conteúdo do `<th scope="row">` é lido inteiro a cada
+ * célula da linha.
+ *
+ * Como prop, ela sai antes das colunas num `<td>` comum, o `<th scope="row">`
+ * continua sendo o nome do pedido, e a marcação fica a que os dois leem bem.
+ */
+export type SelecaoDaTabela<L> = {
+  /** A caixa do cabeçalho — "os desta página". Quem a desenha é quem sabe o
+   *  que ela significa; a tabela só reserva a célula. */
+  cabecalho: ReactNode;
+  celula: (linha: L) => ReactNode;
+};
+
 const ARIA_SORT = { asc: "ascending", desc: "descending" } as const;
 
 /**
@@ -46,6 +68,7 @@ export function Tabela<L>({
   chaveDaLinha,
   ordenacao,
   aoOrdenar,
+  selecao,
   className = "",
 }: {
   /** O nome da tabela para quem não a vê. Vai num <caption> visualmente oculto:
@@ -57,6 +80,9 @@ export function Tabela<L>({
   chaveDaLinha: (linha: L) => string;
   ordenacao?: Ordenacao;
   aoOrdenar?: (chave: string) => void;
+  /** A coluna de seleção em massa (R25). Ausente, a tabela não reserva a
+   *  célula — nenhuma tela paga por um recurso que não usa. */
+  selecao?: SelecaoDaTabela<L>;
   className?: string;
 }) {
   return (
@@ -72,6 +98,18 @@ export function Tabela<L>({
         <caption className="sr-only">{legenda}</caption>
         <thead>
           <tr>
+            {selecao && (
+              /* Sem `rotulo` visível: o cabeçalho É a caixa, e um texto
+                 "Selecionar" ao lado dela roubaria largura de uma coluna de
+                 dado. O nome de que o leitor de tela precisa vem no
+                 `aria-label` da própria caixa, que quem a desenha escreve. */
+              <th
+                scope="col"
+                className="sticky top-0 z-10 w-11 border-b border-fuligem-20 bg-cal-puro px-3 py-2"
+              >
+                {selecao.cabecalho}
+              </th>
+            )}
             {colunas.map((coluna) => {
               /* "Ordenável" é `ordenavel` E ter para quem avisar. Sem
                  `aoOrdenar`, um botão de ordenação seria um controle que não
@@ -137,6 +175,11 @@ export function Tabela<L>({
         <tbody className="[&>tr:last-child>td]:border-b-0 [&>tr:last-child>th]:border-b-0">
           {linhas.map((linha) => (
             <tr key={chaveDaLinha(linha)} className="transition-colors hover:bg-cal">
+              {selecao && (
+                <td className="border-b border-fuligem-20 px-3 py-2 align-middle">
+                  {selecao.celula(linha)}
+                </td>
+              )}
               {colunas.map((coluna, indice) =>
                 /* R23: a primeira coluna é o identificador HUMANO da linha
                    (número do pedido + nome, nunca UUID), então ela é de fato o
