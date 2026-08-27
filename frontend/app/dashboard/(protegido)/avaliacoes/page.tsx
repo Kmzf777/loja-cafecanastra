@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { Cabecalho } from "@/components/painel/casca/Cabecalho";
 import { BuscaDaLista } from "@/components/painel/ui/BuscaDaLista";
@@ -70,7 +71,7 @@ function Aba({
 }: {
   href: string;
   ativa: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <Link
