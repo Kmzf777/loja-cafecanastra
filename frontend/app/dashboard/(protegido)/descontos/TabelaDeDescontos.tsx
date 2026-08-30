@@ -261,8 +261,14 @@ export function TabelaDeDescontos({
       {erro && (
         /* A tarja fica ACIMA da tabela, e não dentro da célula: um erro dentro
            de uma linha de 24px é lido como se pertencesse àquele campo, e este
-           pertence ao gesto. */
-        <Tarja onFechar={() => setErro(null)}>{erro}</Tarja>
+           pertence ao gesto.
+
+           O filete de baixo é o do §4.4 — este componente é montado DENTRO de
+           uma <Ficha semPreenchimento>, e sem ele a tarja encostaria no
+           cabeçalho da tabela sem nada dizendo onde uma acaba e a outra começa. */
+        <div className="border-b border-fuligem-20">
+          <Tarja onFechar={() => setErro(null)}>{erro}</Tarja>
+        </div>
       )}
       <Tabela
         legenda="Regras de desconto da loja"
