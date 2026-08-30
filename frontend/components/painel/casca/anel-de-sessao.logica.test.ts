@@ -140,6 +140,14 @@ describe("precisaConferirOPapel", () => {
  * expira, que é quando ninguém está olhando.
  */
 describe("os dois anéis concordam no destino", () => {
+  /** O veredito do anel de servidor, achatado no que interessa comparar. Falhar
+   *  o `tipo` aqui já é uma divergência, e é bom que o teste o diga. */
+  function destinoNoServidor(fatos: Parameters<typeof decidirAcessoAoPainel>[0]) {
+    const decisao = decidirAcessoAoPainel(fatos);
+    expect(decisao.tipo).toBe("redireciona");
+    return decisao.tipo === "redireciona" ? decisao.destino : null;
+  }
+
   it("sem sessão: mesmo endereço de entrada, mesmo ?de=", () => {
     const rota = "/dashboard/produtos?q=canastra";
     const cliente = decidirNoAnelDeSessao({
@@ -148,13 +156,15 @@ describe("os dois anéis concordam no destino", () => {
       userId: null,
       rotaAtual: rota,
     });
-    const servidor = decidirAcessoAoPainel({
-      temSessao: false,
-      ehAdmin: false,
-      falhouConsulta: false,
-      rotaPedida: rota,
+    expect(cliente).toEqual({
+      tipo: "sai",
+      destino: destinoNoServidor({
+        temSessao: false,
+        ehAdmin: false,
+        falhouConsulta: false,
+        rotaPedida: rota,
+      }),
     });
-    expect(cliente).toEqual({ tipo: "sai", destino: servidor.tipo === "redireciona" ? servidor.destino : "" });
   });
 
   it("logado sem ser admin: os dois mandam para a própria conta", () => {
@@ -163,12 +173,14 @@ describe("os dois anéis concordam no destino", () => {
       userId: OUTRO,
       ehAdmin: false,
     });
-    const servidor = decidirAcessoAoPainel({
-      temSessao: true,
-      ehAdmin: false,
-      falhouConsulta: false,
-      rotaPedida: "/dashboard",
+    expect(cliente).toEqual({
+      tipo: "sai",
+      destino: destinoNoServidor({
+        temSessao: true,
+        ehAdmin: false,
+        falhouConsulta: false,
+        rotaPedida: "/dashboard",
+      }),
     });
-    expect(cliente).toEqual({ tipo: "sai", destino: servidor.tipo === "redireciona" ? servidor.destino : "" });
   });
 });
