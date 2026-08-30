@@ -40,6 +40,12 @@ const ACOES = Object.freeze({
   VITRINE_ALTERADA: "vitrine_alterada",
   PROMOCAO_CRIADA: "promocao_criada",
   PROMOCAO_ALTERADA: "promocao_alterada",
+  // Arquivar tem verbo PRÓPRIO, e não é preciosismo de vocabulário: é o gesto
+  // que tira uma campanha do ar sem apagá-la (R13), e a pergunta que a
+  // auditoria responde sobre ele — "quem tirou o desconto do site na sexta?" —
+  // some se ele virar mais uma "promocao_alterada" no meio das outras.
+  PROMOCAO_ARQUIVADA: "promocao_arquivada",
+  PROMOCAO_DESARQUIVADA: "promocao_desarquivada",
   CUPOM_CRIADO: "cupom_criado",
   CUPOM_ALTERADO: "cupom_alterado",
   OPCAO_CRIADA: "opcao_criada",

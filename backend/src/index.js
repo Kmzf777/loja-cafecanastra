@@ -26,6 +26,7 @@ const clubeRoutes = require("./routes/clube.routes");
 const vitrineRoutes = require("./routes/vitrine.routes");
 const painelRoutes = require("./routes/painel.routes");
 const marketingRoutes = require("./routes/marketing.routes");
+const descontosRoutes = require("./routes/descontos.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 
@@ -157,6 +158,14 @@ app.use(painelRoutes);
 // Marketing (0033): campanhas, consentimentos e envios. Tudo so de admin —
 // `consentimentos` e `envios` carregam e-mail e telefone de gente.
 app.use(marketingRoutes);
+// Descontos (0032): o CRUD do motor de promocao e a rota de simulacao, tudo em
+// `/admin/descontos`. NAO substitui `/promotions`, que continua servindo a
+// tabela LEGADA (`promocoes_legado`) enquanto o checkout nao termina a troca —
+// sao duas tabelas diferentes, e as duas rotas convivem de proposito.
+// TAMBEM NO FIM, pelo mesmo motivo dos dois routers acima: nada aqui forma par
+// com uma rota de `:id` ja registrada. Dentro do proprio router, `/simular`
+// vem antes de `/:id` — la esta escrito o porque.
+app.use(descontosRoutes);
 
 /**
  * Carrinho abandonado: cron de hora em hora, DESLIGADO por padrao (decisao 5

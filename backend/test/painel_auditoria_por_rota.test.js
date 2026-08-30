@@ -455,6 +455,10 @@ const AUDITADOS = Object.freeze({
     "administradoresRepository.js",
   ],
   "marketing.routes.js": ["marketingRepository.js"],
+  // O motor de promoção (0032). `promotions.routes.js`, logo acima, continua
+  // servindo a tabela LEGADA — são duas tabelas e dois routers, e os dois
+  // auditam.
+  "descontos.routes.js": ["descontosRepository.js"],
   "conta.routes.js": ["conta.routes.js"],
   "lgpd.routes.js": ["lgpd.routes.js"],
 });
