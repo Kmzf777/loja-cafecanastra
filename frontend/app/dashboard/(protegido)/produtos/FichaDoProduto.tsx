@@ -19,6 +19,7 @@ import { Selo } from "@/components/painel/ui/Selo";
 import { Tarja } from "@/components/painel/ui/Tarja";
 import { ETIQUETA, FOCO } from "@/components/painel/ui/estilos";
 import { formatarReais } from "@/lib/painel/dinheiro";
+import { urlDaImagemDoPainel } from "@/lib/painel/transporte";
 import {
   ABAS,
   FORMULARIO_VAZIO,
@@ -928,6 +929,17 @@ function AbaConteudo({
  * Cloudinary na maioria dos casos, caminho relativo em cadastro herdado. Uma
  * miniatura que derruba a ficha inteira é pior que uma miniatura sem
  * otimização, e aqui não há LCP a defender: é uma imagem atrás de senha.
+ *
+ * E É POR CAUSA DESSE "CAMINHO RELATIVO EM CADASTRO HERDADO" QUE A URL PASSA
+ * POR `urlDaImagemDoPainel`. O comentário acima já dizia que o campo guarda as
+ * duas coisas, e a `<img>` desenhava a string CRUA: no cadastro herdado o
+ * navegador resolvia `/uploads/…` contra a origem do painel, onde não há nada,
+ * e a foto vinha quebrada. O legado prefixava com `API_BASE`
+ * (`AddedProducts.jsx:145`); a função faz o mesmo, e tem teste.
+ *
+ * O ENDEREÇO CRU CONTINUA ESCRITO AO LADO, e não o resolvido: é o valor que
+ * está no banco, é ele que se compara com o que o outro painel mostra, e trocá-lo
+ * pelo prefixado esconderia justamente a diferença que se foi conferir.
  */
 function FotoDeHoje({ url }: { url: string }) {
   return (
@@ -935,7 +947,7 @@ function FotoDeHoje({ url }: { url: string }) {
       <div className="size-24 shrink-0 overflow-hidden rounded-cx border border-fuligem-20 bg-cal">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={url}
+          src={urlDaImagemDoPainel(url)}
           alt="Foto gravada hoje para este produto"
           className="size-full object-cover object-center"
         />

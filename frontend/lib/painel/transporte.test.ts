@@ -75,7 +75,12 @@ const falso = {
  */
 vi.mock("@/lib/supabase/cliente", () => ({ clienteNavegador: () => falso }));
 
-import { authFetch, chamarApi, BASE_DA_API } from "./transporte";
+import {
+  authFetch,
+  chamarApi,
+  urlDaImagemDoPainel,
+  BASE_DA_API,
+} from "./transporte";
 import { _esquecerPerfil, recuperarSessao } from "@/lib/conta/sessao";
 
 const sessaoDe = (token: string): SessaoFalsa => ({
@@ -278,5 +283,54 @@ describe("guarda do painel", () => {
     const sessao = await recuperarSessao();
 
     expect(guardaLibera(sessao?.usuario.role)).toBe(true);
+  });
+});
+
+/**
+ * A MINIATURA QUEBRADA É INVISÍVEL NO BUILD, e por isso ela vem para cá.
+ *
+ * O campo `image` do cadastro guarda URL da Cloudinary na maioria dos cafés e
+ * caminho relativo em cadastro herdado do painel antigo. Sem prefixo, o segundo
+ * caso é resolvido pelo navegador contra a origem do PAINEL, onde não existe
+ * nada — e o gestor vê um retângulo vazio na ficha em que ele foi justamente
+ * conferir a foto. Nenhum tipo pega isso: os dois casos são `string`.
+ */
+describe("urlDaImagemDoPainel", () => {
+  it("URL absoluta passa intacta — é o caso da Cloudinary", () => {
+    const cloudinary = "https://res.cloudinary.com/canastra/image/upload/x.jpg";
+    expect(urlDaImagemDoPainel(cloudinary)).toBe(cloudinary);
+  });
+
+  it("caminho relativo ganha o prefixo da API", () => {
+    expect(urlDaImagemDoPainel("/uploads/cafe.jpg")).toBe(
+      `${BASE_DA_API}/uploads/cafe.jpg`,
+    );
+  });
+
+  it("sem a barra inicial dá o MESMO endereço — o banco tem as duas grafias", () => {
+    expect(urlDaImagemDoPainel("uploads/cafe.jpg")).toBe(
+      urlDaImagemDoPainel("/uploads/cafe.jpg"),
+    );
+  });
+
+  /* `//host/x.jpg` é endereço, não caminho: o navegador resolve o protocolo
+     sozinho. Prefixá-lo produziria `http://api//host/x.jpg`. */
+  it("protocol-relative é endereço e passa", () => {
+    expect(urlDaImagemDoPainel("//cdn.exemplo/x.jpg")).toBe("//cdn.exemplo/x.jpg");
+  });
+
+  it("data: URI passa — é a prévia local, que não mora em servidor nenhum", () => {
+    expect(urlDaImagemDoPainel("data:image/png;base64,AAA")).toBe(
+      "data:image/png;base64,AAA",
+    );
+  });
+
+  /* Devolver a base pediria a raiz da API e desenharia o ícone de imagem
+     quebrada; quem chama esconde a miniatura quando a string é vazia. */
+  it("vazio, nulo e só espaço devolvem vazio, nunca a base", () => {
+    expect(urlDaImagemDoPainel("")).toBe("");
+    expect(urlDaImagemDoPainel(null)).toBe("");
+    expect(urlDaImagemDoPainel(undefined)).toBe("");
+    expect(urlDaImagemDoPainel("   ")).toBe("");
   });
 });
