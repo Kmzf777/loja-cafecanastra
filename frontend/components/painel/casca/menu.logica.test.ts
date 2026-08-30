@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { MENU, itemAtivo, LEGADO, legadoAtivo } from "./menu.logica";
+import { MENU, itemAtivo } from "./menu.logica";
 
 describe("MENU", () => {
   it("nenhuma rota em inglês sobreviveu", () => {
@@ -37,20 +37,22 @@ describe("MENU", () => {
    *
    * A varredura é do DIRETÓRIO, e não uma lista escrita à mão: uma lista aqui
    * seria a segunda cópia do mapa do painel, e o próximo órfão nasceria com o
-   * teste verde. Pastas entre parênteses são route groups (não viram URL), e
-   * `legado` é a saída de emergência que fica FORA do `MENU` de propósito — as
-   * duas exceções estão nomeadas para que ninguém acrescente uma terceira sem
-   * escrever o porquê.
+   * teste verde. A única exclusão que restou é a das pastas entre parênteses e
+   * colchetes, que são route group e segmento dinâmico — nenhuma das duas vira
+   * uma tela com endereço próprio.
+   *
+   * ATÉ A ONDA 7 HAVIA UMA SEGUNDA EXCLUSÃO, `legado`, e ela sumiu junto com o
+   * painel antigo. Está dito aqui porque a lista de exceções é o lugar onde
+   * uma tela órfã se esconde com o teste verde: quem precisar acrescentar a
+   * próxima tem de escrever o porquê ao lado, como o `legado` tinha.
    */
   it("nenhuma tela do painel fica órfã de menu", () => {
     const RAIZ = join(__dirname, "..", "..", "..", "app", "dashboard", "(protegido)");
-    const FORA_DO_MENU = ["legado"];
 
     const telas = readdirSync(RAIZ, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
-      .filter((nome) => !nome.startsWith("(") && !nome.startsWith("["))
-      .filter((nome) => !FORA_DO_MENU.includes(nome));
+      .filter((nome) => !nome.startsWith("(") && !nome.startsWith("["));
 
     const hrefs = MENU.flatMap((g) => g.itens.map((i) => i.href));
     for (const tela of telas) {
@@ -77,42 +79,5 @@ describe("itemAtivo", () => {
 
   it("devolve null para rota que não está no menu", () => {
     expect(itemAtivo("/dashboard/inventado")).toBeNull();
-  });
-});
-
-/**
- * O legado é a saída de emergência desta onda, e o teste guarda as duas coisas
- * que fariam o menu mentir: ele NÃO pode ser um item do `MENU` (senão a
- * estrutura do painel novo passa a incluir o velho, e alguém esquece de
- * removê-lo na Onda 6), e ele NÃO pode acender junto de um item do menu novo —
- * dois `aria-current="page"` na mesma tela é o leitor de tela anunciando duas
- * páginas atuais.
- */
-describe("o painel antigo", () => {
-  it("não é um item do menu novo", () => {
-    const hrefs = MENU.flatMap((g) => g.itens.map((i) => i.href));
-    expect(hrefs).not.toContain(LEGADO.href);
-  });
-
-  it("acende em /dashboard/legado e no que estiver abaixo dele", () => {
-    expect(legadoAtivo("/dashboard/legado")).toBe(true);
-    expect(legadoAtivo("/dashboard/legado/orders")).toBe(true);
-  });
-
-  it("corta por segmento, como o resto do menu", () => {
-    expect(legadoAtivo("/dashboard/legado-de-teste")).toBe(false);
-  });
-
-  it("nunca acende junto com um item do menu novo", () => {
-    for (const caminho of [
-      "/dashboard",
-      "/dashboard/legado",
-      "/dashboard/legado/orders",
-      "/dashboard/pedidos/abc-123",
-      "/dashboard/inventado",
-    ]) {
-      const acesos = [itemAtivo(caminho), legadoAtivo(caminho) ? LEGADO.href : null];
-      expect(acesos.filter(Boolean).length).toBeLessThanOrEqual(1);
-    }
   });
 });

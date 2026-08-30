@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderizar } from "@/lib/teste/renderizar";
 import { SERRA_PATH } from "@/components/marca/Serra";
-import { LEGADO, MENU } from "./menu.logica";
+import { MENU } from "./menu.logica";
 
 /**
  * `vi.hoisted` e não um `let` solto: `vi.mock` é içado para cima dos imports, e
@@ -28,7 +28,6 @@ describe("MenuLateral", () => {
       a.getAttribute("href"),
     );
     for (const item of TODOS_OS_ITENS) expect(hrefs).toContain(item.href);
-    expect(hrefs).toContain(LEGADO.href);
   });
 
   /**
@@ -40,7 +39,7 @@ describe("MenuLateral", () => {
   it("nenhum item é só ícone: todo link tem rótulo E pictograma", () => {
     const { container } = menuEm("/dashboard");
     const links = [...container.querySelectorAll("nav a")];
-    expect(links.length).toBe(TODOS_OS_ITENS.length + 1);
+    expect(links.length).toBe(TODOS_OS_ITENS.length);
     for (const link of links) {
       expect(link.textContent?.trim()).not.toBe("");
       expect(link.querySelector("svg")).not.toBeNull();
@@ -64,8 +63,6 @@ describe("MenuLateral", () => {
     ["/dashboard", "/dashboard"],
     ["/dashboard/pedidos", "/dashboard/pedidos"],
     ["/dashboard/pedidos/abc-123", "/dashboard/pedidos"],
-    ["/dashboard/legado", LEGADO.href],
-    ["/dashboard/legado/orders", LEGADO.href],
   ])("em %s acende exatamente um item, e é %s", (caminho, esperado) => {
     const { container } = menuEm(caminho);
     const acesos = [...container.querySelectorAll('[aria-current="page"]')];
@@ -97,20 +94,6 @@ describe("MenuLateral", () => {
     const { container } = menuEm("/dashboard");
     const nav = container.querySelector("nav")!;
     expect(nav.getAttribute("aria-label")).toBe("Seções do painel");
-  });
-
-  /**
-   * Nesta onda as telas novas ainda não existem. Sem este link o gestor abre o
-   * painel e não tem como chegar ao único lugar onde consegue trabalhar — e o
-   * endereço `/dashboard/legado` não está escrito em lugar nenhum que ele veja.
-   */
-  it("o painel antigo continua alcançável a um clique", () => {
-    const { container } = menuEm("/dashboard");
-    const legado = [...container.querySelectorAll("a")].find(
-      (a) => a.getAttribute("href") === LEGADO.href,
-    );
-    expect(legado).toBeDefined();
-    expect(legado!.textContent).toContain(LEGADO.rotulo);
   });
 
   /**

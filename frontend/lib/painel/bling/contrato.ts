@@ -7,9 +7,11 @@
  * essa lógica é a única parte desta tela que dá para testar sem navegador.
  * `contrato.test.ts` exercita tudo o que está aqui.
  *
- * As duas superfícies que consomem isto — a tela `/dashboard/legado/bling` e o
- * modal de detalhe de `Orders.jsx` — mostram exatamente a mesma verdade porque
- * derivam dela do mesmo lugar.
+ * As duas superfícies que consomem isto — a fila em `/dashboard/pedidos` e o
+ * bloco do Bling dentro do detalhe do pedido — mostram exatamente a mesma
+ * verdade porque derivam dela do mesmo lugar. (Eram a tela `/dashboard/legado/bling`
+ * e o modal de `Orders.jsx` até a Onda 7 apagar o painel legado; o módulo
+ * atravessou a reescrita sem mudar, que era o objetivo de tê-lo extraído.)
  */
 
 /**

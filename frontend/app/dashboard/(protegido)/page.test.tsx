@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { html } from "@/lib/teste/html";
-import { LEGADO } from "@/components/painel/casca/menu.logica";
 import { diaEmSaoPaulo } from "@/lib/painel/data";
 
 /**
@@ -126,11 +125,12 @@ describe("a home do painel", () => {
   });
 
   /**
-   * Enquanto a maior parte das telas não existir, sem este link o gestor abre
-   * `/dashboard` e não tem como fazer o trabalho do dia.
+   * A Onda 7 apagou o painel antigo, e com ele o link que esta tela mantinha
+   * para lá. O teste inverteu de sinal: o que ele guarda agora é que ninguém
+   * reponha um atalho para uma rota que responde 404.
    */
-  it("aponta para o painel antigo, que é onde a maior parte do trabalho é feita", async () => {
-    expect(await saida()).toContain(`href="${LEGADO.href}"`);
+  it("não aponta mais para o painel antigo, que deixou de existir", async () => {
+    expect(await saida()).not.toContain("/dashboard/legado");
   });
 });
 

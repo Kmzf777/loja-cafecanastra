@@ -303,8 +303,11 @@ export async function middleware(requisicao: NextRequest) {
  * de imagem com `Set-Cookie` de sessão dentro é justamente o que o bloco de
  * cabeçalhos do `setAll` existe para impedir.
  *
- * `/dashboard` CONTINUA PASSANDO de propósito: o painel legado é uma ilha
- * client-only, e a partir da Task 6 ele também autentica pelo mesmo GoTrue.
+ * `/dashboard` CONTINUA PASSANDO de propósito. Era por causa do painel legado,
+ * que autenticava pelo mesmo GoTrue; a Onda 7 o apagou e a razão continua, mais
+ * forte: o painel novo é feito de Server Components e Server Actions, que leem a
+ * sessão do cookie A CADA requisição. Sem passar por aqui o cookie não é
+ * renovado, e o gestor cai na tela de entrada no meio do trabalho.
  */
 export const config = {
   matcher: [

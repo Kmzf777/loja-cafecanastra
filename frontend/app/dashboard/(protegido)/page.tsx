@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { Cabecalho } from "@/components/painel/casca/Cabecalho";
-import { LEGADO } from "@/components/painel/casca/menu.logica";
 import { EstadoDaTela } from "@/components/painel/ui/EstadoDaTela";
 import { Ficha } from "@/components/painel/ui/Ficha";
 import { Tarja } from "@/components/painel/ui/Tarja";
@@ -248,25 +247,18 @@ export default async function PaginaInicialDoPainel() {
         </Ficha>
 
         {/*
-          O AVISO É `aviso` E NÃO `alerta`, MUITO MENOS `erro`. Nada está
-          quebrado: o painel novo está incompleto, o que é um fato de cronograma.
-          Gastar a tarja vermelha — ou mesmo o ocre — num recado de roteiro é
-          como se ensina o gestor a ignorar a faixa no dia em que ela disser que
-          o pagamento falhou (R21).
+          AQUI FICAVA A TARJA DE ROTEIRO — "estas telas chegam nas próximas
+          ondas, até lá o trabalho do dia é feito no painel antigo", com um link
+          para ele. Ela saiu na Onda 7 porque as duas metades deixaram de ser
+          verdade no mesmo dia: as telas que ela prometia existem, e o painel
+          antigo para onde ela apontava não existe mais.
+
+          Fica registrado para que ninguém reponha o recado sem reparar que ele
+          era temporário por desenho. Aviso de cronograma na tela do gestor tem
+          data de validade, e passada a data ele vira ruído que ensina a ignorar
+          a faixa — que é exatamente o que a tarja de verdade (a de `alerta`,
+          logo acima) não pode se dar ao luxo de ser (R21).
         */}
-        <Tarja tom="aviso">
-          As telas de Clientes e de Assinaturas já existem. Pedidos, Produtos,
-          Descontos e Avaliações chegam nas próximas ondas — os links da fila
-          acima já apontam para elas com o filtro pronto, e até lá o trabalho do
-          dia é feito no{" "}
-          <Link
-            href={LEGADO.href}
-            className={`underline decoration-1 underline-offset-4 hover:decoration-2 ${FOCO}`}
-          >
-            {LEGADO.rotulo}
-          </Link>
-          .
-        </Tarja>
       </div>
     </>
   );

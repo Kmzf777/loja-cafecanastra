@@ -16,13 +16,12 @@
  *  - `/csrf-token`: a API do Supabase é chamada com `Authorization: Bearer`, e
  *    não por cookie de sessão. Sem cookie de autenticação na requisição, não há
  *    o que um site de terceiro forjar. (O Express só perde o `csurf` na Task 5.)
- *  - O evento `shop:cartMerged` disparado pelo `entrar`: o único ouvinte do
- *    repositório é `legacy/contexts/productContext`, que só é montado DENTRO da
- *    ilha `/dashboard` — e lá quem dispara é o próprio
- *    `legacy/contexts/loginContext/authContextProvider.jsx`. Ou seja, o
- *    disparo daqui nunca chegava a ninguém. A fusão da sacola da vitrine passa
- *    a ser da Task 4, sobre `canastra.fundir_sacola`; o par legado continua
- *    intacto até a Task 6.
+ *  - O evento `shop:cartMerged` disparado pelo `entrar`: o único ouvinte que o
+ *    repositório teve foi `legacy/contexts/productContext`, e ele só era montado
+ *    DENTRO da ilha `/dashboard` — onde quem disparava era o próprio
+ *    `legacy/contexts/loginContext/authContextProvider.jsx`. Ou seja, o disparo
+ *    daqui nunca chegou a ninguém, e a Onda 7 apagou os dois lados do par. A
+ *    fusão da sacola da vitrine é `canastra.fundir_sacola`.
  *
  * O QUE NÃO PODE VOLTAR
  *  - O papel de administrador NÃO vem de claim do JWT. Ver `lerPapel()`.
@@ -91,7 +90,9 @@ export function destinoSeguro(bruto: string | null, padrao: string): string {
   return bruto;
 }
 
-/** Chave que o painel legado (`authContextProvider.jsx`) ainda lê. Ver `sair()`. */
+/** Chave que o painel legado gravava (`authContextProvider.jsx`). Ninguém mais a
+ *  LÊ — a Onda 7 apagou o leitor —, mas ela continua no `localStorage` de quem
+ *  usou a loja antes disso, e é `sair()` quem a apaga. Ver `sair()`. */
 const CHAVE_REFRESH_LEGADA = "has_refresh";
 
 export type Usuario = {
@@ -479,10 +480,12 @@ export async function sair(): Promise<void> {
   }
 
   try {
-    // O painel legado ainda lê esta chave (Task 6 a remove junto com o esquema
-    // que ela servia). Quem já a tinha gravada do tempo do Express ficaria com
-    // ela para sempre, e o painel continuaria tentando um refresh que não
-    // existe mais.
+    // A LIMPEZA SOBREVIVE AO LEITOR, e é de propósito. Quem lia esta chave era
+    // o painel legado, que a Onda 7 apagou — mas apagar código nosso não apaga
+    // o `localStorage` de ninguém: quem entrou na loja antes do corte continua
+    // com a marca gravada no navegador dele. Esta linha é o que a recolhe, e
+    // por isso ela só pode sair depois que ninguém mais tiver a chave — o que
+    // não tem data e não dá para medir daqui.
     localStorage.removeItem(CHAVE_REFRESH_LEGADA);
   } catch {
     // Modo privado sem cota: não há o que limpar.

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Serra } from "@/components/marca/Serra";
 import { ETIQUETA, FOCO_CLARO } from "../ui/estilos";
-import { LEGADO, MENU, itemAtivo, legadoAtivo } from "./menu.logica";
+import { MENU, itemAtivo } from "./menu.logica";
 
 /**
  * O menu lateral — a âncora escura do painel.
@@ -162,14 +162,6 @@ const PICTOGRAMAS: Record<string, ReactNode> = {
       <path d="M10.4 9.4v3.2" />
     </>
   ),
-  // Painel antigo — a caixa de arquivo morto.
-  [LEGADO.href]: (
-    <>
-      <path d="M1.8 2.6h12.4v3.2H1.8z" />
-      <path d="M3.2 5.8v7.6h9.6V5.8" />
-      <path d="M6.4 8.8h3.2" />
-    </>
-  ),
 };
 
 /**
@@ -240,7 +232,6 @@ function ItemDoMenu({
 export function MenuLateral() {
   const caminho = usePathname() ?? "/dashboard";
   const aceso = itemAtivo(caminho);
-  const noLegado = legadoAtivo(caminho);
   const idBase = useId();
 
   return (
@@ -314,20 +305,6 @@ export function MenuLateral() {
         })}
       </div>
 
-      {/*
-        A SAÍDA DE EMERGÊNCIA, e ela é temporária por desenho.
-
-        Nesta onda as telas novas ainda não existem: sem este link, o gestor
-        abre o painel e não tem como chegar ao único lugar onde ele consegue
-        despachar um pedido. Fica separado por um filete e no rodapé porque não
-        é uma área do produto — é o andaime. A Onda 6 apaga `frontend/legacy/`
-        e leva este bloco junto.
-      */}
-      <div className="border-t border-fuligem-80 py-2">
-        <ul className="md:block">
-          <ItemDoMenu href={LEGADO.href} rotulo={LEGADO.rotulo} aceso={noLegado} />
-        </ul>
-      </div>
     </nav>
   );
 }

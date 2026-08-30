@@ -78,28 +78,3 @@ export function itemAtivo(caminho: string): string | null {
   if (!casados.length) return null;
   return casados.sort((a, b) => b.href.length - a.href.length)[0].href;
 }
-
-/**
- * O painel antigo, que continua de pé em `/dashboard/legado`.
- *
- * FICA FORA DO `MENU` DE PROPÓSITO. `MENU` é o mapa do painel NOVO — é sobre
- * ele que `itemAtivo` decide, e é ele que as ondas seguintes vão preencher.
- * O legado não é uma área do produto: é uma saída de emergência com data de
- * validade (a Onda 6 do roteiro apaga `frontend/legacy/` e esta constante
- * junto). Metê-lo no `MENU` faria a estrutura do painel novo mentir sobre o
- * seu próprio tamanho, e obrigaria a lembrar de tirá-lo de lá depois.
- *
- * Enquanto ele existe, PRECISA estar visível: nesta onda as telas novas ainda
- * não nasceram, e sem este link o gestor não tem como chegar ao único painel
- * que hoje faz o trabalho dele.
- */
-export const LEGADO: ItemDeMenu = {
-  rotulo: "Painel antigo",
-  href: "/dashboard/legado",
-};
-
-/** O legado está aceso? Mesmo corte por segmento de `itemAtivo`, pelo mesmo
- *  motivo — `/dashboard/legado-de-teste` não é o painel antigo. */
-export function legadoAtivo(caminho: string): boolean {
-  return caminho === LEGADO.href || caminho.startsWith(LEGADO.href + "/");
-}

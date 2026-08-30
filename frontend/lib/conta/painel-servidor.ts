@@ -503,8 +503,8 @@ export async function exigirAdminEmAcao(): Promise<{ userId: string }> {
  * coisa e voltar ao lugar certo importa. Quem chega por favorito frio volta para
  * `/dashboard` e navega dali.
  *
- * (Este parágrafo dizia `legacy/routes/AdminRoutes.jsx`, e era meia verdade: ele
- * só era montado dentro da ilha `/dashboard/legado/*`, então as telas novas
- * nunca chegaram a ter esse anel. O anel próprio fecha a lacuna e sobrevive ao
- * dia em que `frontend/legacy/` for apagado.)
+ * (Este parágrafo já dizia `legacy/routes/AdminRoutes.jsx`, e era meia verdade:
+ * aquele anel só era montado dentro da ilha `/dashboard/legado/*`, então as telas
+ * novas nunca chegaram a tê-lo. O anel próprio fechou a lacuna — e sobreviveu à
+ * Onda 7, que apagou `frontend/legacy/`. É por isso que ele nasceu separado.)
  */
