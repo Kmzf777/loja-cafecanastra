@@ -23,6 +23,7 @@ import {
   montarConsulta,
   temFiltro,
   urlDaTela,
+  type EstadoDasCampanhas,
   type RespostaDeCampanhas,
 } from "@/lib/painel/marketing/campanhas.logica";
 
@@ -213,11 +214,7 @@ export default async function PaginaDeMarketing({
  * "voltar" desfaz; e o estado desativado sai de graça (o filtro aceso vira
  * texto, não link para si mesmo).
  */
-function FiltrosDeCampanha({
-  estado,
-}: {
-  estado: Parameters<typeof urlDaTela>[0] & { canal: string; ativa: string };
-}) {
+function FiltrosDeCampanha({ estado }: { estado: EstadoDasCampanhas }) {
   const opcoes = [
     { rotulo: "Todas", ativo: estado.ativa === "", href: urlDaTela({ ...estado, ativa: "", editar: "", pagina: 1 }) },
     { rotulo: "Só ligadas", ativo: estado.ativa === "true", href: urlDaTela({ ...estado, ativa: "true", editar: "", pagina: 1 }) },

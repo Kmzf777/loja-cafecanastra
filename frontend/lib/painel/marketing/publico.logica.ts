@@ -219,8 +219,10 @@ export function montarPublico(historico: Consentimento[]): Publico {
  * canal — uma coincidência de implementação daquela função, não uma garantia
  * desta. Filtrar antes torna esta função correta por si.
  */
+const CANAL = "whatsapp";
+
 function estadoAtualDeWhatsapp(historico: Consentimento[]): EstadoAtual[] {
-  const soWhatsapp = historico.filter((linha) => linha.canal === "whatsapp");
+  const soWhatsapp = historico.filter((linha) => linha.canal === CANAL);
   return [...estadoAtualPorTitular(soWhatsapp).values()];
 }
 
