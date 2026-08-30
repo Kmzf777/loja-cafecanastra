@@ -1,7 +1,12 @@
 import { montarUrl, textoDoParametro, type ChipDeFiltro } from "../filtros";
 import { paginaValida, totalDePaginas } from "../paginacao";
 import { STATUS_DE_PEDIDO, rotuloDoStatus, type TomDeStatus } from "../status";
-import { estadoDoBling, pedidoPodeIrAoBling } from "../bling/contrato";
+import {
+  chaveDaFilaValida,
+  filtrarFila,
+  filtroDaFila,
+  type ChaveDaFila,
+} from "../bling/contrato";
 
 /**
  * A DECISÃO da tela de Pedidos — sem React, sem fetch, sem DOM (spec §2.8).
@@ -92,10 +97,20 @@ export type EstadoDosPedidos = {
   de: string;
   ate: string;
   /**
-   * O filtro de NF-e, que é o único que NÃO acontece no banco — ver
-   * `filtrarNfePendente`. `""` = desligado.
+   * O RECORTE DE ESTADO FISCAL — o único filtro desta tela que NÃO acontece no
+   * banco. `""` = desligado; qualquer outro valor é uma `chave` de
+   * `FILTROS_DA_FILA` (ver `aplicarFiltroDePagina`).
+   *
+   * ELE ERA `nfe: "" | "pendente"`, e a mudança tem nome: a fila do Bling define
+   * CINCO perguntas sobre o estado fiscal de um pedido — pendente, sem pedido de
+   * venda, sem NF-e autorizada, sem rastreio, todos os pagos —, testadas desde a
+   * portagem do contrato e sem nenhum consumidor. O painel novo oferecia UMA
+   * delas, e "sem pedido de venda" e "sem rastreio" simplesmente deixaram de
+   * existir para o gestor. Um campo com duas grafias possíveis não tinha como
+   * carregar as cinco, e `?nfe=sem_rastreio` seria um nome mentindo sobre o
+   * próprio valor.
    */
-  nfe: "" | "pendente";
+  fila: "" | ChaveDaFila;
   pagina: number;
 };
 
@@ -104,7 +119,7 @@ const ESTADO_VAZIO: EstadoDosPedidos = {
   status: [],
   de: "",
   ate: "",
-  nfe: "",
+  fila: "",
   pagina: 1,
 };
 
@@ -189,7 +204,11 @@ export function lerEstado(
     status,
     de: textoDoParametro(parametros.de),
     ate: textoDoParametro(parametros.ate),
-    nfe: textoDoParametro(parametros.nfe) === "pendente" ? "pendente" : "",
+    // A validação é do CONTRATO do Bling, que é quem tem a lista das cinco
+    // chaves. `?fila=sem_notas` (com "s") vira `""` — filtro desligado — em vez
+    // de cair calado no primeiro filtro, que é o que `filtrarFila` faz com uma
+    // chave que não conhece.
+    fila: chaveDaFilaValida(textoDoParametro(parametros.fila)),
     pagina: paginaValida(parametros.pagina, Number.MAX_SAFE_INTEGER),
   };
 }
@@ -202,9 +221,9 @@ export function lerEstado(
  * status numa ida só, e sem isso ela faria três requisições e somaria os totais
  * no navegador, que é como um total passa a discordar da lista.
  *
- * `nfe` NÃO ENTRA AQUI: não existe filtro de NF-e em `/admin/orders`. Ele é
- * aplicado sobre a página em `filtrarNfePendente`, e a tela diz isso por
- * escrito — a mesma honestidade que a fila do Bling legada já pratica.
+ * `fila` NÃO ENTRA AQUI: não existe filtro de estado fiscal em `/admin/orders`.
+ * Ele é aplicado sobre a página em `aplicarFiltroDePagina`, e a tela diz isso
+ * por escrito — a mesma honestidade que a fila do Bling legada já pratica.
  *
  * `limit` é sempre explícito: o padrão do backend é 10, e uma tela que pagina
  * de 20 em 20 mostrando 10 linhas é uma tela que discorda do próprio rodapé.
@@ -239,7 +258,7 @@ export function urlDaTela(estado: Partial<EstadoDosPedidos>): string {
     status: estado.status?.length ? estado.status.join(",") : undefined,
     de: estado.de?.trim() || undefined,
     ate: estado.ate?.trim() || undefined,
-    nfe: estado.nfe || undefined,
+    fila: estado.fila || undefined,
     pagina: pagina > 1 ? pagina : undefined,
   });
 }
@@ -314,12 +333,15 @@ export function chipsDosPedidos(estado: EstadoDosPedidos): ChipDeFiltro[] {
     });
   }
 
-  if (estado.nfe === "pendente") {
+  if (estado.fila) {
     chips.push({
-      chave: "nfe",
-      dimensao: "NF-e",
-      valor: "Sem nota autorizada",
-      href: urlDaTela({ ...semPagina, nfe: "" }),
+      chave: "fila",
+      dimensao: "No Bling",
+      /* O RÓTULO VEM DO CONTRATO, e não é escrito de novo aqui: o chip precisa
+         dizer a mesma palavra que o botão que o ligou, senão o gestor não
+         reconhece o filtro que ele mesmo escolheu. */
+      valor: filtroDaFila(estado.fila)?.rotulo ?? estado.fila,
+      href: urlDaTela({ ...semPagina, fila: "" }),
     });
   }
 
@@ -348,7 +370,7 @@ export function textoDoPeriodo(de: string, ate: string): string {
 /** Há filtro ligado? É o que decide qual dos três estados vazios o R16 mostra. */
 export function temFiltro(estado: EstadoDosPedidos): boolean {
   return Boolean(
-    estado.busca || estado.status.length || estado.de || estado.ate || estado.nfe,
+    estado.busca || estado.status.length || estado.de || estado.ate || estado.fila,
   );
 }
 
@@ -368,7 +390,7 @@ export type AbaSalva = {
   chave: string;
   rotulo: string;
   /** O que a aba liga. O resto do estado (busca, período) é zerado ao clicar. */
-  filtro: Pick<EstadoDosPedidos, "status" | "nfe">;
+  filtro: Pick<EstadoDosPedidos, "status" | "fila">;
   /** A frase que explica o recorte — some a dúvida sobre o que a aba mostra. */
   ajuda: string;
 };
@@ -377,7 +399,7 @@ export const ABAS_SALVAS: AbaSalva[] = [
   {
     chave: "todos",
     rotulo: "Todos",
-    filtro: { status: [], nfe: "" },
+    filtro: { status: [], fila: "" },
     ajuda: "Todos os pedidos, do mais novo para o mais antigo.",
   },
   {
@@ -385,7 +407,7 @@ export const ABAS_SALVAS: AbaSalva[] = [
     rotulo: "A despachar",
     // `aprovado` é o único status que significa "o dinheiro entrou e a caixa
     // ainda não saiu". `enviado` já saiu, `entregue` já chegou.
-    filtro: { status: ["aprovado"], nfe: "" },
+    filtro: { status: ["aprovado"], fila: "" },
     ajuda: "Pagamento confirmado e ainda não despachado — é a fila da expedição.",
   },
   {
@@ -393,7 +415,7 @@ export const ABAS_SALVAS: AbaSalva[] = [
     rotulo: "Pagamento pendente",
     // Os três estados em que o dinheiro AINDA NÃO É DA LOJA: PIX não pago,
     // cartão em análise e cartão autorizado sem captura.
-    filtro: { status: ["pendente", "em_processamento", "autorizado"], nfe: "" },
+    filtro: { status: ["pendente", "em_processamento", "autorizado"], fila: "" },
     ajuda:
       "O dinheiro ainda não entrou: PIX não pago, pagamento em análise ou " +
       "cartão apenas autorizado.",
@@ -404,7 +426,7 @@ export const ABAS_SALVAS: AbaSalva[] = [
     // Só pedido PAGO vai ao ERP (`STATUS_QUE_SINCRONIZAM` do contrato do
     // Bling) — pedir nota de venda não confirmada seria imposto provisionado
     // de uma venda que ainda pode morrer.
-    filtro: { status: ["aprovado", "enviado", "entregue"], nfe: "pendente" },
+    filtro: { status: ["aprovado", "enviado", "entregue"], fila: "sem_nota" },
     ajuda:
       "Pedido pago sem nota autorizada pela SEFAZ. Este recorte olha só a " +
       "página carregada — o servidor ainda não filtra por NF-e.",
@@ -430,7 +452,7 @@ export function abaAtiva(estado: EstadoDosPedidos): string | null {
     a.length === b.length && [...a].sort().join() === [...b].sort().join();
 
   const achada = ABAS_SALVAS.find(
-    (aba) => mesma(aba.filtro.status, estado.status) && aba.filtro.nfe === estado.nfe,
+    (aba) => mesma(aba.filtro.status, estado.status) && aba.filtro.fila === estado.fila,
   );
   return achada ? achada.chave : null;
 }
@@ -551,34 +573,37 @@ export function rotuloCurtoDoBling(chave: string): string {
 }
 
 /**
- * O FILTRO DE NF-e, APLICADO SOBRE A PÁGINA — e a honestidade que ele exige.
+ * O RECORTE FISCAL, APLICADO SOBRE A PÁGINA — e a honestidade que ele exige.
  *
  * `GET /admin/orders` filtra por status, período e busca, e NÃO por estado
- * fiscal: não há `?nfe=pendente`. Fazer a pergunta em memória é o que a fila do
- * Bling legada já faz, e ela DIZ isso na tela ("o filtro olha só a página
- * carregada"). Esconder a ressalva seria pior que não ter o filtro: o gestor
- * leria "3 pedidos aguardando NF-e" e despacharia o mês achando que acabou.
+ * fiscal: não existe `?fila=` do lado do servidor. Fazer a pergunta em memória é
+ * o que a fila do Bling legada já faz, e ela DIZ isso na tela ("o filtro olha só
+ * a página carregada"). Esconder a ressalva seria pior que não ter o filtro: o
+ * gestor leria "3 pedidos aguardando NF-e" e despacharia o mês achando que
+ * acabou.
  *
- * "Sem nota autorizada" é `chave !== "com_nota"`, e não `!nfe_numero`: é a
- * CHAVE que carimba a autorização da SEFAZ (é o critério do próprio backend), e
- * um pedido com número e sem chave é justamente o que precisa aparecer aqui.
+ * QUEM RESPONDE É `filtrarFila`, DO CONTRATO, e não uma função daqui. Havia uma
+ * — `filtrarNfePendente` —, e ela era a quinta cópia de uma pergunta que o
+ * contrato já fazia: `filtrarFila(linhas, "sem_nota")` dá exatamente o mesmo
+ * resultado (`estadoDoBling().chave !== "com_nota"` é `!nfe_chave`, que é o
+ * `aceita` daquele filtro), com os mesmos pedidos pagos primeiro. Delegar ganha
+ * de graça os outros quatro recortes, que estavam escritos e testados no
+ * contrato sem nenhum consumidor.
  *
- * `pedidoPodeIrAoBling` vem PRIMEIRO, como no `filtrarFila` do contrato: pedido
- * não pago não tem nota pendente, tem venda não confirmada.
+ * FILTRO DESLIGADO PASSA A LISTA INTACTA, e isso NÃO é o mesmo que "todos": o
+ * filtro "todos" da fila é "todos os pedidos PAGOS", e desligado é a lista do
+ * servidor inteira, com a ordem que ele mandou — que é a ordem em que o gestor
+ * pensa nos pedidos.
  */
-export function filtrarNfePendente(linhas: PedidoDoPainel[]): PedidoDoPainel[] {
-  return linhas
-    .filter((p) => pedidoPodeIrAoBling(p as Record<string, unknown>))
-    .filter((p) => estadoDoBling(p as Record<string, unknown>).chave !== "com_nota");
-}
-
-/** Aplica o recorte de NF-e quando ele está ligado. Fora dele a lista do
- *  servidor passa intacta — inclusive na ORDEM, que é a que o gestor pensa. */
 export function aplicarFiltroDePagina(
   linhas: PedidoDoPainel[],
   estado: EstadoDosPedidos,
 ): PedidoDoPainel[] {
-  return estado.nfe === "pendente" ? filtrarNfePendente(linhas) : linhas;
+  if (!estado.fila) return linhas;
+  return filtrarFila(
+    linhas as unknown as Record<string, unknown>[],
+    estado.fila,
+  ) as unknown as PedidoDoPainel[];
 }
 
 /**

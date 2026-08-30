@@ -52,7 +52,7 @@ const ESTADO: EstadoDosPedidos = {
   status: [],
   de: "",
   ate: "",
-  nfe: "",
+  fila: "",
   pagina: 1,
 };
 

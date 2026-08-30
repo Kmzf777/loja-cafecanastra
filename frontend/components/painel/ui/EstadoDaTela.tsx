@@ -40,6 +40,7 @@ export function EstadoDaTela({
   esqueleto,
   vazioTitulo,
   vazioTexto,
+  vazioFiltroTexto,
   vazioAcao,
   children,
 }: {
@@ -52,6 +53,20 @@ export function EstadoDaTela({
   esqueleto: ReactNode;
   vazioTitulo: string;
   vazioTexto: string;
+  /**
+   * A frase do vazio COM FILTRO, quando a tela sabe dizer algo melhor.
+   *
+   * O padrão ("Nenhum resultado para este filtro") é o certo para um filtro
+   * qualquer: ele não afirma nada que possa estar errado. Mas há filtro cuja
+   * ausência de resultado é a INFORMAÇÃO que o gestor foi buscar — a fila do
+   * Bling escreveu uma frase para cada um dos seus cinco recortes justamente por
+   * isso ("Todos os pedidos pagos desta página já estão no Bling"), e "nenhum
+   * resultado" no lugar dela desperdiça a única resposta útil da tela.
+   *
+   * Opcional, e não obrigatório em todas as telas: quem não tem nada melhor a
+   * dizer fica com o padrão, que é sempre verdadeiro.
+   */
+  vazioFiltroTexto?: string;
   vazioAcao?: ReactNode;
   children: ReactNode;
 }) {
@@ -76,7 +91,9 @@ export function EstadoDaTela({
   if (vazio && filtroAtivo) {
     return (
       <div className="rounded-cx border border-fuligem-20 bg-cal-puro px-6 py-10 text-center">
-        <p className="text-fuligem-55">Nenhum resultado para este filtro.</p>
+        <p className="text-fuligem-55">
+          {vazioFiltroTexto || "Nenhum resultado para este filtro."}
+        </p>
         {aoLimparFiltro && (
           <button
             type="button"

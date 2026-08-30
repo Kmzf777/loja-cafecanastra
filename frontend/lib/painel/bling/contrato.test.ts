@@ -2,11 +2,15 @@ import { describe, it, expect } from "vitest";
 
 import {
   ACOES_BLING,
+  FILTROS_DA_FILA,
+  chaveDaFilaValida,
   estadoDoBling,
   filtrarFila,
+  filtroDaFila,
   fraseDeErro,
   mesclarPedido,
   pedidoPodeIrAoBling,
+  type ChaveDaFila,
 } from "./contrato";
 
 /**
@@ -143,6 +147,62 @@ describe("filtrarFila", () => {
   it("filtro desconhecido cai no primeiro, e entrada não-lista não quebra", () => {
     expect(filtrarFila(pedidos, "inventado").length).toBe(2);
     expect(filtrarFila(null, "todos")).toEqual([]);
+  });
+});
+
+/**
+ * A CHAVE QUE VEM DA URL — a defesa contra o recorte que ninguém pediu.
+ *
+ * `filtrarFila` cai no PRIMEIRO filtro quando não reconhece a chave, o que é o
+ * certo para uma chamada interna e péssimo para um parâmetro de URL:
+ * `?fila=sem_notas` (com "s") mostraria "Pendentes no Bling" com o chip dizendo
+ * outra coisa. Quem vem da barra de endereço passa por aqui primeiro.
+ */
+describe("chaveDaFilaValida", () => {
+  it("aceita as cinco chaves e recusa o resto", () => {
+    for (const filtro of FILTROS_DA_FILA) {
+      expect(chaveDaFilaValida(filtro.chave)).toBe(filtro.chave);
+    }
+    expect(chaveDaFilaValida("sem_notas")).toBe("");
+    expect(chaveDaFilaValida("")).toBe("");
+    expect(chaveDaFilaValida(undefined)).toBe("");
+    expect(chaveDaFilaValida(["sem_nota"])).toBe("");
+  });
+
+  /**
+   * A união de tipo `ChaveDaFila` é escrita à mão (as entradas são
+   * `Object.freeze` de literais, e o TypeScript alarga `chave` para `string`).
+   * Este caso é o que impede as duas listas de divergirem: quem acrescentar um
+   * sexto filtro e esquecer o tipo vê vermelho aqui, e não em produção, com o
+   * filtro novo caindo silenciosamente no padrão.
+   */
+  it("a união de tipo cobre exatamente os filtros que existem", () => {
+    const doTipo: ChaveDaFila[] = [
+      "pendentes",
+      "sem_pedido",
+      "sem_nota",
+      "sem_rastreio",
+      "todos",
+    ];
+    expect(FILTROS_DA_FILA.map((f) => f.chave).sort()).toEqual([...doTipo].sort());
+  });
+});
+
+describe("filtroDaFila", () => {
+  it("devolve o filtro pela chave, e null para o que não existe", () => {
+    expect(filtroDaFila("sem_rastreio")?.rotulo).toBe("Sem rastreio");
+    expect(filtroDaFila("inventado")).toBeNull();
+  });
+
+  /** Cada filtro tem a SUA frase de vazio — "nenhum resultado para este filtro"
+   *  não diz ao gestor que a fila está limpa, que é a informação que ele quer. */
+  it("todo filtro tem rótulo e frase de vazio, e nenhuma se repete", () => {
+    const vazios = FILTROS_DA_FILA.map((f) => f.vazio);
+    for (const filtro of FILTROS_DA_FILA) {
+      expect(filtro.rotulo.length).toBeGreaterThan(0);
+      expect(filtro.vazio.length).toBeGreaterThan(0);
+    }
+    expect(new Set(vazios).size).toBe(vazios.length);
   });
 });
 
