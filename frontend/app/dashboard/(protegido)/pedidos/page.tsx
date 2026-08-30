@@ -5,6 +5,7 @@ import { BuscaDaLista } from "@/components/painel/ui/BuscaDaLista";
 import { ChipsDeFiltro } from "@/components/painel/ui/ChipsDeFiltro";
 import { EstadoDaTela } from "@/components/painel/ui/EstadoDaTela";
 import { lerAcessoDoPainel } from "@/lib/conta/painel-servidor";
+import { filtroDaFila } from "@/lib/painel/bling/contrato";
 import { lerDaApi } from "@/lib/painel/api-servidor";
 import { totalDePaginas } from "@/lib/painel/paginacao";
 import {
@@ -23,6 +24,7 @@ import {
 
 import { AbasSalvas } from "./AbasSalvas";
 import { ExportarPedidos } from "./ExportarPedidos";
+import { FiltroDaFila } from "./FiltroDaFila";
 import { FiltroDePeriodo } from "./FiltroDePeriodo";
 import { ListaDePedidos } from "./ListaDePedidos";
 
@@ -108,10 +110,15 @@ export default async function PaginaDePedidos({
     : estadoCorrigido(pedido, total);
 
   const daPagina = dados?.data ?? [];
-  /* O recorte de NF-e acontece AQUI, sobre a página — não há filtro fiscal em
-     `/admin/orders`. A frase logo abaixo da lista confessa isso com número. */
+  /* O recorte fiscal acontece AQUI, sobre a página — não há filtro de estado
+     fiscal em `/admin/orders`. A frase logo abaixo da lista confessa isso com
+     número. Quem responde é `filtrarFila`, do contrato do Bling. */
   const linhas = aplicarFiltroDePagina(daPagina, estado);
-  const recortouAPagina = linhas.length !== daPagina.length || estado.nfe === "pendente";
+  const recortouAPagina = linhas.length !== daPagina.length || Boolean(estado.fila);
+  /* A frase de vazio do PRÓPRIO recorte: "todos os pedidos pagos desta página já
+     têm rastreio" é a resposta que o gestor foi buscar, e "nenhum resultado para
+     este filtro" a jogaria fora. */
+  const vazioDaFila = filtroDaFila(estado.fila)?.vazio;
 
   const chips = chipsDosPedidos(estado);
   const totalPaginas = dados?.totalPages ?? totalDePaginas(total, POR_PAGINA);
@@ -123,7 +130,7 @@ export default async function PaginaDePedidos({
     status: estado.status.length ? estado.status.join(",") : undefined,
     de: estado.de || undefined,
     ate: estado.ate || undefined,
-    nfe: estado.nfe || undefined,
+    fila: estado.fila || undefined,
   };
 
   return (
@@ -167,6 +174,11 @@ export default async function PaginaDePedidos({
           <FiltroDePeriodo estado={estado} />
         </div>
 
+        {/* O RECORTE FISCAL fica na linha de baixo, e não ao lado da busca: ele
+            é um refinamento DENTRO da aba escolhida, e a fileira de seis opções
+            empurraria o período para fora da tela se dividisse a mesma linha. */}
+        <FiltroDaFila estado={estado} />
+
         <ChipsDeFiltro chips={chips} hrefLimpar={ROTA_DE_PEDIDOS} />
 
         <EstadoDaTela
@@ -185,6 +197,11 @@ export default async function PaginaDePedidos({
           filtroAtivo={temFiltro(estado)}
           vazioTitulo="Nenhum pedido ainda"
           vazioTexto="Quando alguém comprar na loja, o pedido aparece aqui."
+          /* A FRASE DO PRÓPRIO RECORTE quando é ele que esvaziou a página —
+             "Todos os pedidos pagos desta página já estão no Bling" é a resposta
+             que o gestor foi buscar, e o genérico "nenhum resultado para este
+             filtro" a jogaria fora. Sem recorte fiscal, o genérico volta. */
+          vazioFiltroTexto={vazioDaFila}
         >
           <ListaDePedidos
             linhas={linhas}
@@ -199,11 +216,17 @@ export default async function PaginaDePedidos({
           A CONFISSÃO DO RECORTE EM MEMÓRIA — com número, como a fila do Bling
           legada já fazia.
 
-          Quando o recorte de NF-e está ligado, o rodapé da paginação continua
+          Quando o recorte fiscal está ligado, o rodapé da paginação continua
           contando o que o SERVIDOR filtrou, e a tabela mostra menos. Duas
           contagens que discordam sem explicação fazem desconfiar das duas; com
           a frase, a diferença deixa de ser um defeito e passa a ser um limite
           conhecido.
+
+          A frase diz DUAS coisas, e a segunda entrou junto com os cinco
+          recortes: além de olhar só a página, todo recorte da fila derruba
+          pedido NÃO PAGO antes de qualquer pergunta fiscal (`pedidoPodeIrAoBling`
+          vem primeiro no `filtrarFila`). Sem dizer isso, "sem rastreio" pareceria
+          esconder os PIX não pagos por defeito.
         */}
         {resposta.ok && recortouAPagina && (
           <p className="text-[12px] text-fuligem-55">
@@ -216,8 +239,9 @@ export default async function PaginaDePedidos({
                 total,
               )}
             </span>
-            . O servidor ainda não filtra por estado da NF-e, então este recorte
-            olha só a página carregada — vire a página para ver o resto.
+            . O servidor ainda não filtra por estado fiscal, então este recorte
+            olha só a página carregada — vire a página para ver o resto. Ele
+            também só conta pedido pago: venda não confirmada não vai ao Bling.
           </p>
         )}
 

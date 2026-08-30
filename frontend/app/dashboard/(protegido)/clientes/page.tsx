@@ -45,6 +45,12 @@ import { TabelaDeClientes } from "./TabelaDeClientes";
  * (`DELETE /auth/users/:id`) e NÃO é desenhada aqui de propósito: ela é
  * irreversível e leva pedido junto, e o R13 desta casa manda arquivar em vez de
  * apagar — é conversa da onda que tratar de LGPD, não desta.
+ *
+ * E ISSO ESTÁ ESCRITO NA TELA, no rodapé, não só neste comentário. O gestor não
+ * lê código: quem procura a lixeira e não a acha conclui que a tela nova está
+ * incompleta, e o caminho seguinte é abrir o painel antigo ou pedir a alguém que
+ * rode um DELETE. A frase também nomeia o caminho CERTO — o fluxo de LGPD —,
+ * porque um aviso que só diz "não dá" manda a pessoa procurar como dar.
  */
 export const metadata: Metadata = {
   title: "Clientes",
@@ -179,6 +185,31 @@ export default async function PaginaDeClientes({
           A busca olha nome, e-mail, telefone e CPF, em qualquer parte do texto.
           O telefone é encontrado no formato em que foi gravado — o cadastro veio
           da loja antiga e não tem um formato único.
+        </p>
+
+        {/*
+          A AUSÊNCIA DO BOTÃO DE EXCLUIR É EXPLICADA NA TELA, e não só no
+          comentário logo acima deste arquivo.
+
+          O comentário justifica a decisão para quem vier mexer no código; o
+          gestor não lê código. Quem procura a lixeira e não a acha conclui que a
+          tela nova está incompleta, e o caminho seguinte é abrir o painel antigo
+          — ou pedir a alguém que rode um DELETE. As duas saídas são piores do
+          que a frase.
+
+          E ela nomeia o CAMINHO CERTO, não só o proibido. Um aviso que só diz
+          "não dá" manda a pessoa procurar como dar; dizer que o pedido de
+          eliminação tem um fluxo próprio é o que faz o pedido chegar onde ele é
+          atendido de verdade. Hoje esse fluxo ainda não tem tela — as rotas de
+          LGPD existem no servidor (`/lgpd/titulares/:id/dados` e `/redigir`) e
+          nenhuma UI as chama —, e a frase não promete uma que não existe.
+        */}
+        <p className="max-w-[70ch] text-[12px] text-fuligem-55">
+          Não há como excluir um cliente por aqui, de propósito: apagar uma conta
+          é irreversível e mexe em venda já faturada. Pedido de exclusão de dados
+          pessoais é atendido pelo fluxo de LGPD, que apaga o dado do titular e
+          preserva o registro fiscal da compra — ele não passa por um botão de
+          lixeira nesta lista.
         </p>
       </div>
     </>

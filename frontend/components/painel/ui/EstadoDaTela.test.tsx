@@ -58,6 +58,44 @@ describe("EstadoDaTela", () => {
     expect(saida).not.toContain("Nenhum produto ainda");
   });
 
+  /**
+   * A FRASE DO FILTRO PODE SER MELHOR QUE O PADRÃO, e há filtro em que a
+   * ausência de resultado é a informação que se foi buscar: "todos os pedidos
+   * pagos desta página já têm rastreio" responde a pergunta, e "nenhum resultado
+   * para este filtro" a joga fora. Quem não tem nada melhor a dizer não passa a
+   * prop e fica com o padrão, que é sempre verdadeiro.
+   */
+  it("quem tem uma frase melhor para o vazio com filtro, usa a dela", () => {
+    const saida = html(
+      <EstadoDaTela
+        {...base}
+        carregando={false}
+        erro={null}
+        vazio
+        filtroAtivo
+        vazioFiltroTexto="Todos os pedidos pagos desta página já têm rastreio."
+      />,
+    );
+    expect(saida).toContain("já têm rastreio");
+    expect(saida).not.toContain("Nenhum resultado para este filtro.");
+  });
+
+  /** Frase vazia NÃO apaga a do padrão: uma tela que passa `""` por engano
+   *  desenharia um retângulo mudo, que é pior que a frase genérica. */
+  it("frase em branco cai no padrão em vez de deixar o retângulo mudo", () => {
+    const saida = html(
+      <EstadoDaTela
+        {...base}
+        carregando={false}
+        erro={null}
+        vazio
+        filtroAtivo
+        vazioFiltroTexto=""
+      />,
+    );
+    expect(saida).toContain("Nenhum resultado para este filtro.");
+  });
+
   it("vazio de verdade ensina o próximo passo", () => {
     const saida = html(<EstadoDaTela {...base} carregando={false} erro={null} vazio />);
     expect(saida).toContain("Nenhum produto ainda");

@@ -36,10 +36,16 @@ import { TabelaDeAdministradores } from "./TabelaDeAdministradores";
  * `GET /admin/administradores` também não aceita filtro nem página, e desenhar
  * controles que ela não atende seria mentir.
  *
- * ESTA TELA NÃO ESTÁ NO MENU LATERAL — `menu.logica.ts` não tem a entrada, e
- * este bloco não pode editá-la (regra de isolamento da onda). Chega-se aqui por
- * `/dashboard/ajustes`, que a aponta em "Quem administra a loja". Está
- * RELATADO: a entrada devia existir no grupo "Gerir", ao lado de Clientes.
+ * ELA JÁ ESTÁ NO MENU LATERAL, no grupo "Gerir", ao lado de Clientes. Nasceu
+ * ÓRFÃ — a onda que a criou não podia editar `menu.logica.ts` (regra de
+ * isolamento), e o único caminho até aqui era um parágrafo dentro de
+ * `/dashboard/ajustes`. Uma tela que só se alcança por quem já sabe o endereço é
+ * uma tela que não existe, e esta é justamente a que impede a loja de perder a
+ * gestão quando alguém esquece a senha. O link de Ajustes fica: quem está
+ * mexendo em configuração pensa nesta tela a partir de lá.
+ *
+ * `menu.logica.test.ts` varre o diretório de telas e fica vermelho se alguma
+ * ficar sem entrada — o próximo órfão não passa calado.
  */
 export const metadata: Metadata = {
   title: "Administradores",

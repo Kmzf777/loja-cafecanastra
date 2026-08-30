@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { exigirAdminNoPainel } from "@/lib/conta/painel-servidor";
+import { AnelDeSessao } from "@/components/painel/casca/AnelDeSessao";
 import { MenuLateral } from "@/components/painel/casca/MenuLateral";
 
 /**
@@ -48,15 +49,20 @@ import { MenuLateral } from "@/components/painel/casca/MenuLateral";
  * `lib/painel/` — não chamar a função. A regra deixou de ser "não existe
  * nenhum": proibir era proibir o painel de funcionar.
  *
- * O `?de=` É SEMPRE `/dashboard`, E ISSO NÃO É PROVISÓRIO. Um layout não recebe
- * os `params` do catch-all abaixo dele, e não há cabeçalho de caminho para
- * consultar: o Next APAGA o `Next-Url` de toda requisição que não seja de rota
- * de interceptação (`base-server.js`, `setVaryHeader`), e este projeto não tem
- * nenhuma. Houve aqui uma tentativa de ler esse cabeçalho; era código morto e
- * foi removida. A rota exata continua chegando pelo outro anel — o
- * `AdminRoutes`, no cliente, manda `location.pathname + location.search`, que é
- * o caso da sessão que morre com o painel já aberto. Quem chega por favorito
- * frio volta para a raiz do painel e navega dali.
+ * O `?de=` DESTE ANEL É SEMPRE `/dashboard`, E ISSO NÃO É PROVISÓRIO. Um layout
+ * não recebe os `params` do catch-all abaixo dele, e não há cabeçalho de caminho
+ * para consultar: o Next APAGA o `Next-Url` de toda requisição que não seja de
+ * rota de interceptação (`base-server.js`, `setVaryHeader`), e este projeto não
+ * tem nenhuma. Houve aqui uma tentativa de ler esse cabeçalho; era código morto
+ * e foi removida. A rota exata chega pelo OUTRO anel — o `<AnelDeSessao>` logo
+ * abaixo, que roda no navegador e manda `location.pathname + location.search`,
+ * que é o caso da sessão que morre com o painel já aberto. Quem chega por
+ * favorito frio volta para a raiz do painel e navega dali.
+ *
+ * (Este parágrafo dizia `AdminRoutes`, o guard do painel legado. Ele só era
+ * montado dentro da ilha `/dashboard/legado/*`, então as telas novas nunca
+ * tiveram esse anel — o texto prometia uma cobertura que não existia. O
+ * `<AnelDeSessao>` é o anel próprio do painel novo.)
  */
 /**
  * A CASCA, acrescentada na Onda 1 — e o que ela liga.
@@ -90,9 +96,19 @@ export default async function LayoutProtegidoDoPainel({
 }: {
   children: ReactNode;
 }) {
-  await exigirAdminNoPainel("/dashboard");
+  const { userId } = await exigirAdminNoPainel("/dashboard");
   return (
     <div className="painel flex min-h-screen flex-col md:flex-row">
+      {/*
+        O SEGUNDO ANEL, e ele mora no layout pela mesma razão que a checagem: é o
+        que envolve toda rota do grupo, inclusive as que ainda não existem. Uma
+        tela nova nasce guardada nos dois anéis por herança, sem ninguém lembrar.
+
+        Não desenha nada — é `null` no DOM. Fica no topo da árvore, antes do
+        pulo, porque a ordem visual não lhe diz respeito e porque um componente
+        invisível no meio do conteúdo é um componente que alguém move sem querer.
+      */}
+      <AnelDeSessao userIdDoServidor={userId} />
       <a
         href="#conteudo"
         className="sr-only rounded-cx bg-fuligem px-4 py-3 text-cal focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50"

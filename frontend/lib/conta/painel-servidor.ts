@@ -18,9 +18,11 @@
  * recebe fatos e devolve um veredito. A parte impura (`lerAcessoDoPainel`,
  * `exigirAdminNoPainel`) só colhe os fatos e obedece.
  *
- * ISTO É O PRIMEIRO ANEL, NÃO O ÚNICO. `legacy/routes/AdminRoutes.jsx` continua
- * conferindo no cliente, porque a sessão pode morrer com o painel já aberto —
- * nesse instante nenhum Server Component vai rodar de novo.
+ * ISTO É O PRIMEIRO ANEL, NÃO O ÚNICO. `components/painel/casca/AnelDeSessao.tsx`
+ * confere no cliente, porque a sessão pode morrer com o painel já aberto — nesse
+ * instante nenhum Server Component vai rodar de novo. (O segundo anel era
+ * `legacy/routes/AdminRoutes.jsx`, que só rodava dentro da ilha do painel
+ * legado; as telas novas ficaram sem ele até o anel próprio nascer.)
  *
  * O QUE ESTE MÓDULO NÃO É. Não é `middleware.ts`. O middleware segue sem guardar
  * rota pelo motivo documentado lá: `/account/verify-email` e
@@ -31,12 +33,22 @@
  */
 import { redirect } from "next/navigation";
 import { criarClienteServidor } from "../supabase/servidor";
+import {
+  RAIZ_DO_PAINEL,
+  ROTA_DE_CONTA_NEGADA,
+  ROTA_DE_ENTRADA,
+  destinoDeEntrada,
+} from "./painel-rotas";
 
-/** Onde o painel começa. Uma constante porque três funções aqui dependem dela. */
-const RAIZ_DO_PAINEL = "/dashboard";
-
-/** A porta de entrada do painel — a única rota sob /dashboard fora da cerca. */
-export const ROTA_DE_ENTRADA = "/dashboard/entrar";
+/**
+ * Os endereços moram em `painel-rotas.ts`, e não aqui, porque o ANEL DE CLIENTE
+ * precisa dos mesmos três — e ele não pode importar este arquivo, que arrasta
+ * `next/headers` para o bundle do navegador. O porquê inteiro está lá.
+ *
+ * A reexportação existe para quem já importava `ROTA_DE_ENTRADA` daqui não
+ * precisar mudar de porta por causa de uma mudança de arrumação.
+ */
+export { ROTA_DE_ENTRADA };
 
 /**
  * Por que a pessoa foi recusada. Não é enfeite: a tela de entrada diz coisas
@@ -86,14 +98,14 @@ export type FatosDoAcesso = {
  *    senha que já funcionou.
  */
 export function decidirAcessoAoPainel(fatos: FatosDoAcesso): DecisaoDeAcesso {
-  const de = `de=${encodeURIComponent(fatos.rotaPedida)}`;
+  const entrada = destinoDeEntrada(fatos.rotaPedida);
 
   if (fatos.falhouConsulta) {
     return {
       tipo: "redireciona",
       // O aviso viaja na URL porque `motivo` sozinho morre dentro do processo,
       // e quem precisa da informação é o gestor na frente da tela.
-      destino: `${ROTA_DE_ENTRADA}?${de}&aviso=falha`,
+      destino: `${entrada}&aviso=falha`,
       motivo: "falha-de-consulta",
     };
   }
@@ -101,7 +113,7 @@ export function decidirAcessoAoPainel(fatos: FatosDoAcesso): DecisaoDeAcesso {
   if (!fatos.temSessao) {
     return {
       tipo: "redireciona",
-      destino: `${ROTA_DE_ENTRADA}?${de}`,
+      destino: entrada,
       motivo: "sem-sessao",
     };
   }
@@ -109,7 +121,7 @@ export function decidirAcessoAoPainel(fatos: FatosDoAcesso): DecisaoDeAcesso {
   if (!fatos.ehAdmin) {
     return {
       tipo: "redireciona",
-      destino: "/account?painel=negado",
+      destino: ROTA_DE_CONTA_NEGADA,
       motivo: "nao-e-admin",
     };
   }
@@ -387,13 +399,29 @@ export function ehSinalDoNext(erro: unknown): boolean {
  * O guard. Chamado no topo do Server Component do painel, ANTES de qualquer
  * byte da ilha ser emitido.
  *
- * Não devolve nada porque só há dois desfechos: ou volta (e quem chamou pode
- * renderizar), ou `redirect()` lança e a renderização nem acontece.
+ * Há só dois desfechos: ou volta (e quem chamou pode renderizar), ou
+ * `redirect()` lança e a renderização nem acontece.
+ *
+ * O QUE ELE DEVOLVE É A ENTREGA PARA O SEGUNDO ANEL. Voltava `void`, e passou a
+ * voltar `userId` quando o anel de cliente nasceu: é por quem este anel
+ * respondeu ao servir esta tela. Com ele na mão, o anel de cliente sabe
+ * distinguir "a sessão continua sendo a mesma que o servidor aprovou" (o caso
+ * comum, que não custa nada) de "agora há OUTRA pessoa logada nesta aba" — que
+ * é o único momento em que vale a pena voltar a perguntar quem é admin. Sem
+ * essa entrega, o anel de cliente perguntaria de novo a cada montagem de tela.
+ *
+ * `string | null` e não `string`: o tipo diz a verdade sobre `AcessoDoPainel`,
+ * onde `userId` é nulo sem sessão. Depois do `redirect` o valor é sempre uma
+ * string, mas afirmar isso com um `!` seria o compilador calado no lugar de uma
+ * garantia — e quem consome (o anel) trata o nulo sozinho, perguntando.
  */
-export async function exigirAdminNoPainel(rotaPedida: string): Promise<void> {
+export async function exigirAdminNoPainel(
+  rotaPedida: string,
+): Promise<{ userId: string | null }> {
   const acesso = await lerAcessoDoPainel();
   const decisao = decidirAcessoAoPainel({ ...acesso, rotaPedida });
   if (decisao.tipo === "redireciona") redirect(decisao.destino);
+  return { userId: acesso.userId };
 }
 
 /**
@@ -467,9 +495,16 @@ export async function exigirAdminEmAcao(): Promise<{ userId: string }> {
  * guarda rota porque `/account/verify-email` e `/account/reset-password` recebem
  * o `?code=` do GoTrue ainda sem sessão).
  *
- * A ROTA EXATA SOBREVIVE POR OUTRO CAMINHO: `legacy/routes/AdminRoutes.jsx`, no
- * cliente, enxerga `location.pathname + location.search` e manda o `?de=`
- * completo. É o caso da sessão que morre com o painel já aberto — justamente o
- * caso em que a pessoa estava no meio de alguma coisa e voltar ao lugar certo
- * importa. Quem chega por favorito frio volta para `/dashboard` e navega dali.
+ * A ROTA EXATA SOBREVIVE POR OUTRO CAMINHO: o segundo anel,
+ * `components/painel/casca/AnelDeSessao.tsx`, roda no navegador e enxerga
+ * `location.pathname + location.search` — de onde sai um `?de=` completo, com a
+ * tela e os filtros que estavam abertos. É o caso da sessão que morre com o
+ * painel já aberto, justamente aquele em que a pessoa estava no meio de alguma
+ * coisa e voltar ao lugar certo importa. Quem chega por favorito frio volta para
+ * `/dashboard` e navega dali.
+ *
+ * (Este parágrafo dizia `legacy/routes/AdminRoutes.jsx`, e era meia verdade: ele
+ * só era montado dentro da ilha `/dashboard/legado/*`, então as telas novas
+ * nunca chegaram a ter esse anel. O anel próprio fecha a lacuna e sobrevive ao
+ * dia em que `frontend/legacy/` for apagado.)
  */

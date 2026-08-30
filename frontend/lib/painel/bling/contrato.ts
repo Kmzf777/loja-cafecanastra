@@ -212,6 +212,45 @@ export const FILTROS_DA_FILA = Object.freeze([
 ]);
 
 /**
+ * As chaves da fila como TIPO — porque agora elas viajam na URL.
+ *
+ * A tela de Pedidos guarda o recorte fiscal em `?fila=`, e um `string` solto ali
+ * deixaria `?fila=sem_notas` (com "s") virar silenciosamente o filtro padrão:
+ * `filtrarFila` cai no primeiro quando não reconhece a chave, e a tela mostraria
+ * um recorte que ninguém pediu, com o chip dizendo outra coisa.
+ *
+ * A união é ESCRITA À MÃO, e não derivada de `FILTROS_DA_FILA`: as entradas são
+ * `Object.freeze` de objetos literais, e o TypeScript alarga `chave` para
+ * `string` sem um `as const` que mudaria a forma congelada do contrato inteiro.
+ * O preço é uma lista que pode divergir da outra, e por isso há um teste que
+ * compara as duas — quem acrescentar um filtro e esquecer o tipo vê vermelho.
+ */
+export type ChaveDaFila =
+  | "pendentes"
+  | "sem_pedido"
+  | "sem_nota"
+  | "sem_rastreio"
+  | "todos";
+
+/**
+ * A chave que veio da URL, ou `""` quando não é nenhuma das cinco.
+ *
+ * Mora AQUI, e não em `pedidos.logica.ts`, porque quem sabe o vocabulário é
+ * quem tem a lista: uma segunda cópia das cinco chaves do outro lado da casa é
+ * exatamente a divergência que este módulo existe para não ter (ver o
+ * comentário de abertura sobre as três cópias de `STATUS_DO_PEDIDO`).
+ */
+export function chaveDaFilaValida(bruto: unknown): ChaveDaFila | "" {
+  const achada = FILTROS_DA_FILA.find((f) => f.chave === bruto);
+  return achada ? (achada.chave as ChaveDaFila) : "";
+}
+
+/** O filtro pela chave, para quem precisa do rótulo ou da frase de vazio. */
+export function filtroDaFila(chave: string) {
+  return FILTROS_DA_FILA.find((f) => f.chave === chave) ?? null;
+}
+
+/**
  * A fila: só pedidos PAGOS (os outros o backend recusaria) e só os que passam
  * pelo filtro escolhido. A ordem que veio do servidor (mais novo primeiro) é
  * preservada — é a ordem em que o gestor pensa nos pedidos.

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { html } from "@/lib/teste/html";
+import { FILTROS_DA_FILA } from "@/lib/painel/bling/contrato";
 import type { PedidoDoPainel } from "@/lib/painel/pedidos/pedidos.logica";
 
 /**
@@ -230,7 +231,7 @@ describe("as abas salvas — R4", () => {
   });
 
   it("a aba de NF-e confessa que o recorte olha só a página carregada", async () => {
-    const s = await saida({ status: "aprovado,enviado,entregue", nfe: "pendente" });
+    const s = await saida({ status: "aprovado,enviado,entregue", fila: "sem_nota" });
     expect(s).toContain("página carregada");
   });
 });
@@ -301,6 +302,107 @@ describe("os estados da tela — R16", () => {
   });
 });
 
+/**
+ * OS CINCO RECORTES DA FILA DO BLING, NA TELA.
+ *
+ * `FILTROS_DA_FILA` existia no contrato desde a portagem — cinco perguntas,
+ * cinco frases de vazio, testadas — e sem NENHUM consumidor. A tela oferecia uma
+ * delas, e "sem pedido de venda" e "sem rastreio" tinham deixado de existir para
+ * o gestor. São exatamente as duas perguntas de quem vai despachar.
+ */
+describe("o recorte de estado fiscal — os cinco da fila", () => {
+  it("todos os cinco estão na tela, com o rótulo do contrato", async () => {
+    const s = await saida();
+    for (const filtro of FILTROS_DA_FILA) expect(s).toContain(filtro.rotulo);
+  });
+
+  /** Cada recorte é uma URL de verdade (R2): favoritável, colável, e o Voltar
+   *  funciona. E a página volta para 1, senão um recorte com resultados na
+   *  página 1 pareceria vazio para quem estava na 4. */
+  it("cada opção é um link com ?fila=, e zera a página", async () => {
+    const s = await saida({ pagina: "4" });
+    for (const filtro of FILTROS_DA_FILA) {
+      expect(s).toContain(`fila=${filtro.chave}`);
+    }
+    expect(s).not.toContain("fila=sem_nota&amp;pagina=4");
+  });
+
+  /* A busca é pela TAG inteira e não por uma regex de ordem de atributo: o
+     `<Link>` do Next reordena o que sai no HTML, e um teste que depende dessa
+     ordem quebra numa atualização de biblioteca sem nada ter mudado na tela. */
+  it("o recorte aceso se anuncia ao leitor de tela", async () => {
+    const s = await saida({ fila: "sem_rastreio" });
+    const aceso = [...s.matchAll(/<a\b[^>]*>/g)]
+      .map((m) => m[0])
+      .find((tag) => tag.includes("fila=sem_rastreio"));
+    expect(aceso).toBeDefined();
+    expect(aceso).toContain('aria-current="page"');
+  });
+
+  /** O chip do R3 diz a MESMA palavra do botão que o ligou — senão o gestor não
+   *  reconhece o filtro que ele mesmo escolheu. */
+  it("o chip do filtro repete o rótulo do contrato e sabe se apagar", async () => {
+    const s = await saida({ fila: "sem_pedido" });
+    expect(s).toContain("Sem pedido de venda");
+    expect(s).toContain("Remover filtro No Bling");
+  });
+
+  it("cada recorte responde à sua pergunta sobre a página", async () => {
+    responder({
+      linhas: [
+        pedido({ order_id: "aaaaaaaa-1", bling_id: "7", nfe_chave: "35", tracking_code: "BR1" }),
+        pedido({ order_id: "bbbbbbbb-2", bling_id: "8" }),
+        pedido({ order_id: "cccccccc-3" }),
+      ],
+    });
+    const semPedido = await saida({ fila: "sem_pedido" });
+    expect(semPedido).toContain("CCCCCCCC");
+    expect(semPedido).not.toContain("BBBBBBBB");
+
+    const semRastreio = await saida({ fila: "sem_rastreio" });
+    expect(semRastreio).toContain("BBBBBBBB");
+    expect(semRastreio).not.toContain("AAAAAAAA");
+  });
+
+  /**
+   * A FRASE DE VAZIO É A DO PRÓPRIO RECORTE. "Todos os pedidos pagos desta
+   * página já têm rastreio" é a resposta que o gestor foi buscar; o genérico
+   * "nenhum resultado para este filtro" a jogaria fora — e as cinco frases
+   * estavam escritas no contrato sem nada que as mostrasse.
+   */
+  it("página esvaziada pelo recorte mostra a frase do recorte", async () => {
+    responder({
+      linhas: [pedido({ bling_id: "7", nfe_chave: "35", tracking_code: "BR1" })],
+    });
+    const s = await saida({ fila: "sem_rastreio" });
+    expect(s).toContain("já têm rastreio");
+    expect(s).not.toContain("Nenhum resultado para este filtro");
+  });
+
+  it("sem recorte fiscal, o vazio genérico volta", async () => {
+    responder({ linhas: [] });
+    const s = await saida({ q: "zzz" });
+    expect(s).toContain("Nenhum resultado para este filtro");
+  });
+
+  /**
+   * "QUALQUER ESTADO" NÃO É O FILTRO "TODOS". Desligado é a lista do servidor
+   * inteira, com pedido não pago e tudo; "todos" é o recorte da fila, que já
+   * derruba quem não pagou. Confundir os dois esconderia metade do trabalho de
+   * quem cobra PIX.
+   */
+  it("desligado mostra o não pago; 'todos' não", async () => {
+    responder({
+      linhas: [
+        pedido({ order_id: "dddddddd-4", status: "pendente" }),
+        pedido({ order_id: "eeeeeeee-5" }),
+      ],
+    });
+    expect(await saida()).toContain("DDDDDDDD");
+    expect(await saida({ fila: "todos" })).not.toContain("DDDDDDDD");
+  });
+});
+
 describe("o recorte de NF-e, que acontece em memória", () => {
   it("filtra a página e CONFESSA a contagem", async () => {
     responder({
@@ -308,7 +410,7 @@ describe("o recorte de NF-e, que acontece em memória", () => {
       total: 134,
       totalPages: 7,
     });
-    const s = await saida({ status: "aprovado,enviado,entregue", nfe: "pendente" });
+    const s = await saida({ status: "aprovado,enviado,entregue", fila: "sem_nota" });
     expect(s).toContain("1 de 2 pedidos desta página");
     expect(s).toContain("134 no total");
     expect(s).toContain("olha só a página carregada");

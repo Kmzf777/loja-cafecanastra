@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
+import { urlDaImagemDoPainel } from "@/lib/painel/transporte";
 import type { CustoDoProduto } from "@/lib/painel/produtos/ficha.logica";
 import type { ProdutoDoPainel } from "@/lib/painel/produtos/produtos.logica";
 
@@ -366,6 +367,39 @@ describe("a imagem", () => {
     expect(await findByText(/foto\.png/)).toBeTruthy();
   });
 
+  /**
+   * A MINIATURA DO CADASTRO HERDADO — o defeito que ninguém vê num teste de
+   * tipo, porque os dois casos são `string`.
+   *
+   * `image` guarda URL da Cloudinary na maioria dos cafés e caminho relativo em
+   * cadastro herdado do painel antigo. Desenhada crua, a segunda é resolvida
+   * pelo navegador contra a origem do PAINEL, onde não há nada — retângulo vazio
+   * na aba em que se foi justamente conferir a foto.
+   */
+  it("caminho relativo vira endereço da API; a URL inteira passa intacta", () => {
+    const { container } = montar({
+      produto: { ...PRODUTO, image: "/uploads/cafe.jpg" },
+      abaInicial: "conteudo",
+    });
+    const foto = container.querySelector(
+      'img[alt="Foto gravada hoje para este produto"]',
+    ) as HTMLImageElement;
+    expect(foto.getAttribute("src")).toBe(
+      urlDaImagemDoPainel("/uploads/cafe.jpg"),
+    );
+    expect(foto.getAttribute("src")).not.toBe("/uploads/cafe.jpg");
+  });
+
+  /** O endereço CRU continua escrito ao lado: é o valor que está no banco, e é
+   *  ele que se compara com o que o painel antigo mostra. */
+  it("o endereço gravado continua à vista, sem prefixo", () => {
+    const { getByText } = montar({
+      produto: { ...PRODUTO, image: "/uploads/cafe.jpg" },
+      abaInicial: "conteudo",
+    });
+    expect(getByText("/uploads/cafe.jpg")).toBeTruthy();
+  });
+
   /** A ressalva vem PRIMEIRO na aba, porque ela muda o que faz sentido fazer
    *  ali: a loja não lê esta foto. */
   it("a aba de conteúdo diz que a loja não lê nada disto", async () => {
@@ -394,6 +428,18 @@ describe("R13 — arquivar, não apagar", () => {
     const { getByText } = montar();
     expect(getByText(/não lê nem grava esse campo/)).toBeTruthy();
     expect(getByText(/zere o estoque/)).toBeTruthy();
+  });
+
+  /**
+   * DIZER O QUE "ARQUIVAR" FAZ VEM ANTES DE DIZER QUE ELE NÃO EXISTE. Quem vem
+   * do painel antigo chama o gesto de "excluir"; sem a definição, "arquivar" é
+   * lido como um sinônimo educado de apagar — e é justamente a diferença entre
+   * os dois que faz um pedido antigo continuar sabendo qual café foi vendido.
+   */
+  it("explica o que arquivar faz, e que é o oposto de apagar", () => {
+    const { getByText } = montar();
+    expect(getByText(/Arquivar tira o café da loja e guarda o cadastro/)).toBeTruthy();
+    expect(getByText(/nada some do histórico/)).toBeTruthy();
   });
 });
 

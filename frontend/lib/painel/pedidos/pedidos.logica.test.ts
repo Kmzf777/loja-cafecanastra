@@ -19,7 +19,6 @@ import {
   enderecoDoPedido,
   estadoCorrigido,
   exportacaoExigeConfirmacao,
-  filtrarNfePendente,
   identificarPedido,
   lerEstado,
   lerItens,
@@ -49,7 +48,7 @@ const VAZIO: EstadoDosPedidos = {
   status: [],
   de: "",
   ate: "",
-  nfe: "",
+  fila: "",
   pagina: 1,
 };
 
@@ -142,7 +141,7 @@ describe("lerEstado", () => {
         status: "aprovado,enviado",
         de: "2026-08-01",
         ate: "2026-08-31",
-        nfe: "pendente",
+        fila: "sem_nota",
         pagina: "3",
       }),
     ).toEqual({
@@ -150,7 +149,7 @@ describe("lerEstado", () => {
       status: ["aprovado", "enviado"],
       de: "2026-08-01",
       ate: "2026-08-31",
-      nfe: "pendente",
+      fila: "sem_nota",
       pagina: 3,
     });
   });
@@ -175,9 +174,26 @@ describe("lerEstado", () => {
     ]);
   });
 
-  it("nfe só aceita 'pendente' — qualquer outra coisa é o filtro desligado", () => {
-    expect(lerEstado({ nfe: "sim" }).nfe).toBe("");
-    expect(lerEstado({ nfe: "pendente" }).nfe).toBe("pendente");
+  /**
+   * O recorte fiscal só aceita as CINCO chaves da fila do Bling. Uma chave
+   * inventada tem de desligar o filtro, e não cair no primeiro: `filtrarFila`
+   * faz isso (é o certo para chamada interna), e a tela mostraria "Pendentes no
+   * Bling" com o chip dizendo outra coisa.
+   */
+  it("fila só aceita as chaves da fila — qualquer outra coisa desliga o filtro", () => {
+    expect(lerEstado({ fila: "sim" }).fila).toBe("");
+    expect(lerEstado({ fila: "sem_notas" }).fila).toBe("");
+    expect(lerEstado({ fila: "sem_nota" }).fila).toBe("sem_nota");
+    expect(lerEstado({ fila: "sem_rastreio" }).fila).toBe("sem_rastreio");
+    expect(lerEstado({ fila: "sem_pedido" }).fila).toBe("sem_pedido");
+    expect(lerEstado({ fila: "pendentes" }).fila).toBe("pendentes");
+    expect(lerEstado({ fila: "todos" }).fila).toBe("todos");
+  });
+
+  /** O nome antigo do parâmetro não é mais lido: `?nfe=pendente` de um favorito
+   *  velho abre a lista sem recorte, e o chip não promete filtro nenhum. */
+  it("o ?nfe= antigo não liga nada", () => {
+    expect(lerEstado({ nfe: "pendente" }).fila).toBe("");
   });
 
   it("parâmetro repetido cai no padrão em vez de escolher um dos dois", () => {
@@ -206,10 +222,11 @@ describe("montarConsulta", () => {
     expect(montarConsulta({ ...VAZIO, busca: "#3F9A" })).toContain("q=3F9A");
   });
 
-  /** Não existe `?nfe=` em `/admin/orders`: mandar produziria um parâmetro
-   *  ignorado, e a tela acreditaria num filtro que não aconteceu. */
-  it("NÃO manda o recorte de NF-e — o servidor não o conhece", () => {
-    expect(montarConsulta({ ...VAZIO, nfe: "pendente" })).not.toContain("nfe");
+  /** Não existe filtro de estado fiscal em `/admin/orders`: mandar produziria um
+   *  parâmetro ignorado, e a tela acreditaria num filtro que não aconteceu. */
+  it("NÃO manda o recorte fiscal — o servidor não o conhece", () => {
+    expect(montarConsulta({ ...VAZIO, fila: "sem_nota" })).not.toContain("fila");
+    expect(montarConsulta({ ...VAZIO, fila: "sem_rastreio" })).not.toContain("rastreio");
   });
 
   it("período vazio não vira parâmetro vazio", () => {
@@ -224,10 +241,15 @@ describe("urlDaTela", () => {
   });
 
   it("carrega todo o resto do estado junto, para o filtro não sumir ao virar página", () => {
-    const url = urlDaTela({ busca: "maria", status: ["aprovado"], nfe: "pendente", pagina: 4 });
+    const url = urlDaTela({
+      busca: "maria",
+      status: ["aprovado"],
+      fila: "sem_nota",
+      pagina: 4,
+    });
     expect(url).toContain("q=maria");
     expect(url).toContain("status=aprovado");
-    expect(url).toContain("nfe=pendente");
+    expect(url).toContain("fila=sem_nota");
     expect(url).toContain("pagina=4");
   });
 
@@ -268,9 +290,9 @@ describe("chipsDosPedidos — R3", () => {
       busca: "maria",
       status: ["aprovado"],
       de: "2026-08-01",
-      nfe: "pendente",
+      fila: "sem_nota",
     });
-    expect(chips.map((c) => c.chave)).toEqual(["q", "status", "periodo", "nfe"]);
+    expect(chips.map((c) => c.chave)).toEqual(["q", "status", "periodo", "fila"]);
   });
 
   it("o chip de status mostra RÓTULO, não o vocabulário do banco", () => {
@@ -332,7 +354,7 @@ describe("temFiltro", () => {
     expect(temFiltro({ ...VAZIO, status: ["aprovado"] })).toBe(true);
     expect(temFiltro({ ...VAZIO, de: "2026-01-01" })).toBe(true);
     expect(temFiltro({ ...VAZIO, ate: "2026-01-01" })).toBe(true);
-    expect(temFiltro({ ...VAZIO, nfe: "pendente" })).toBe(true);
+    expect(temFiltro({ ...VAZIO, fila: "sem_nota" })).toBe(true);
   });
 });
 
@@ -340,7 +362,7 @@ describe("as abas salvas — R4", () => {
   it("são URLs de verdade, favoritáveis", () => {
     const nfe = ABAS_SALVAS.find((a) => a.chave === "nfe")!;
     expect(urlDaAba(nfe)).toContain("status=aprovado%2Cenviado%2Centregue");
-    expect(urlDaAba(nfe)).toContain("nfe=pendente");
+    expect(urlDaAba(nfe)).toContain("fila=sem_nota");
   });
 
   it("a aba 'Todos' é a lista sem filtro nenhum", () => {
@@ -400,7 +422,7 @@ describe("abaAtiva", () => {
   it("mesmos status com o recorte de NF-e ligado é outra aba", () => {
     const semNfe = { ...VAZIO, status: ["aprovado", "enviado", "entregue"] };
     expect(abaAtiva(semNfe)).toBeNull();
-    expect(abaAtiva({ ...semNfe, nfe: "pendente" as const })).toBe("nfe");
+    expect(abaAtiva({ ...semNfe, fila: "sem_nota" as const })).toBe("nfe");
   });
 });
 
@@ -517,38 +539,81 @@ describe("o estado do Bling na tela", () => {
   });
 });
 
-describe("filtrarNfePendente", () => {
+/**
+ * O RECORTE FISCAL — os CINCO da fila do Bling, e não mais um só.
+ *
+ * `filtrarNfePendente` morava aqui e era a quinta cópia de uma pergunta que o
+ * contrato já fazia. `aplicarFiltroDePagina` passou a delegar a `filtrarFila`, e
+ * o primeiro caso abaixo é o que garante que a delegação não mudou resposta
+ * nenhuma: "sem nota autorizada" continua sendo a CHAVE (o carimbo da SEFAZ) e
+ * não o número, e continua tirando quem não pagou.
+ */
+describe("aplicarFiltroDePagina", () => {
   const comNota = pedido({ order_id: "aaaaaaaa-1", nfe_chave: "3526...", nfe_numero: "12" });
   const notaPendente = pedido({ order_id: "bbbbbbbb-2", nfe_numero: "13" });
   const semNada = pedido({ order_id: "cccccccc-3" });
   const naoPago = pedido({ order_id: "dddddddd-4", status: "pendente" });
 
-  it("tira quem já tem nota AUTORIZADA (chave), não quem tem só número", () => {
-    const fila = filtrarNfePendente([comNota, notaPendente, semNada]);
+  const comFila = (fila: EstadoDosPedidos["fila"]) => ({ ...VAZIO, fila });
+
+  it("sem nota tira quem já tem a CHAVE, não quem tem só o número", () => {
+    const fila = aplicarFiltroDePagina(
+      [comNota, notaPendente, semNada],
+      comFila("sem_nota"),
+    );
     expect(fila.map((p) => p.order_id)).toEqual(["bbbbbbbb-2", "cccccccc-3"]);
   });
 
-  /** Venda não confirmada não vira pedido de venda nem nota — a mesma regra
-   *  que `filtrarFila` do contrato aplica primeiro. */
-  it("pedido não pago não entra na fila de NF-e", () => {
-    expect(filtrarNfePendente([naoPago])).toEqual([]);
+  /** Venda não confirmada não vira pedido de venda nem nota — a regra que
+   *  `filtrarFila` aplica antes de qualquer pergunta fiscal. */
+  it("pedido não pago não entra em recorte nenhum", () => {
+    for (const chave of ["pendentes", "sem_pedido", "sem_nota", "sem_rastreio", "todos"] as const) {
+      expect(aplicarFiltroDePagina([naoPago], comFila(chave))).toEqual([]);
+    }
   });
 
   it("preserva a ordem que veio do servidor", () => {
-    const fila = filtrarNfePendente([semNada, notaPendente]);
+    const fila = aplicarFiltroDePagina([semNada, notaPendente], comFila("sem_nota"));
     expect(fila.map((p) => p.order_id)).toEqual(["cccccccc-3", "bbbbbbbb-2"]);
   });
-});
 
-describe("aplicarFiltroDePagina", () => {
+  /**
+   * OS QUATRO QUE NÃO EXISTIAM PARA O GESTOR. "Sem pedido de venda" e "sem
+   * rastreio" estavam escritos e testados no contrato do Bling desde a portagem,
+   * e nenhuma tela os oferecia.
+   */
+  it("os outros recortes respondem cada um à sua pergunta", () => {
+    const noBling = pedido({ order_id: "eeeeeeee-5", bling_id: "77" });
+    const completo = pedido({
+      order_id: "ffffffff-6",
+      bling_id: "78",
+      nfe_chave: "3526...",
+      tracking_code: "BR1",
+    });
+    const todos = [semNada, noBling, completo];
+
+    expect(
+      aplicarFiltroDePagina(todos, comFila("sem_pedido")).map((p) => p.order_id),
+    ).toEqual(["cccccccc-3"]);
+    expect(
+      aplicarFiltroDePagina(todos, comFila("sem_rastreio")).map((p) => p.order_id),
+    ).toEqual(["cccccccc-3", "eeeeeeee-5"]);
+    expect(
+      aplicarFiltroDePagina(todos, comFila("pendentes")).map((p) => p.order_id),
+    ).toEqual(["cccccccc-3", "eeeeeeee-5"]);
+    expect(aplicarFiltroDePagina(todos, comFila("todos"))).toHaveLength(3);
+  });
+
+  /**
+   * DESLIGADO NÃO É "TODOS". O filtro "todos" da fila é "todos os pedidos
+   * PAGOS"; desligado é a lista do servidor inteira, com a ordem dele. Trocar um
+   * pelo outro faria a lista sem filtro esconder os pedidos não pagos — que são
+   * metade do trabalho de quem cobra PIX.
+   */
   it("com o recorte desligado, a lista do servidor passa intacta", () => {
     const linhas = [pedido({ status: "pendente" }), pedido()];
     expect(aplicarFiltroDePagina(linhas, VAZIO)).toBe(linhas);
-  });
-
-  it("com o recorte ligado, filtra em memória", () => {
-    const linhas = [pedido({ nfe_chave: "35" }), pedido()];
-    expect(aplicarFiltroDePagina(linhas, { ...VAZIO, nfe: "pendente" })).toHaveLength(1);
+    expect(aplicarFiltroDePagina(linhas, comFila("todos"))).toHaveLength(1);
   });
 });
 
