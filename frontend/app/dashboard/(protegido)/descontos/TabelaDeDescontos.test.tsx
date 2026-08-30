@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { renderizar } from "@/lib/teste/renderizar";
 import type { RegraDaLista } from "@/lib/painel/descontos/contrato";
@@ -66,6 +66,14 @@ function regra(parcial: Partial<RegraDaLista> = {}): RegraDaLista {
 function montar(linhas: RegraDaLista[]) {
   return renderizar(<TabelaDeDescontos linhas={linhas} agoraEmMs={AGORA} />);
 }
+
+/* O estado do dublê é reposto AQUI e não no fim de cada caso: um `it` que falha
+   no meio nunca chega ao próprio reset, e o caso seguinte quebraria com a
+   resposta do anterior — vermelho apontando para o teste errado. */
+beforeEach(() => {
+  alternar.mockClear();
+  resposta.valor = { ok: true, dados: {} };
+});
 
 describe("a tabela de regras", () => {
   it("a primeira coluna é o cabeçalho da linha — R23", () => {
@@ -161,7 +169,6 @@ describe("ligar e desligar da lista", () => {
   });
 
   it("chama a ação com o id e com o valor INVERTIDO", async () => {
-    alternar.mockClear();
     const { usuario, getByRole } = montar([regra({ habilitada: true })]);
 
     await usuario.click(getByRole("button", { name: /^Desligar a regra/ }));
@@ -179,7 +186,6 @@ describe("ligar e desligar da lista", () => {
    * vez de na rota.
    */
   it("erro do servidor aparece com a frase dele, e a linha não muda sozinha", async () => {
-    alternar.mockClear();
     resposta.valor = { ok: false, erro: "Rota /admin/descontos não encontrada." };
     const { usuario, getByRole, findByText, getByText } = montar([
       regra({ habilitada: true }),
@@ -191,7 +197,7 @@ describe("ligar e desligar da lista", () => {
     // A situação continua a que o servidor mandou: a tela não pinta o que não
     // aconteceu.
     expect(getByText("Vigente")).toBeTruthy();
-    resposta.valor = { ok: true, dados: {} };
+
   });
 
   /**
