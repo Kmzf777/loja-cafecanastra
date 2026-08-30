@@ -464,11 +464,51 @@ function aplicarTeto(regra, descontos) {
  *   ordem de aplicação, com `sequencia` começando em 1 — a mesma coluna de
  *   `pedido_ajustes_desconto`, que é onde eles vão parar.
  */
+/**
+ * A referência que vai para `pedido_ajustes_desconto.alvo_ref` — e por que ela
+ * não pode ser um `String(...)` solto.
+ *
+ * `String(null)` é a string `"null"`, e o CHECK da coluna
+ * (`pedido_ajustes_alvo_ref_coerente`, 0032) exige apenas
+ * `alvo_ref IS NOT NULL AND btrim(alvo_ref) <> ''` — que `"null"` satisfaz. O
+ * banco aceitaria, calado, a PALAVRA "null" na única tabela que existe para
+ * responder "por que este pedido saiu por R$ 137,40?".
+ *
+ * O `sku` é a segunda referência legítima, não um remendo: é por ele que a
+ * avaliação e o Bling falam do mesmo produto, e kit e variante nem sempre
+ * carregam `produtoId`.
+ *
+ * Sem nenhum dos dois, o motor RECUSA. É defeito de quem montou o carrinho, e
+ * a alternativa — seguir e gravar lixo — troca um erro visível por uma
+ * auditoria corrompida em silêncio, descoberta meses depois por um contador.
+ */
+function referenciaDoItem(item) {
+  const porId = textoNormalizado(item?.produtoId);
+  if (porId !== "") return String(item.produtoId).trim();
+
+  const porSku = textoNormalizado(item?.sku);
+  if (porSku !== "") return String(item.sku).trim();
+
+  throw new Error(
+    "Item de carrinho sem identificador: todo item precisa de produtoId ou sku " +
+      "para o desconto poder ser rateado por linha no pedido.",
+  );
+}
+
 function calcularDescontos(carrinho, regras) {
-  const linhas = (carrinho?.itens || []).map((item) => ({
-    item,
-    valorCentavos: inteiro(item.precoCentavos) * Math.max(0, inteiro(item.quantidade)),
-  }));
+  const linhas = (carrinho?.itens || []).map((item) => {
+    // A recusa acontece AQUI, na entrada, antes de qualquer conta de dinheiro —
+    // e não no `registrar`, lá embaixo. Falhar no meio do cálculo deixaria
+    // ajustes já empilhados de regras anteriores, e quem tratasse a exceção
+    // teria de saber descartá-los. Na fronteira, ou o carrinho inteiro é
+    // calculável ou nada foi calculado.
+    referenciaDoItem(item);
+    return {
+      item,
+      valorCentavos:
+        inteiro(item.precoCentavos) * Math.max(0, inteiro(item.quantidade)),
+    };
+  });
 
   const ajustes = [];
   const registrar = (regra, alvo, alvoRef, valorCentavos) => {
@@ -552,7 +592,7 @@ function calcularDescontos(carrinho, regras) {
         finais.forEach((desconto, i) => {
           if (desconto <= 0) return;
           alcancadas[i].valorCentavos -= desconto;
-          registrar(regra, "item", String(alcancadas[i].item.produtoId), desconto);
+          registrar(regra, "item", referenciaDoItem(alcancadas[i].item), desconto);
           aplicou = true;
         });
       } else if (classe === "pedido") {

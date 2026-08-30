@@ -1161,20 +1161,31 @@ class DescontosRepository {
        * Os ajustes na forma do contrato — e `codigoId`, que o motor acrescenta
        * para a reserva do checkout, fica de fora: aqui não há reserva nenhuma.
        *
-       * `alvoRef === "null"` VIRA `null`, E ISTO É FRONTEIRA, NÃO CONSERTO.
-       * `motor.js` monta a referência do item com `String(item.produtoId)`, e
-       * num item AVULSO do simulador (só SKU, sem produto escolhido) aquilo
-       * produz a string literal "null" — que a tela estamparia como
-       * "· null" ao lado do desconto. O motor é a função que COBRA e não se
-       * mexe de passagem; o que esta camada faz é não repassar um não-valor
-       * disfarçado de texto.
+       * AQUI HAVIA UM CONTORNO, e ele foi REMOVIDO porque a origem foi
+       * consertada. `motor.js` montava a referência do item com
+       * `String(item.produtoId)`, e um item avulso (só SKU) produzia a string
+       * literal "null"; esta camada a trocava por `null` para a tela não
+       * estampar "· null".
+       *
+       * O problema era maior que a tela. O CHECK
+       * `pedido_ajustes_alvo_ref_coerente` (0032) exige apenas
+       * `btrim(alvo_ref) <> ''`, que "null" satisfaz — ou seja, no CHECKOUT a
+       * palavra "null" seria gravada, calada, na tabela que existe para
+       * responder "por que este pedido saiu por R$ 137,40?". O contorno aqui
+       * limpava a vitrine e deixava o estrago onde ele custa.
+       *
+       * `motor.js` agora usa `referenciaDoItem`: `produtoId`, senão `sku`,
+       * senão RECUSA na entrada. Manter a troca aqui passaria a APAGAR um SKU
+       * legítimo no dia em que alguém cadastrasse um produto chamado "null" —
+       * improvável, e exatamente o tipo de contorno que sobrevive ao problema
+       * e vira defeito próprio.
        */
       ajustes: ajustes.map((a) => ({
         sequencia: a.sequencia,
         promocaoId: a.promocaoId,
         codigo: a.codigo,
         alvo: a.alvo,
-        alvoRef: a.alvoRef === "null" || a.alvoRef === "undefined" ? null : a.alvoRef,
+        alvoRef: a.alvoRef,
         valorCentavos: a.valorCentavos,
         rotulo: a.rotulo,
       })),

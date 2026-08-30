@@ -811,3 +811,45 @@ test("carrinho vazio, regras vazias e regra de classe desconhecida não quebram"
   ]);
   assert.equal(r.totalCentavos, 0);
 });
+
+/**
+ * O ITEM SEM IDENTIFICADOR — o defeito que passava pelo CHECK.
+ *
+ * `alvoRef` saía de `String(item.produtoId)`, e `String(null)` é a string
+ * `"null"`. O CHECK `pedido_ajustes_alvo_ref_coerente` (0032) exige
+ * `alvo_ref IS NOT NULL AND btrim(alvo_ref) <> ''` — e `"null"` satisfaz os
+ * dois. Ou seja: um item de carrinho sem `produtoId` gravaria a PALAVRA "null"
+ * na tabela que existe justamente para responder "por que este pedido saiu por
+ * R$ 137,40?".
+ *
+ * Não é hipótese de laboratório: kit e variante nem sempre carregam
+ * `produtoId`, e o `itens` de `pedidos` é jsonb sem FK — ninguém do lado do
+ * banco recusaria a linha.
+ *
+ * O conserto é de FRONTEIRA e tem duas metades. O `sku` serve de referência
+ * quando não há `produtoId`, porque ele é identificador de verdade (é a chave
+ * por onde a avaliação e o Bling falam do mesmo produto). E item sem NENHUM
+ * dos dois faz o motor RECUSAR, alto, antes de qualquer conta de dinheiro:
+ * carrinho assim é defeito de quem chamou, e seguir em frente trocaria um erro
+ * visível por uma auditoria corrompida em silêncio.
+ */
+test("item sem produtoId usa o SKU como referência, e nunca a string 'null'", () => {
+  const r = calcularDescontos(
+    carrinho([{ produtoId: null, sku: "KIT-3X250", categoria: "cafe", precoCentavos: 12000, quantidade: 1 }]),
+    [regra({ mecanica: "percentual", valor: 10 })],
+  );
+  assert.equal(r.totalCentavos, 1200);
+  assert.equal(r.ajustes[0].alvoRef, "KIT-3X250");
+  assert.notEqual(r.ajustes[0].alvoRef, "null");
+});
+
+test("item sem produtoId E sem sku faz o motor recusar, em vez de gravar lixo", () => {
+  assert.throws(
+    () =>
+      calcularDescontos(
+        carrinho([{ produtoId: null, sku: null, categoria: "cafe", precoCentavos: 1000, quantidade: 1 }]),
+        [regra({ mecanica: "percentual", valor: 10 })],
+      ),
+    /identificador/i,
+  );
+});

@@ -954,10 +954,24 @@ test("simular devolve o frete depois dos ajustes de classe frete", async () => {
   assert.equal(res.corpo.freteFinalCentavos, 0);
 });
 
-test("simular não devolve a string \"null\" como referência de item avulso", async () => {
-  // `motor.js` monta a referência com `String(item.produtoId)`, e um item
-  // avulso (só SKU) produz o texto literal "null" — que a tela estamparia
-  // como "· null" ao lado do desconto.
+test("simular usa o SKU como referência do item avulso, e nunca a string \"null\"", async () => {
+  /**
+   * ESTE TESTE MUDOU DE VEREDITO, e a mudança é a história do conserto.
+   *
+   * Ele nasceu afirmando `alvoRef === null`, porque `motor.js` montava a
+   * referência com `String(item.produtoId)` e um item avulso (só SKU) produzia
+   * o texto literal "null"; esta camada o trocava por `null` para a tela não
+   * estampar "· null".
+   *
+   * O contorno limpava a vitrine e deixava o estrago onde ele custa: o CHECK
+   * `pedido_ajustes_alvo_ref_coerente` (0032) exige só `btrim(alvo_ref) <> ''`,
+   * que "null" satisfaz — no CHECKOUT a palavra seria gravada, calada, na
+   * tabela que existe para responder por que o pedido saiu pelo valor que saiu.
+   *
+   * `referenciaDoItem` conserta na origem: `produtoId`, senão `sku`, senão
+   * recusa na entrada. Então o esperado deixa de ser "não é lixo" e passa a ser
+   * a referência CERTA — que é o que a NF-e precisa para ratear o desconto.
+   */
   const res = await chamar({
     metodo: "POST",
     caminho: "/admin/descontos/simular",
@@ -987,7 +1001,8 @@ test("simular não devolve a string \"null\" como referência de item avulso", a
   assert.equal(res.codigo, 200);
   assert.equal(res.corpo.ajustes.length, 1);
   assert.equal(res.corpo.ajustes[0].alvo, "item");
-  assert.equal(res.corpo.ajustes[0].alvoRef, null);
+  assert.equal(res.corpo.ajustes[0].alvoRef, "AVULSO-1");
+  assert.notEqual(res.corpo.ajustes[0].alvoRef, "null");
 });
 
 test("simular recusa a mesma regra que o POST recusaria", async () => {
