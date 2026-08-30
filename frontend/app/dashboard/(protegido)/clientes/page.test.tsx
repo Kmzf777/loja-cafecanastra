@@ -296,3 +296,33 @@ describe("R2 — o que vai (e o que não vai) para a URL", () => {
     }
   });
 });
+
+/**
+ * R13 — NÃO SE APAGA CLIENTE POR AQUI, E A TELA DIZ ISSO.
+ *
+ * A decisão já estava tomada e escrita no comentário do arquivo; o gestor não lê
+ * comentário. Quem procura a lixeira e não a acha conclui que a tela nova está
+ * incompleta, e o caminho seguinte é abrir o painel antigo ou pedir a alguém que
+ * rode um DELETE — as duas saídas são piores do que a frase.
+ *
+ * O `DELETE /auth/users/:id` continua existindo no backend, e continua sem
+ * nenhuma UI que o chame. É uma decisão, não uma lacuna.
+ */
+describe("R13 — a exclusão não mora nesta tela, e a tela explica", () => {
+  /* A busca é por CONTROLE, e não pela palavra: a frase que explica a ausência
+     contém "exclusão", e um casamento de texto solto ensinaria a apagar a
+     explicação para calar o teste — que é o oposto do que se quer. */
+  it("não desenha botão nem link de excluir", async () => {
+    const s = await saida();
+    expect(s).not.toMatch(/<(?:button|a)\b[^>]*>[^<]*(?:Excluir|Apagar|Remover)/i);
+  });
+
+  /** A frase nomeia o caminho CERTO, e não só o proibido: um aviso que só diz
+   *  "não dá" manda a pessoa procurar como dar. */
+  it("aponta o fluxo de LGPD, e diz que ele preserva a venda", async () => {
+    const s = await saida();
+    expect(s).toContain("Não há como excluir um cliente por aqui");
+    expect(s).toContain("LGPD");
+    expect(s).toContain("registro fiscal");
+  });
+});

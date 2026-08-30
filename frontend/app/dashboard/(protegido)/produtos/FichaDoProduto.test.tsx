@@ -429,6 +429,18 @@ describe("R13 — arquivar, não apagar", () => {
     expect(getByText(/não lê nem grava esse campo/)).toBeTruthy();
     expect(getByText(/zere o estoque/)).toBeTruthy();
   });
+
+  /**
+   * DIZER O QUE "ARQUIVAR" FAZ VEM ANTES DE DIZER QUE ELE NÃO EXISTE. Quem vem
+   * do painel antigo chama o gesto de "excluir"; sem a definição, "arquivar" é
+   * lido como um sinônimo educado de apagar — e é justamente a diferença entre
+   * os dois que faz um pedido antigo continuar sabendo qual café foi vendido.
+   */
+  it("explica o que arquivar faz, e que é o oposto de apagar", () => {
+    const { getByText } = montar();
+    expect(getByText(/Arquivar tira o café da loja e guarda o cadastro/)).toBeTruthy();
+    expect(getByText(/nada some do histórico/)).toBeTruthy();
+  });
 });
 
 describe("as abas que dizem o que não conseguem fazer", () => {

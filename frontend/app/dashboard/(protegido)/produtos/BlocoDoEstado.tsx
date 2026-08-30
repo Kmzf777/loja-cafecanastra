@@ -45,6 +45,23 @@ export function BlocoDoEstado() {
   return (
     <Ficha titulo="Estado e retirada de venda" nivel={3}>
       <div className="space-y-3">
+        {/*
+          O QUE "ARQUIVAR" FAZ VEM ANTES DE DIZER QUE ELE NÃO EXISTE.
+
+          A frase anterior começava por "ainda não dá para arquivar", e quem vem
+          do painel antigo não sabe o que estava sendo negado: lá o gesto se
+          chamava "excluir". Sem a definição, "arquivar" é lido como um sinônimo
+          educado de apagar — e é justamente a diferença entre os dois que faz o
+          pedido de 2024 continuar sabendo qual café foi vendido.
+        */}
+        <p className="max-w-[75ch] text-[13px]">
+          <strong className="font-semibold">Arquivar tira o café da loja e
+          guarda o cadastro.</strong>{" "}
+          A página deixa de aparecer para o cliente, e o produto continua
+          existindo no painel e nos pedidos antigos, que seguem mostrando o que
+          foi vendido. É o oposto de apagar: nada some do histórico.
+        </p>
+
         <Tarja tom="alerta">
           Ainda não dá para arquivar por aqui: a coluna de estado existe no
           banco (rascunho, ativo, arquivado) e a loja já respeita os três, mas a
