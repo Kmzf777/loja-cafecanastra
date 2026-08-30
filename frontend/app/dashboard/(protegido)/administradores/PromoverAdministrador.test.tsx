@@ -1,30 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { configure, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
 
-/**
- * O RELÓGIO DESTES TESTES É FOLGADO DE PROPÓSITO — e não é o produto que está
- * lento.
- *
- * Todo caso aqui é clique → `useTransition` → asserção, e o `findBy*` do
- * testing-library desiste em 1 s por padrão. Isolado, este arquivo termina em
- * milissegundos; dentro da suíte inteira, com os projetos `vitrine` e
- * `painel-dom` disputando a máquina, os mesmos casos estouram o segundo —
- * sempre nas asserções que vêm DEPOIS de uma transição, nunca nas síncronas.
- * Foi medido: verde sozinho, vermelho junto. A mesma máquina já carrega sete
- * falhas ambientais de tempo limite em `lib/catalogo` e na PDP.
- *
- * Um teste que depende da carga da máquina não prova nada — só ensina a ignorar
- * vermelho. E a espera maior não esconde defeito: se a transição não terminar,
- * o caso continua falhando, mais tarde.
- *
- * (Isto provavelmente devia morar no helper `renderizar`, para toda tela do
- * painel herdar. Está RELATADO — `lib/teste/renderizar.tsx` é compartilhado, e
- * outra frente escreve testes de DOM em paralelo nesta onda.)
- */
-vi.setConfig({ testTimeout: 20_000 });
-configure({ asyncUtilTimeout: 8_000 });
 
 /**
  * O DIÁLOGO DE PROMOVER — com DOM e com clique, porque é a única forma honesta

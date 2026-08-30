@@ -77,7 +77,14 @@ describe("analisarFreteGratis — os três resultados", () => {
       centavos: 0,
       desliga: true,
     });
-    expect(analisarFreteGratis("0,00").desliga).toBe(true);
+    // `toMatchObject` e não `.desliga` direto: o retorno é uma união de três
+    // variantes e só a de `tipo: "valor"` tem esse campo. Acessá-lo sem
+    // estreitar é erro de tipo — e estreitar com `as` calaria justamente a
+    // checagem que impede alguém de ler `desliga` de um retorno "ausente".
+    expect(analisarFreteGratis("0,00")).toMatchObject({
+      tipo: "valor",
+      desliga: true,
+    });
   });
 
   it.each(["abc", "-10", "149,000", "1.490,00", "1,490.00", "12,", "R$"])(

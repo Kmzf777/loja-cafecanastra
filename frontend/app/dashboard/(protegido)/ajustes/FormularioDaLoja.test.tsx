@@ -1,13 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { configure, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
 
 /** Espera folgada porque todo caso aqui é digitar/clicar → `useTransition` →
  *  asserção, e o `findBy*` desiste em 1 s. O porquê inteiro está em
  *  `administradores/PromoverAdministrador.test.tsx`. */
-vi.setConfig({ testTimeout: 20_000 });
-configure({ asyncUtilTimeout: 8_000 });
 
 /**
  * O FORMULÁRIO DA LOJA — com DOM e com clique, porque é o que só existe depois

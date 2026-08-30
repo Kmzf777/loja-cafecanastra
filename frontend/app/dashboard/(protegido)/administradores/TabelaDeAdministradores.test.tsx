@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { configure, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
 import type { AdministradorDaLista } from "@/lib/painel/administradores/administradores.logica";
@@ -7,8 +7,6 @@ import type { AdministradorDaLista } from "@/lib/painel/administradores/administ
 /** Espera folgada porque todo caso aqui é clique → `useTransition` → asserção,
  *  e o `findBy*` desiste em 1 s. O porquê inteiro está em
  *  `PromoverAdministrador.test.tsx`. */
-vi.setConfig({ testTimeout: 20_000 });
-configure({ asyncUtilTimeout: 8_000 });
 
 /**
  * A CONFIRMAÇÃO DA REMOÇÃO — R11/R12, com DOM e com clique.

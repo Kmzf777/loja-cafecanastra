@@ -90,8 +90,21 @@ describe("STATUS_DE_AVALIACAO", () => {
     expect(STATUS_DE_AVALIACAO.map((s) => s.valor)).toContain("oculta");
   });
 
+  /**
+   * O `as const` da lista faz o TypeScript ESTREITAR `tom` para os três tons
+   * que ela de fato usa, e aí `s.tom !== "erro"` vira comparação sem
+   * sobreposição — `tsc` recusa, e com razão: ele já provou o que o teste
+   * queria provar, de graça e antes de rodar.
+   *
+   * A asserção fica assim mesmo, alargada de propósito. O tipo garante hoje; a
+   * lista garante no dia em que alguém acrescentar um status novo com
+   * `tom: "erro"` — porque aí a união cresce, `tsc` volta a aceitar a
+   * comparação, e é este caso que fica vermelho. Uma prova estática e uma de
+   * execução guardam momentos diferentes.
+   */
   it("nenhum status usa o tom de erro — R21 reserva o vermelho a erro e destruição", () => {
-    expect(STATUS_DE_AVALIACAO.every((s) => s.tom !== "erro")).toBe(true);
+    const tons: string[] = STATUS_DE_AVALIACAO.map((s) => s.tom);
+    expect(tons).not.toContain("erro");
   });
 
   it("todo status tem rótulo em português, diferente do valor", () => {
