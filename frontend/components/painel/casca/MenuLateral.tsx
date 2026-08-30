@@ -142,6 +142,17 @@ const PICTOGRAMAS: Record<string, ReactNode> = {
       <path d="M12.2 9.9a4.4 4.4 0 0 1 2.2 4.3" />
     </>
   ),
+  // Administradores — a chave da loja, deitada. NÃO são duas pessoas (é o
+  // desenho de Clientes) nem uma engrenagem: o que distingue esta área não é
+  // quem são, é o que elas têm na mão.
+  "/dashboard/administradores": (
+    <>
+      <circle cx="4.2" cy="8" r="2.4" />
+      <path d="M6.6 8h7.6" />
+      <path d="M11.4 8v2.4" />
+      <path d="M13.6 8v2.4" />
+    </>
+  ),
   // Ajustes — os cursores de régua, não a engrenagem de todo mundo.
   "/dashboard/ajustes": (
     <>

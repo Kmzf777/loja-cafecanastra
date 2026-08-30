@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { MENU, itemAtivo, LEGADO, legadoAtivo } from "./menu.logica";
 
 describe("MENU", () => {
@@ -21,6 +23,41 @@ describe("MENU", () => {
   it("não há href repetido", () => {
     const hrefs = MENU.flatMap((g) => g.itens.map((i) => i.href));
     expect(new Set(hrefs).size).toBe(hrefs.length);
+  });
+
+  /**
+   * TODA TELA DO PAINEL TEM UM CAMINHO NO MENU — e este teste existe porque uma
+   * delas não tinha.
+   *
+   * `/dashboard/administradores` nasceu na Onda 4 e ficou órfã: nenhum link em
+   * lugar nenhum do menu, e o único acesso era um parágrafo dentro de Ajustes.
+   * Uma tela que só se alcança por quem já sabe o endereço é uma tela que não
+   * existe — e esta é a que impede a loja de perder a gestão quando alguém
+   * esquece a senha, que neste projeto é irrecuperável.
+   *
+   * A varredura é do DIRETÓRIO, e não uma lista escrita à mão: uma lista aqui
+   * seria a segunda cópia do mapa do painel, e o próximo órfão nasceria com o
+   * teste verde. Pastas entre parênteses são route groups (não viram URL), e
+   * `legado` é a saída de emergência que fica FORA do `MENU` de propósito — as
+   * duas exceções estão nomeadas para que ninguém acrescente uma terceira sem
+   * escrever o porquê.
+   */
+  it("nenhuma tela do painel fica órfã de menu", () => {
+    const RAIZ = join(__dirname, "..", "..", "..", "app", "dashboard", "(protegido)");
+    const FORA_DO_MENU = ["legado"];
+
+    const telas = readdirSync(RAIZ, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .filter((nome) => !nome.startsWith("(") && !nome.startsWith("["))
+      .filter((nome) => !FORA_DO_MENU.includes(nome));
+
+    const hrefs = MENU.flatMap((g) => g.itens.map((i) => i.href));
+    for (const tela of telas) {
+      expect(hrefs, `a tela /dashboard/${tela} não tem link no menu`).toContain(
+        `/dashboard/${tela}`,
+      );
+    }
   });
 });
 

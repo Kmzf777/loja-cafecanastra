@@ -42,6 +42,19 @@ export const MENU: GrupoDeMenu[] = [
     titulo: "Gerir",
     itens: [
       { rotulo: "Clientes", href: "/dashboard/clientes" },
+      /*
+        ADMINISTRADORES ENTROU AQUI PORQUE A TELA ESTAVA ÓRFÃ. Ela nasceu na
+        Onda 4 e não havia link nenhum para ela em lugar nenhum do menu: o único
+        caminho era um parágrafo dentro de `/dashboard/ajustes`. Uma tela que só
+        se alcança por quem já sabe que ela existe é uma tela que não existe — e
+        esta é a que impede a loja de perder a gestão quando alguém esquece a
+        senha (que é irrecuperável).
+
+        Ao lado de Clientes, e não em "Ajustes": as duas listam PESSOAS, e o que
+        muda entre elas é de que lado do balcão. Ajustes é onde se mexe em
+        configuração, uma vez por mês.
+      */
+      { rotulo: "Administradores", href: "/dashboard/administradores" },
       { rotulo: "Ajustes", href: "/dashboard/ajustes" },
     ],
   },
