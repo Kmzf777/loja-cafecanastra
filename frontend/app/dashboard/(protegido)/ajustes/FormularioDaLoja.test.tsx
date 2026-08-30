@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { configure, screen } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
+
+/** Espera folgada porque todo caso aqui é digitar/clicar → `useTransition` →
+ *  asserção, e o `findBy*` desiste em 1 s. O porquê inteiro está em
+ *  `administradores/PromoverAdministrador.test.tsx`. */
+vi.setConfig({ testTimeout: 20_000 });
+configure({ asyncUtilTimeout: 8_000 });
 
 /**
  * O FORMULÁRIO DA LOJA — com DOM e com clique, porque é o que só existe depois
@@ -201,7 +207,10 @@ describe("o resultado", () => {
     await usuario.click(screen.getByRole("button", { name: "Salvar" }));
 
     expect(await screen.findByText("Configurações atualizadas!")).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Salvar" })).toBeNull();
+    /* A pergunta é sobre a BARRA, e não sobre o botão: enquanto a transição
+       corre o botão diz "Salvando…", e procurá-lo por "Salvar" daria `null`
+       também aí — o teste passaria pelo motivo errado. */
+    expect(screen.queryByText("Há alterações não salvas.")).toBeNull();
   });
 
   /**
@@ -223,7 +232,9 @@ describe("o resultado", () => {
       await screen.findByText(/precisa ser um inteiro em centavos/),
     ).toBeDefined();
     // A barra fica: o trabalho não foi salvo, e sumir com ela seria perdê-lo.
-    expect(screen.getByRole("button", { name: "Salvar" })).toBeDefined();
+    // `findByRole` porque o botão diz "Salvando…" até a transição terminar, e o
+    // erro aparece antes disso.
+    expect(await screen.findByRole("button", { name: "Salvar" })).toBeDefined();
   });
 });
 

@@ -1,7 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { configure, screen, waitFor } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
+
+/**
+ * O RELÓGIO DESTES TESTES É FOLGADO DE PROPÓSITO — e não é o produto que está
+ * lento.
+ *
+ * Todo caso aqui é clique → `useTransition` → asserção, e o `findBy*` do
+ * testing-library desiste em 1 s por padrão. Isolado, este arquivo termina em
+ * milissegundos; dentro da suíte inteira, com os projetos `vitrine` e
+ * `painel-dom` disputando a máquina, os mesmos casos estouram o segundo —
+ * sempre nas asserções que vêm DEPOIS de uma transição, nunca nas síncronas.
+ * Foi medido: verde sozinho, vermelho junto. A mesma máquina já carrega sete
+ * falhas ambientais de tempo limite em `lib/catalogo` e na PDP.
+ *
+ * Um teste que depende da carga da máquina não prova nada — só ensina a ignorar
+ * vermelho. E a espera maior não esconde defeito: se a transição não terminar,
+ * o caso continua falhando, mais tarde.
+ *
+ * (Isto provavelmente devia morar no helper `renderizar`, para toda tela do
+ * painel herdar. Está RELATADO — `lib/teste/renderizar.tsx` é compartilhado, e
+ * outra frente escreve testes de DOM em paralelo nesta onda.)
+ */
+vi.setConfig({ testTimeout: 20_000 });
+configure({ asyncUtilTimeout: 8_000 });
 
 /**
  * O DIÁLOGO DE PROMOVER — com DOM e com clique, porque é a única forma honesta
@@ -46,11 +69,30 @@ async function abrir(jaSaoAdmin: string[] = []) {
   return usuario;
 }
 
+/**
+ * Busca, E ESPERA A BUSCA TERMINAR.
+ *
+ * A espera não é zelo: enquanto a transição da busca corre, TODO controle do
+ * diálogo fica `disabled` — inclusive os rádios que ela acabou de listar. Um
+ * clique num rádio desabilitado não faz nada e não reclama, então o teste
+ * seguia adiante com `escolhido` em `null` e falhava lá na frente, apontando
+ * para o botão em vez de para o clique perdido. Sozinho o arquivo passava (a
+ * transição terminava antes); dentro da suíte cheia, não.
+ *
+ * Esperar o "Buscar" voltar a ser clicável é esperar exatamente `ocupado ===
+ * false`, que é a condição que libera os rádios.
+ */
 async function procurar(usuario: Awaited<ReturnType<typeof abrir>>, texto: string) {
   if (texto) {
     await usuario.type(screen.getByLabelText(/Procurar cliente/), texto);
   }
   await usuario.click(screen.getByRole("button", { name: "Buscar" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Buscar" })).toHaveProperty(
+      "disabled",
+      false,
+    ),
+  );
 }
 
 /* ========================================================================== */
@@ -160,10 +202,15 @@ describe("a escolha", () => {
 
     await procurar(usuario, "a");
     await usuario.click(await screen.findByRole("radio", { name: /Ana Souza/ }));
-    expect(screen.getByRole("button", { name: "Promover" })).toHaveProperty(
-      "disabled",
-      false,
-    );
+    /*
+      `findByRole` E NÃO `getByRole`: enquanto a transição da BUSCA corre o botão
+      diz "Promovendo…", e os candidatos já apareceram. Um `get` aqui media o
+      instante entre as duas coisas — passava sozinho e falhava dentro da suíte
+      cheia, que é o pior tipo de teste: o que depende da carga da máquina.
+    */
+    expect(
+      await screen.findByRole("button", { name: "Promover" }),
+    ).toHaveProperty("disabled", false);
   });
 
   /**
@@ -232,7 +279,9 @@ describe("o resultado", () => {
     expect(
       await screen.findByText("Esta pessoa já é administradora da loja."),
     ).toBeDefined();
-    expect(screen.getByRole("button", { name: "Promover" })).toBeDefined();
+    // `findByRole` pelo mesmo motivo de acima: o botão diz "Promovendo…" até a
+    // transição terminar, e o erro aparece antes disso.
+    expect(await screen.findByRole("button", { name: "Promover" })).toBeDefined();
   });
 
   it("falha na busca também vira banner, e não lista vazia", async () => {

@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { configure, screen } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
 import type { OpcaoDaLista } from "@/lib/painel/ajustes/ajustes.logica";
+
+/** Espera folgada porque todo caso aqui é clique → `useTransition` → asserção,
+ *  e o `findBy*` desiste em 1 s. O porquê inteiro está em
+ *  `administradores/PromoverAdministrador.test.tsx`. */
+vi.setConfig({ testTimeout: 20_000 });
+configure({ asyncUtilTimeout: 8_000 });
 
 /**
  * AS DUAS LISTAS DE OPÇÕES — e o que se confere aqui é sobretudo o que o painel
@@ -178,8 +184,9 @@ describe("excluir — R11/R12", () => {
       await screen.findByText("Esta opção está em uso por algum produto."),
     ).toBeDefined();
     /* `findByRole` e não `getByRole`: o botão diz "Excluindo…" enquanto a
-       transição corre, e o React pode ter descarregado o estado do erro antes
-       de a transição terminar. Um `get` aqui mediria o instante errado. */
+       transição corre, e o React descarrega o estado do erro antes de a
+       transição terminar. Um `get` aqui mediria o instante entre as duas
+       coisas — passava sozinho e falhava dentro da suíte cheia. */
     expect(
       await screen.findByRole("button", { name: "Excluir a opção" }),
     ).toBeDefined();
@@ -193,6 +200,9 @@ describe("excluir — R11/R12", () => {
     await usuario.click(await screen.findByRole("button", { name: "Excluir a opção" }));
 
     expect(await screen.findByText('"Clássico" foi excluído.')).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Excluir a opção" })).toBeNull();
+    /* A pergunta é sobre o DIÁLOGO: procurar o botão pelo nome daria `null`
+       também durante a transição (quando ele diz "Excluindo…"), e o teste
+       passaria pelo motivo errado. */
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { configure, screen } from "@testing-library/react";
 
 import { renderizar } from "@/lib/teste/renderizar";
 import type { AdministradorDaLista } from "@/lib/painel/administradores/administradores.logica";
+
+/** Espera folgada porque todo caso aqui é clique → `useTransition` → asserção,
+ *  e o `findBy*` desiste em 1 s. O porquê inteiro está em
+ *  `PromoverAdministrador.test.tsx`. */
+vi.setConfig({ testTimeout: 20_000 });
+configure({ asyncUtilTimeout: 8_000 });
 
 /**
  * A CONFIRMAÇÃO DA REMOÇÃO — R11/R12, com DOM e com clique.
@@ -147,7 +153,13 @@ describe("o resultado da remoção", () => {
     expect(
       await screen.findByText("Gestor 2 não administra mais a loja."),
     ).toBeDefined();
-    expect(screen.queryByRole("button", { name: "Remover o acesso" })).toBeNull();
+    /*
+      A pergunta é sobre o DIÁLOGO, e não sobre o botão. Procurar o botão pelo
+      nome daria `null` também durante a transição (quando ele diz
+      "Removendo…"), e o teste passaria pelo motivo errado — provando que o
+      diálogo fechou justamente quando ele ainda está aberto.
+    */
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   /**
@@ -168,7 +180,16 @@ describe("o resultado da remoção", () => {
     await usuario.click(await screen.findByRole("button", { name: "Remover o acesso" }));
 
     expect(await screen.findByText(/única pessoa que administra a loja/)).toBeDefined();
-    expect(screen.getByRole("button", { name: "Remover o acesso" })).toBeDefined();
+    /*
+      `findByRole` E NÃO `getByRole`, e a diferença é real: enquanto a transição
+      corre o botão diz "Removendo…", e o React descarrega o estado do erro
+      antes de a transição terminar. Um `get` aqui media o instante entre as
+      duas coisas — passava sozinho e falhava dentro da suíte cheia, que é o
+      pior tipo de teste: o que depende da carga da máquina.
+    */
+    expect(
+      await screen.findByRole("button", { name: "Remover o acesso" }),
+    ).toBeDefined();
   });
 
   it("chama a ação com o uuid da linha escolhida, e não com o da primeira", async () => {
