@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useState, useTransition, type ReactNode } from "react";
 
+import { Botao } from "@/components/painel/ui/Botao";
 import { Selo } from "@/components/painel/ui/Selo";
 import { Tabela, type Coluna } from "@/components/painel/ui/Tabela";
+import { Tarja } from "@/components/painel/ui/Tarja";
 import { FOCO } from "@/components/painel/ui/estilos";
 import {
   ROTA_DE_DESCONTOS,
@@ -21,6 +24,8 @@ import {
   usosEmTexto,
   valorEmTexto,
 } from "@/lib/painel/descontos/lista.logica";
+
+import { alternarDesconto } from "./acoes";
 
 /**
  * A tabela de regras — e por que ela é um arquivo `"use client"` separado.
@@ -46,6 +51,11 @@ import {
  * que o servidor usou — a linha renderizaria "vigente" no HTML e "expirada" na
  * hidratação, para uma regra que acabou de vencer. Um número não tem esse
  * problema e não depende do fuso da máquina de quem abriu a tela.
+ *
+ * E AGORA HÁ UM SEGUNDO MOTIVO PARA A ILHA: o interruptor de ligar/desligar, que
+ * é a única escrita da lista. Ela carrega dois pedaços de estado que só existem
+ * no navegador — qual linha está esperando o servidor, e a frase de erro que
+ * voltou. Nenhum dos dois é filtro, então nenhum dos dois vai para a URL (R2).
  */
 
 /**
@@ -68,7 +78,10 @@ import {
  * contrato). Um cabeçalho clicável que não ordena é pior que um cabeçalho
  * quieto — a `<Tabela>` desta casa só desenha a seta quando recebe `aoOrdenar`.
  */
-function colunas(agoraEmMs: number): Coluna<RegraDaLista>[] {
+function colunas(
+  agoraEmMs: number,
+  interruptor: (linha: RegraDaLista) => ReactNode,
+): Coluna<RegraDaLista>[] {
   const agora = new Date(agoraEmMs);
 
   return [
@@ -139,7 +152,81 @@ function colunas(agoraEmMs: number): Coluna<RegraDaLista>[] {
       // que é qual campanha foi cadastrada e nunca pegou.
       celula: (linha) => descontadoEmTexto(linha.descontado_centavos),
     },
+    {
+      chave: "interruptor",
+      rotulo: "Ligar/desligar",
+      celula: interruptor,
+    },
   ];
+}
+
+/**
+ * O INTERRUPTOR DE UMA LINHA — e por que ele é um `<button>` e não uma caixa
+ * de marcar.
+ *
+ * Uma caixa de marcar promete um estado que se muda de graça e se salva depois;
+ * este gesto grava NA HORA e muda o que a loja cobra do próximo cliente. O
+ * rótulo diz o que o clique FAZ ("Desligar"), e a coluna Situação, três células
+ * à esquerda, diz o que a regra É ("Vigente") — nomear o estado no botão E na
+ * coluna seria a segunda cópia que um dia discorda da primeira.
+ *
+ * NÃO PEDE CONFIRMAÇÃO, e a ausência é medida contra o R11/R12: aqueles pedem
+ * peso para o irreversível. Desligar é reversível no mesmo clique, e um diálogo
+ * por linha treinaria a clicar em OK — que é como se perde a confirmação que
+ * importa, a de arquivar.
+ *
+ * NADA DE OTIMISMO (R14): enquanto o servidor não responde, o rótulo é
+ * "Desligando…" e o botão fica travado. A linha só muda quando os dados novos
+ * chegam do servidor — `alternarDesconto` revalida a rota, e é o Server
+ * Component que reescreve a Situação. Pintar a mudança antes da resposta faria a
+ * tela afirmar um desconto ligado que o backend recusou com 404, que é
+ * exatamente o estado destas rotas hoje.
+ *
+ * ARQUIVADA É O ÚNICO CASO TRAVADO. `situacaoDaRegra` dá a arquivar precedência
+ * sobre tudo: ligar uma regra arquivada não a colocaria no ar, e o botão
+ * prometeria um efeito que não acontece. Expirada NÃO trava — o comentário de
+ * `alternarDesconto` é explícito ("corrigir a data de uma regra expirada é
+ * justamente o que o gestor precisa fazer, e foi travar esse botão que tornou a
+ * promoção legada inalcançável").
+ */
+function Interruptor({
+  linha,
+  ocupada,
+  aoAlternar,
+}: {
+  linha: RegraDaLista;
+  ocupada: boolean;
+  aoAlternar: (linha: RegraDaLista) => void;
+}) {
+  const arquivada = Boolean(linha.arquivada_em);
+  const desligar = linha.habilitada;
+
+  const rotulo = ocupada
+    ? desligar
+      ? "Desligando…"
+      : "Ligando…"
+    : desligar
+      ? "Desligar"
+      : "Ligar";
+
+  return (
+    <Botao
+      variante="secundaria"
+      disabled={ocupada || arquivada}
+      onClick={() => aoAlternar(linha)}
+      /* O nome NOMEIA O OBJETO: "Desligar" sozinho obriga quem não vê a tela a
+         adivinhar qual das vinte regras está sob o cursor. */
+      aria-label={`${desligar ? "Desligar" : "Ligar"} a regra ${linha.nome}`}
+      title={
+        arquivada
+          ? "Regra arquivada. Desarquive na ficha dela para poder ligá-la."
+          : undefined
+      }
+      className="px-3"
+    >
+      {rotulo}
+    </Botao>
+  );
 }
 
 export function TabelaDeDescontos({
@@ -149,12 +236,46 @@ export function TabelaDeDescontos({
   linhas: RegraDaLista[];
   agoraEmMs: number;
 }) {
+  /** Qual linha está esperando o servidor. Um id, e não um booleano: com um
+   *  booleano as vinte linhas ficariam "Desligando…" ao mesmo tempo. */
+  const [emVoo, setEmVoo] = useState<string | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [, iniciar] = useTransition();
+
+  function alternar(linha: RegraDaLista) {
+    setErro(null);
+    setEmVoo(linha.id);
+    iniciar(async () => {
+      const r = await alternarDesconto(linha.id, !linha.habilitada);
+      setEmVoo(null);
+      /* A FRASE DO SERVIDOR SOBE INTEIRA. Enquanto as rotas do motor não
+         existirem no Express, o que chega aqui é o 404 com a frase — e mostrá-la
+         é o comportamento correto: "não foi possível" esconderia que o problema
+         é a rota, e não a regra. */
+      if (!r.ok) setErro(r.erro);
+    });
+  }
+
   return (
-    <Tabela
-      legenda="Regras de desconto da loja"
-      colunas={colunas(agoraEmMs)}
-      linhas={linhas}
-      chaveDaLinha={(linha) => linha.id}
-    />
+    <>
+      {erro && (
+        /* A tarja fica ACIMA da tabela, e não dentro da célula: um erro dentro
+           de uma linha de 24px é lido como se pertencesse àquele campo, e este
+           pertence ao gesto. */
+        <Tarja onFechar={() => setErro(null)}>{erro}</Tarja>
+      )}
+      <Tabela
+        legenda="Regras de desconto da loja"
+        colunas={colunas(agoraEmMs, (linha) => (
+          <Interruptor
+            linha={linha}
+            ocupada={emVoo === linha.id}
+            aoAlternar={alternar}
+          />
+        ))}
+        linhas={linhas}
+        chaveDaLinha={(linha) => linha.id}
+      />
+    </>
   );
 }
