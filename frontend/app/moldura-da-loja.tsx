@@ -28,11 +28,16 @@ import {
  * abaixo). Duplicar a moldura nos dois grupos resolveria hoje e divergiria no
  * primeiro item novo do cabeçalho; um componente só não diverge.
  *
- * O RESET NÃO PODE SUBIR PARA O <body> EM app/layout.tsx: aquele layout também
- * envolve /dashboard, onde vive o painel legado em styled-components, que
- * depende dos defaults do navegador para títulos, botões e links. É por isso
- * que a classe `.vitrine` — que liga o reset definido em app/globals.css —
- * mora aqui, no elemento mais alto que NÃO alcança o painel.
+ * A CLASSE `.vitrine` MORA AQUI, no elemento mais alto que NÃO alcança o
+ * painel, e o que ela liga hoje é a VOZ da loja: fonte, entrelinha, tinta e a
+ * superfície Cal de `app/globals.css`. O painel em /dashboard tem a sua, com
+ * outra densidade — por isso as duas não podem subir para o <body> em
+ * `app/layout.tsx`, que envolve os dois.
+ *
+ * ELA TAMBÉM LIGAVA O RESET, até a Onda 7. O preflight do Tailwind não podia
+ * ser global enquanto /dashboard fosse o painel legado em styled-components,
+ * que dependia dos defaults do navegador para título, botão e link. Apagado o
+ * legado, o preflight é global e alcança os dois lados sozinho.
  *
  * JSON-LD DE ORGANIZATION/WEBSITE FICA AQUI, e não no layout raiz, pelo mesmo
  * motivo: quem quer rich results é a loja — o painel em /dashboard não tem

@@ -67,13 +67,17 @@ import { MenuLateral } from "@/components/painel/casca/MenuLateral";
 /**
  * A CASCA, acrescentada na Onda 1 — e o que ela liga.
  *
- * `.painel` NÃO É DECORAÇÃO: é o gancho do reset escopado de `globals.css`. O
- * preflight do Tailwind não é global neste projeto porque o painel LEGADO
- * (styled-components) depende dos defaults do navegador — um preflight global
- * zeraria font-size de título, aparência de button e sublinhado de <a> lá
- * dentro. Sem esta classe o painel novo herda os defaults do navegador e sai
- * em Times New Roman com 8px de margem no body, sem erro nenhum. É o mesmo
- * mecanismo que `.vitrine` usa do outro lado.
+ * `.painel` NÃO É DECORAÇÃO: é o gancho da tipografia e da DENSIDADE definidas
+ * em `globals.css`. Sem esta classe o painel sai na fonte do sistema e, o que
+ * mais se nota, em 16px — os 14px do R22 vêm daqui, e são eles que fazem caber
+ * na tela a quantidade de linha que um painel administrativo precisa mostrar.
+ *
+ * ELA JÁ CARREGOU MAIS QUE ISSO: até a Onda 7 era também o gancho de um reset
+ * escrito à mão, porque o preflight do Tailwind não podia ser global — o painel
+ * LEGADO em styled-components dependia dos defaults do navegador e se desfazia
+ * com ele. Apagado o legado, o preflight voltou a ser global e o reset saiu
+ * daqui. É o mesmo mecanismo que `.vitrine` usa do outro lado, e pelo mesmo
+ * motivo: cada metade do site tem a sua voz, e a voz não é reset.
  *
  * O MENU MORA AQUI, e não em cada página, pela mesma razão que a checagem: o
  * que envolve toda rota do grupo — inclusive as que ainda não existem — é o
