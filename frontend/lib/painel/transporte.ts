@@ -92,11 +92,14 @@ export async function authFetch(
 /** Monta a URL e delega. `body` `FormData` NÃO leva `Content-Type` — o
  *  navegador precisa escrever o `boundary` sozinho.
  *
- *  A assinatura é a mesma que os vinte e um pontos do painel legado chamam
- *  (`caminho, método, corpo`), e `legacy/api.js` a reexporta como default. A
- *  ÚNICA diferença é o padrão do método, que lá era `"POST"` e aqui é `"GET"`:
- *  todos os chamadores existentes passam o método explicitamente, e ler sem
- *  dizer o verbo é o caso frequente no painel novo. */
+ *  A assinatura nasceu igual à que os vinte e um pontos do painel legado
+ *  chamavam (`caminho, método, corpo`), e `legacy/api.js` a reexportava como
+ *  default — era o que permitia mover a lógica para cá sem tocar nas telas
+ *  antigas. A Onda 7 apagou aquele arquivo e a ponte junto; a forma ficou.
+ *
+ *  A ÚNICA diferença para o original é o padrão do método, que lá era `"POST"`
+ *  e aqui é `"GET"`: todo chamador passa o verbo explicitamente, e ler sem
+ *  dizê-lo é o caso frequente no painel novo. */
 export async function chamarApi(
   caminho: string,
   metodo: string = "GET",
