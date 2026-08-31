@@ -733,22 +733,33 @@ Depois de aplicar na VPS, confira à mão:
 O checklist completo de pós-deploy (nginx, TLS, healthcheck, webhook) está em
 `docs/deploy.md` §11.
 
-### 8.2 `npm run verifica` — fumaça num Chromium real
+### 8.2 `npm run verifica` — apagado na Onda 7, e não substituído
 
-São **37 checagens** (`frontend/scripts/verifica-fluxo.mjs`) e elas exercem a
-arquitetura **atual**, não a antiga: guard do `/dashboard` sem sessão, login pela
-página do GoTrue, as rotas do painel legado, os 29 SKUs pela API, a busca
-full-text, PLP, PDP, sacola e checkout. Exige backend (3333), Next (3000) e banco
-no ar ao mesmo tempo.
+Havia aqui um script de fumaça num Chromium real
+(`frontend/scripts/verifica-fluxo.mjs`, 37 checagens). **Ele foi apagado, e não
+porque a reescrita o quebrou: ele já não rodava.** Três defeitos, e cada um
+sozinho já o impedia de passar:
 
-Duas ressalvas antes de rodar:
+- o `executablePath` estava cravado em `/opt/pw-browsers/...`, um caminho Linux
+  que não existe na máquina de desenvolvimento;
+- a primeira checagem exigia que `/dashboard` sem sessão redirecionasse para
+  `/account/login`, e o guard manda para `/dashboard/entrar` desde a reescrita
+  do acesso;
+- oito das checagens visitavam rotas do painel legado
+  (`/dashboard/products/addedProducts`, `/dashboard/orders`,
+  `/dashboard/settings/*`), que a Onda 7 apagou.
 
-- **O caminho do Chromium está fixo no script** (`executablePath` apontando para
-  um Linux), e as credenciais de login também. É script de máquina de
-  desenvolvimento; ajuste os dois antes.
-- **Ele não cobre as superfícies mais novas**: cupom, cartão, Clube, avaliações e
-  `/pedido/[id]` só têm cobertura nas suítes de `npm test` e
-  `npm --prefix backend test`. Passar aqui não é passar em tudo.
+Consertá-lo exigiria reescrevê-lo inteiro contra as rotas novas **e** ter loja,
+API e banco no ar para provar a reescrita — e um script de fumaça que ninguém
+conseguiu rodar é pior que nenhum, porque a linha `npm run verifica` no README
+faz parecer que existe uma prova que não existe.
+
+**Não há E2E hoje.** A cobertura é a de `npm test` (frontend) e
+`npm --prefix backend test`. Reconstruí-lo é decisão registrada em
+`docs/pesquisa/2026-08-26-riscos-da-reescrita.md` §4 ("E2E NO CI"), e é a única
+forma de cobrir sessão real, cookie, redirect e RLS chegando via PostgREST.
+`playwright` continua em `devDependencies` do `frontend` para quando isso for
+feito — hoje sem nenhum consumidor.
 
 ---
 
