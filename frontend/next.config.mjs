@@ -20,13 +20,39 @@
  *                                  que a loja nao usa.
  *
  * SOBRE 'unsafe-inline' E 'unsafe-eval' NO script-src
- * O painel legado usa styled-components, que injeta <style> em tempo de
- * execucao, e o runtime do Next usa scripts inline com nonce so quando ha
- * middleware para gera-lo. Remover essas permissoes hoje quebraria o painel —
- * que e justamente a area que o cliente pediu para priorizar. Ficam como
- * pendencia declarada em docs/producao.md, com o caminho (nonce via middleware)
- * escrito la. Um CSP com unsafe-inline ainda barra script de origem externa,
- * que e o vetor mais comum; e melhor que nao ter CSP.
+ *
+ * ESTE PARAGRAFO JA CULPOU O PAINEL LEGADO, e estava errado. Dizia que as duas
+ * diretivas existiam por causa do styled-components, e que apagar `legacy/`
+ * destravaria as duas. A Onda 7 apagou o legado e mediu: uma sai, a outra nao,
+ * e a razao da que fica nunca teve nada a ver com o painel.
+ *
+ *  - 'unsafe-eval' SAIU DE PRODUCAO. Foram medidos os 33 chunks de um build de
+ *    producao: zero `eval(` e zero `new Function(`. Ele continua em
+ *    DESENVOLVIMENTO porque o `next dev` gera source map por eval — tirar de la
+ *    quebraria o console de quem depura, sem fechar nada em producao.
+ *
+ *  - 'unsafe-inline' FICA, e nao e omissao. Toda pagina pre-renderizada carrega
+ *    de 34 a 44 <script> INLINE do proprio Next (o `self.__next_f.push(...)`,
+ *    que e o payload RSC da hidratacao) e ZERO `nonce=` — medido em
+ *    .next/server/app/*.html. Sem 'unsafe-inline' o navegador recusa todos
+ *    eles e a loja inteira para de hidratar: nada clica, nada envia.
+ *
+ * O QUE SERIA PRECISO PARA TIRAR 'unsafe-inline', escrito aqui para o proximo
+ * leitor nao repetir a investigacao: nonce por requisicao, gerado no
+ * middleware, propagado para o Next e repetido no header. O custo e que nonce
+ * OBRIGA render dinamico — e `/[locale]` hoje sai como ● (SSG), pre-renderizado
+ * no build. Trocar a estatica da vitrine inteira (74 paginas) pela remocao de
+ * uma diretiva que so protege contra XSS ja injetado e um mau negocio enquanto
+ * nao houver superficie que aceite HTML de terceiro. Nao e uma tarefa de
+ * limpeza: e uma decisao de arquitetura, e precisa ser tomada como tal.
+ *
+ * Um CSP com unsafe-inline ainda barra script de ORIGEM EXTERNA, que e o vetor
+ * mais comum; e melhor que nao ter CSP.
+ *
+ * 'unsafe-inline' NO style-src TAMBEM FICA, e por outro motivo ainda: o
+ * `next/image` escreve `style` inline nos seus <img>, e o painel le token de
+ * cor em `style={{}}` com `var(--color-*)`. Sao superficies nossas, nao do
+ * runtime — mas sao muitas.
  */
 
 /** Origem da API, liberada no connect-src para o navegador poder falar com ela. */
@@ -76,6 +102,14 @@ if (!SUPABASE) {
 /** Junta as origens de um source list ignorando as que nao foram configuradas. */
 const origens = (...partes) => partes.filter(Boolean).join(" ");
 
+/**
+ * O `next dev` serve os modulos com source map por `eval()`, entao 'unsafe-eval'
+ * so pode sair do CSP de producao. `NODE_ENV` e "development" sob `next dev` e
+ * "production" sob `next build`/`next start` — o proprio Next o define, e nao
+ * ha como esta linha divergir do modo em que o servidor esta rodando.
+ */
+const DESENVOLVIMENTO = process.env.NODE_ENV === "development";
+
 const csp = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -89,7 +123,20 @@ const csp = [
   // googletagmanager.com: o gtag.js do GA4, que ScriptsAnalytics.tsx so injeta
   // com NEXT_PUBLIC_GA4_ID definida E consentimento aceito no banner — o CSP
   // precisa liberar a origem para o dia em que as duas condicoes valem.
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sdk.mercadopago.com https://www.mercadopago.com https://www.googletagmanager.com",
+  `script-src ${origens(
+    "'self'",
+    // Fica: o Next emite 34-44 <script> inline por pagina e nenhum nonce. Ver o
+    // bloco do topo — tirar isto e parar a hidratacao da loja inteira.
+    "'unsafe-inline'",
+    // Sai de producao (zero eval nos chunks); fica no dev pelo source map.
+    DESENVOLVIMENTO && "'unsafe-eval'",
+    "https://sdk.mercadopago.com",
+    "https://www.mercadopago.com",
+    "https://www.googletagmanager.com",
+  )}`,
+  // 'unsafe-inline' aqui NAO e o mesmo debate do script-src: o `next/image`
+  // escreve `style` inline nos <img> que ele gera, e o painel le token de cor
+  // em `style={{}}`. Ver o bloco do topo.
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   // O backend serve /uploads (imagem enviada pelo painel quando o Cloudinary
