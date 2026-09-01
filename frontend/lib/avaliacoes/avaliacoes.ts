@@ -216,6 +216,23 @@ export async function enviarAvaliacao(dados: NovaAvaliacao): Promise<void> {
  * As avaliações do próprio cliente, em qualquer status — é como a página do
  * pedido sabe quais cafés a pessoa JÁ avaliou.
  *
+ * POR QUE UMA RPC, E NÃO `.from("avaliacoes").eq("user_id", uid)` COMO ANTES
+ * A migração 0031 tirou `user_id` do GRANT de SELECT de `authenticated`: a
+ * coluna entregava, para qualquer token da instância COMPARTILHADA, o uuid de
+ * todo avaliador — o vínculo entre a pessoa e a compra. E privilégio de coluna
+ * vale para a consulta inteira, não só para a projeção: o `.eq("user_id", uid)`
+ * daqui passaria a responder 42501, e o `catch` abaixo transformaria isso em
+ * `[]` SEM ERRO — o formulário voltaria a aparecer para café já avaliado e o
+ * envio morreria num 23505. Falha silenciosa, que é o pior desfecho possível.
+ *
+ * `canastra.minhas_avaliacoes()` é SECURITY DEFINER e filtra por `auth.uid()`
+ * POR DENTRO. Ela não tem parâmetro, de propósito: uma versão que aceitasse um
+ * uid seria o mesmo vazamento por outra porta. E não devolve `user_id` — quem
+ * chama já sabe o próprio.
+ *
+ * A ORDENAÇÃO É DA FUNÇÃO (`ORDER BY criado_em DESC`), e por isso não há
+ * `.order()` aqui: sobre o retorno de uma RPC ele não viraria ORDER BY nenhum.
+ *
  * Sem sessão (ou com erro) devolve `[]` com aviso no console, e não lança:
  * o pior desfecho de uma lista vazia é um formulário a mais, cujo envio
  * duplicado o banco recusa com 23505 traduzido. Quebrar a página do pedido
@@ -224,14 +241,12 @@ export async function enviarAvaliacao(dados: NovaAvaliacao): Promise<void> {
 export async function minhasAvaliacoes(): Promise<MinhaAvaliacao[]> {
   const supabase = clienteNavegador();
   const { data } = await supabase.auth.getSession();
+  // A sessão continua sendo lida: sem ela a RPC responderia 42501 (o EXECUTE é
+  // só de `authenticated`), e essa ida ao servidor não tem por que acontecer.
   const uid = data.session?.user?.id;
   if (!uid) return [];
 
-  const resposta = await supabase
-    .from("avaliacoes")
-    .select("id, sku, nota, titulo, texto, status, criado_em")
-    .eq("user_id", uid)
-    .order("criado_em", { ascending: false });
+  const resposta = await supabase.rpc("minhas_avaliacoes");
 
   if (resposta.error) {
     console.warn(

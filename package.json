@@ -11,8 +11,7 @@
     "dev:api": "npm --prefix backend run dev",
     "dev:web": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
-    "test": "npm --prefix frontend run test",
-    "verifica": "node frontend/scripts/verifica-fluxo.mjs"
+    "test": "npm --prefix frontend run test"
   },
   "dependencies": {
     "express-rate-limit": "^8.5.2",

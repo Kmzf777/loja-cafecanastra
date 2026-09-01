@@ -355,3 +355,126 @@ test("na pratica: authenticated de fora da loja nao apaga o catalogo", async () 
   );
   assert.ok(rows[0].n > 0, "o catalogo deveria continuar de pe");
 });
+
+/* --------------------------------------------------------------------------
+ * `estado` e os DOIS leitores da view publica (0037)
+ * -------------------------------------------------------------------------- */
+
+const ARQUIVADO = "cccccccc-0000-0000-0000-0000000000a9";
+const RASCUNHO = "cccccccc-0000-0000-0000-0000000000a8";
+
+/** Os dois produtos que só existem para medir o recorte de `estado`. */
+async function semearEstados() {
+  await bd.pool.query(
+    `INSERT INTO canastra.produtos
+       (produto_id, nome, preco, quantidade, sku, estado)
+     VALUES
+       ($1, 'Canastra Aposentado', 39.90, 0, 'CAN-APO-250', 'arquivado'),
+       ($2, 'Canastra Em Estudo',  49.90, 3, 'CAN-EST-250', 'rascunho')
+     ON CONFLICT (produto_id) DO NOTHING`,
+    [ARQUIVADO, RASCUNHO],
+  );
+}
+
+test("a vitrine deixa de ver o produto ARQUIVADO", async () => {
+  // Sem este recorte, arquivar um café não o tira da loja: a view não tinha
+  // WHERE nenhum, e `estado` prometia mais do que entregava.
+  await semearEstados();
+
+  const nomes = await comoPapel(bd.pool, { papel: "anon" }, async (cliente) => {
+    const { rows } = await cliente.query(
+      "SELECT nome FROM canastra.produtos_publicos ORDER BY nome",
+    );
+    return rows.map((r) => r.nome);
+  });
+
+  assert.ok(!nomes.includes("Canastra Aposentado"), "arquivado não pode aparecer");
+  assert.ok(nomes.includes("Canastra Classico"), "o catálogo ativo continua de pé");
+
+  /**
+   * O RASCUNHO NÃO VAI PARA A LOJA — e a inversão é da 0038.
+   *
+   * A 0037 recortou por `<> 'arquivado'`, o que deixava 'rascunho' visível, e
+   * registrou no arquivo que trocar por `= 'ativo'` seria uma linha. Enquanto
+   * nada escrevia 'rascunho' os dois predicados eram o mesmo no-op; a tela de
+   * produto acaba com isso, e com o predicado antigo o rascunho iria para a
+   * loja NO PRIMEIRO SALVAMENTO — café sem foto, sem descrição e com preço
+   * provisório, publicado por quem achava que estava rascunhando.
+   *
+   * `= 'ativo'` é lista BRANCA, e é essa a defesa: um estado novo no CHECK
+   * amanhã nasce invisível. Com `<> 'arquivado'` ele nasceria PÚBLICO por
+   * omissão, e a falha seria por esquecimento — a que ninguém revisa.
+   */
+  assert.ok(
+    !nomes.includes("Canastra Em Estudo"),
+    "rascunho não pode aparecer na vitrine",
+  );
+});
+
+test("o SEGUNDO leitor continua resolvendo o SKU do produto arquivado", async () => {
+  // `AvaliarPedido.tsx` traduz `product_id` (congelado em `pedidos.itens`) para
+  // o SKU por onde a avaliação é gravada. Se ele lesse a view filtrada, arquivar
+  // um café apagaria em silêncio o formulário de avaliação de quem já o comprou
+  // — sem erro nenhum na tela. `pode_avaliar(sku)` não olha estado: quem
+  // recebeu, avalia.
+  await semearEstados();
+
+  const linhas = await comoPapel(
+    bd.pool,
+    { papel: "authenticated", sub: INTRUSO },
+    async (cliente) => {
+      const { rows } = await cliente.query(
+        "SELECT produto_id, sku FROM canastra.produtos_sku WHERE produto_id = $1",
+        [ARQUIVADO],
+      );
+      return rows;
+    },
+  );
+
+  assert.equal(linhas.length, 1);
+  assert.equal(linhas[0].sku, "CAN-APO-250");
+});
+
+test("`produtos_sku` mostra o SKU e mais nada — e `anon` não a alcança", async () => {
+  const { rows } = await bd.pool.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'canastra' AND table_name = 'produtos_sku'
+      ORDER BY column_name`,
+  );
+  assert.deepEqual(rows.map((r) => r.column_name), ["produto_id", "sku"]);
+
+  // Só quem tem conta abre a página do próprio pedido. `anon` não tem por que
+  // enumerar SKU de produto arquivado.
+  await assert.rejects(
+    () =>
+      comoPapel(bd.pool, { papel: "anon" }, (cliente) =>
+        cliente.query("SELECT produto_id FROM canastra.produtos_sku"),
+      ),
+    (erro) => {
+      assert.equal(erro.code, PERMISSAO_NEGADA);
+      return true;
+    },
+  );
+});
+
+test("`produtos_sku` é janela de LEITURA: escrita por ela é recusada", async () => {
+  // O mesmo furo que 0003 fechou em `produtos_publicos`: os ALTER DEFAULT
+  // PRIVILEGES de 0001 alcançam VIEWS, e uma view auto-atualizável nasce
+  // gravável por `authenticated`.
+  for (const sql of [
+    "INSERT INTO canastra.produtos_sku (produto_id, sku) VALUES (gen_random_uuid(), 'X')",
+    "UPDATE canastra.produtos_sku SET sku = 'X'",
+    "DELETE FROM canastra.produtos_sku",
+  ]) {
+    await assert.rejects(
+      () =>
+        comoPapel(bd.pool, { papel: "authenticated", sub: INTRUSO }, (cliente) =>
+          cliente.query(sql),
+        ),
+      (erro) => {
+        assert.equal(erro.code, PERMISSAO_NEGADA, sql);
+        return true;
+      },
+    );
+  }
+});

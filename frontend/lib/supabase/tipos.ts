@@ -394,53 +394,20 @@ export type Database = {
         ];
       };
 
-      /** 0005. `criada_em` — no feminino, ao contrário das outras tabelas. */
-      promocoes: {
-        Row: {
-          id: string;
-          titulo: string;
-          descricao: string | null;
-          tipo: string | null;
-          valor: number | null;
-          aplica_a: string | null;
-          categoria: string | null;
-          /** Sem FK para `produtos`: não há embed a partir daqui. */
-          produto_id: string | null;
-          inicio_em: string | null;
-          fim_em: string | null;
-          ativa: boolean;
-          criada_em: string;
-        };
-        Insert: {
-          id?: string;
-          titulo: string;
-          descricao?: string | null;
-          tipo?: string | null;
-          valor?: number | null;
-          aplica_a?: string | null;
-          categoria?: string | null;
-          produto_id?: string | null;
-          inicio_em?: string | null;
-          fim_em?: string | null;
-          ativa?: boolean;
-          criada_em?: string;
-        };
-        Update: {
-          id?: string;
-          titulo?: string;
-          descricao?: string | null;
-          tipo?: string | null;
-          valor?: number | null;
-          aplica_a?: string | null;
-          categoria?: string | null;
-          produto_id?: string | null;
-          inicio_em?: string | null;
-          fim_em?: string | null;
-          ativa?: boolean;
-          criada_em?: string;
-        };
-        Relationships: [];
-      };
+      /**
+       * `promocoes` SAIU DAQUI na 0032, e a ausência é a informação.
+       *
+       * A tabela que tinha este nome virou `promocoes_legado`, e o nome passou
+       * para o motor de promoção novo — outra forma inteira. Manter o bloco
+       * antigo seria exatamente o defeito que o cabeçalho deste arquivo nomeia:
+       * um tipo que afirma com confiança colunas que o banco não tem mais.
+       *
+       * E o bloco NOVO não entra, pela regra que este arquivo já segue: nenhum
+       * código do navegador consulta promoção — a vitrine recebe preço já
+       * promocional do Express, e o painel fala com o Express também. Tipar
+       * tabela sem leitor é manutenção sem leitor. Quando a primeira consulta
+       * direta existir, a tabela entra ANTES dela.
+       */
 
       /**
        * 0014. Avaliações de produto.
@@ -457,6 +424,15 @@ export type Database = {
       avaliacoes: {
         Row: {
           id: string;
+          /**
+           * FORA DO ALCANCE DO NAVEGADOR DESDE 0031, e o tipo não tem como
+           * dizer isso: `authenticated` perdeu o SELECT desta coluna (ela
+           * entregava o vínculo pessoa-compra a qualquer token da instância
+           * compartilhada). Continua no `Row` porque o serviço, pelo
+           * `service_role`, lê a tabela inteira — mas pedi-la daqui, na
+           * projeção OU no filtro, responde 42501. Para "as minhas", use
+           * `minhas_avaliacoes()`.
+           */
           user_id: string | null;
           nome_exibicao: string;
           sku: string;
@@ -556,6 +532,41 @@ export type Database = {
           comprimento: number;
           destacado_em: string;
           sku: string | null;
+          /**
+           * 0037. Entrou na projeção porque entrou no `WHERE` da view: com
+           * `security_invoker = true`, o Postgres confere privilégio de COLUNA
+           * sobre tudo que a consulta referencia, e sem `GRANT SELECT (estado)`
+           * a vitrine inteira responderia 42501. A invariante que
+           * `test/rls.test.js` afirma — "a lista pública de colunas de
+           * `produtos` é EXATAMENTE a projeção da view" — é o que mantém as
+           * duas listas juntas.
+           *
+           * A view já filtra `estado <> 'arquivado'`, então esta coluna nunca
+           * volta 'arquivado' por aqui.
+           */
+          estado: "rascunho" | "ativo" | "arquivado";
+        };
+        Relationships: [];
+      };
+
+      /**
+       * 0037. A janela estreita do SEGUNDO leitor da view pública.
+       *
+       * `produtos_publicos` passou a esconder o produto arquivado, e isso está
+       * certo para a vitrine e ERRADO para `AvaliarPedido.tsx`, que usa a mesma
+       * ponte `product_id -> sku` para montar o formulário de avaliação de quem
+       * JÁ COMPROU. Arquivar um café não pode apagar em silêncio o formulário
+       * de quem o recebeu — `canastra.pode_avaliar(sku)` não olha estado, e
+       * quem recebeu avalia.
+       *
+       * Duas colunas e só elas, e `TO authenticated` apenas: `anon` não tem por
+       * que enumerar SKU de produto arquivado. Somente leitura (0037 revoga
+       * INSERT/UPDATE/DELETE).
+       */
+      produtos_sku: {
+        Row: {
+          produto_id: string;
+          sku: string | null;
         };
         Relationships: [];
       };
@@ -603,6 +614,34 @@ export type Database = {
       eh_admin: {
         Args: Record<PropertyKey, never>;
         Returns: boolean;
+      };
+
+      /**
+       * 0031. As avaliações do `auth.uid()` da sessão, em qualquer status.
+       *
+       * SUBSTITUI `.from("avaliacoes").eq("user_id", uid)`, que deixou de ser
+       * possível quando 0031 tirou `user_id` do GRANT de `authenticated` —
+       * filtro também é leitura, então aquela consulta responde 42501 hoje.
+       *
+       * SEM ARGUMENTO, e isso é a segurança e não um detalhe de assinatura:
+       * uma versão que aceitasse um uid deixaria qualquer token da instância
+       * compartilhada varrer uuids e ler as avaliações de quem quisesse. O
+       * `Returns` também não traz `user_id` — quem chama já sabe o próprio.
+       *
+       * Já vem ordenada por `criado_em` decrescente (é `ORDER BY` de dentro da
+       * função): `.order()` sobre o retorno de uma RPC não faz nada.
+       */
+      minhas_avaliacoes: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          id: string;
+          sku: string;
+          nota: number;
+          titulo: string | null;
+          texto: string | null;
+          status: "pendente" | "aprovada" | "oculta";
+          criado_em: string;
+        }[];
       };
     };
 

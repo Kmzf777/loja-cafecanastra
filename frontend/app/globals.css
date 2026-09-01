@@ -1,16 +1,31 @@
 /* ---------------------------------------------------------------------------
-   Tailwind v4 — camadas importadas SEM o preflight global.
+   Tailwind v4 — o preflight é global, e voltou a ser na Onda 7.
 
-   Este arquivo e carregado por app/layout.tsx, que envolve TODA a aplicacao:
-   tanto a vitrine nova (app/(vitrine)) quanto o painel legado montado em
-   /dashboard (frontend/legacy, styled-components).
+   Este arquivo é carregado por app/layout.tsx, que envolve TODA a aplicação: a
+   vitrine (`app/[locale]/(vitrine)` e `app/(transacional)`) e o painel de
+   gestão em `/dashboard`.
 
-   Por isso o preflight (reset do Tailwind) NAO e importado aqui. Ele zeraria
-   font-size/font-weight de titulos, aparencia de button, sublinhado de <a>,
-   display de <img> etc. dentro do painel legado, que depende dos defaults do
-   navegador e so reseta `* { margin/padding/box-sizing/font-family }` no seu
-   proprio GlobalStyle. O reset equivalente e aplicado abaixo, escopado em
-   `.vitrine`, que e aplicado apenas pelo layout do grupo de rotas da vitrine.
+   POR QUE ELE PASSOU ANOS FORA DAQUI, que é a parte que interessa a quem
+   pensar em desfazer isto. Até a Onda 7 `/dashboard` era o painel legado em
+   styled-components: ele dependia dos defaults do navegador para título, botão
+   e link, e resetava só `* { margin/padding/box-sizing/font-family }` no seu
+   próprio `createGlobalStyle`. Um preflight global zerava font-size e
+   font-weight de <h1>, a aparência de <button> e o sublinhado de <a> lá dentro,
+   e o painel inteiro se desfazia. A saída foi manter o preflight fora e
+   reescrevê-lo à mão, escopado em `.vitrine` e depois também em `.painel` —
+   duas cópias do mesmo reset, mantidas em paralelo por duas ondas.
+
+   A Onda 7 apagou `frontend/legacy/` e com ele a razão. O preflight voltou a
+   ser global e as duas cópias saíram. O QUE FICOU nos dois escopos não é reset:
+   é a fonte, a entrelinha, a tinta, a superfície — e, no painel, os 14px de
+   densidade. Isso o preflight não dá e não deve dar.
+
+   ONDE O PREFLIGHT GLOBAL ALCANÇA O QUE ANTES NÃO ALCANÇAVA, porque foi por
+   isso que os dois escopos nunca cobriram a aplicação inteira: os PORTAIS. O
+   `Radix.Portal` (diálogos do painel, menus, popovers) monta em `document.body`,
+   FORA do <div class="painel"> — então o conteúdo do diálogo nunca recebeu o
+   reset escopado, e um <p> lá dentro carregava a margem de 1em do navegador
+   somada ao `mt-*` do Tailwind. Com o preflight global isso deixa de acontecer.
 
    Tokens de cor: Task 6. Fontes: Task 11.
 --------------------------------------------------------------------------- */
@@ -18,25 +33,28 @@
 @layer theme, base, components, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
-/* preflight NAO e importado globalmente — escopado abaixo em .vitrine */
 
 /* ---------------------------------------------------------------------------
    Scan restrito aos diretorios da vitrine.
 
-   `source(none)` desliga a deteccao automatica de conteudo. Sem ele, o Tailwind
-   varre a raiz do projeto e alcanca frontend/legacy, gerando utilitarios a
-   partir de texto solto dentro dos templates styled-components (`display: flex`
-   vira `.flex`, e assim por diante). Esses utilitarios nao afetam o painel hoje
-   — nenhum className literal do legado colide com um nome de utilitario — mas a
-   garantia expira no dia em que alguem escrever className="table" ou "border"
-   num componente legado: o elemento herdaria o estilo do Tailwind em silencio.
+   `source(none)` desliga a deteccao automatica de conteudo, e os `@source`
+   abaixo declaram à mão onde procurar classe.
 
-   Os @source abaixo declaram explicitamente onde a vitrine vive. `components/`
-   e `lib/` ainda nao existem (chegam no proximo plano); ficam declarados desde
-   ja para que as classes usadas la sejam geradas assim que os arquivos
-   aparecerem — do contrario a falha se manifestaria como componente sem estilo,
-   sem erro nenhum.
+   A RAZÃO ORIGINAL ERA O LEGADO e ela morreu na Onda 7: sem `source(none)`, o
+   Tailwind varria a raiz do projeto, alcançava `frontend/legacy` e gerava
+   utilitário a partir de texto solto dentro dos templates styled-components
+   (`display: flex` no meio de uma template string virava `.flex`). Nenhum
+   className literal do legado chegou a colidir com um nome de utilitário, mas a
+   garantia expirava no dia em que alguém escrevesse className="table" lá dentro.
+
+   FICA ASSIM MESMO, e a razão agora é outra: declaração explícita é
+   determinística. Os três `@source` abaixo são exatamente os diretórios de
+   código da aplicação, então trocar por detecção automática não geraria uma
+   classe a mais — só tornaria implícito o que hoje se lê em três linhas. Quem
+   quiser desfazer isto não está corrigindo nada; está escolhendo outro modo, e
+   deve medir o CSS gerado antes e depois.
 --------------------------------------------------------------------------- */
 @source "../app";
 @source "../components";
@@ -90,6 +108,19 @@
   /* — Semanticas — */
   --color-sucesso: #3F6B45;
   --color-alerta: #B87514;
+
+  /* O ocre da marca REPROVA como cor de TEXTO, e so ele: medido sobre
+     `--color-cal-puro` (#FBFAF7), `--color-alerta` da 3,60:1, abaixo dos 4,5:1
+     que a WCAG 1.4.3 pede para texto pequeno. Os outros quatro passam com
+     folga (sucesso 5,92 · barro 6,30 · vermelho 5,58 · fuligem 18,02).
+
+     A saida NAO e trocar o ocre — ele e cor de marca. E o mesmo par que
+     `--color-vermelho`/`--color-vermelho-esc` ja usa: o tom claro fica no
+     FILETE, onde a WCAG 1.4.11 exige so 3:1 e 3,60 passa; o tom escuro carrega
+     o TEXTO, com 4,87:1. Um selo de "pendente" aparece dezenas de vezes por
+     tela do painel, em 11px — e e exatamente o tamanho em que o contraste
+     deixa de ser detalhe. */
+  --color-alerta-esc: #9A620F;
   /* estetica.md §4.1: `--c-erro: var(--c-vermelho)`. Alias, nao cor nova. */
   --color-erro: var(--color-vermelho);
 
@@ -105,30 +136,26 @@
 
 @layer base {
   /* -------------------------------------------------------------------------
-     <html> e <body> ficam FORA de `.vitrine *` — o contêiner .vitrine e um
-     <div> filho do body (app/(vitrine)/layout.tsx). Sem as duas regras abaixo,
-     a vitrine herdava `margin: 8px` e `font-family: "Times New Roman"` dos
-     defaults do navegador: o heroi full-bleed de 88vh (estetica.md §7.1) nascia
-     com 8px de calha e barra de rolagem horizontal, e todo texto saia serifado.
+     A VITRINE — o que sobra depois que o preflight virou global.
 
-     `:has()` e o que mantem isso longe do painel legado. Uma regra `body { }`
-     seca alcancaria /dashboard; `body:has(.vitrine)` so casa quando o layout do
-     grupo (vitrine) montou o contêiner, o que nunca acontece sob /dashboard.
-     (Mesmo se o seletor degradasse, o painel ja aplica `* { margin: 0 }` no seu
-     proprio createGlobalStyle — mas nao dependemos disso: a prova e o seletor.)
+     Sobrou a VOZ, não o reset: a fonte da interface (estetica.md §4.2, corpo e
+     UI em Archivo), a entrelinha, a tinta e a superfície base (Cal). O reset em
+     si — box-sizing, margem, padding, borda, <ul> sem marcador, <h1> sem
+     tamanho próprio, <a> sem sublinhado, <img> em bloco, controle de formulário
+     herdando a fonte — saiu daqui na Onda 7, porque o preflight faz tudo isso
+     agora, para a aplicação inteira e não só dentro deste contêiner.
+
+     A REGRA FICA NO <body> E NÃO SÓ NO `.vitrine` porque um portal montado em
+     `document.body` nasce FORA do contêiner e cairia na fonte serifada do
+     navegador. Com a regra no body, `.vitrine` herda e o portal também.
+
+     `:has()` era o que mantinha isto longe do painel legado, e continua sendo o
+     que o mantém longe do `.painel`, que tem entrelinha e densidade próprias
+     logo abaixo. Sem o seletor, as duas regras de <body> se sobreporiam e quem
+     venceria seria a escrita por último — a fonte do painel passaria a depender
+     da ordem dos blocos neste arquivo.
   ------------------------------------------------------------------------- */
-  html:has(.vitrine) {
-    -webkit-text-size-adjust: 100%;
-    text-size-adjust: 100%;
-  }
-
-  /* A voz da interface (estetica.md §4.2: corpo e UI em Archivo), a entrelinha
-     e a superficie base (Cal). Ficam no <body>, e nao so no `.vitrine`, porque
-     um portal (`createPortal(…, document.body)` — drawer da sacola, modal de
-     assinatura) monta FORA do contêiner e cairia na fonte serifada do
-     navegador. Com a regra no body, `.vitrine` herda e o portal tambem. */
   body:has(.vitrine) {
-    margin: 0;
     font-family: var(--font-ui);
     line-height: 1.5;
     color: var(--color-fuligem);
@@ -136,75 +163,86 @@
   }
 
   /* Repeticao deliberada, com valores identicos: se `:has()` faltar no
-     navegador, a vitrine ainda recebe fonte, entrelinha e tinta corretas —
-     perde-se so a margem zero do body. Nao ha divergencia possivel porque os
-     valores sao os mesmos tokens. */
+     navegador, a vitrine ainda recebe fonte, entrelinha e tinta corretas. Nao
+     ha divergencia possivel porque os valores sao os mesmos tokens. */
   .vitrine {
     font-family: var(--font-ui);
     line-height: 1.5;
     color: var(--color-fuligem);
   }
 
-  .vitrine *,
-  .vitrine *::before,
-  .vitrine *::after {
-    box-sizing: border-box;
-    border: 0 solid;
-    margin: 0;
-    padding: 0;
-  }
-
-  .vitrine img,
-  .vitrine svg,
-  .vitrine video {
-    display: block;
-    max-width: 100%;
-    height: auto;
-  }
-
-  /* O preflight do Tailwind zera isto; como ele nao e importado globalmente,
-     precisa constar aqui. Sem a regra, toda <ul> de navegacao e de rodape
-     renderiza com bolinha de marcador. */
-  .vitrine ul,
-  .vitrine ol {
-    list-style: none;
-  }
-
-  .vitrine h1,
-  .vitrine h2,
-  .vitrine h3,
-  .vitrine h4 {
-    font-size: inherit;
-    font-weight: inherit;
-  }
-
-  .vitrine a {
-    color: inherit;
-    text-decoration: inherit;
-  }
-
-  /* Sem isto, os controles de formulario (newsletter, checkout) caem na fonte
-     do sistema em vez da Archivo — o navegador nao herda `font` em
-     input/textarea/select/button. `color: inherit` pelo mesmo motivo. */
-  .vitrine input,
-  .vitrine textarea,
-  .vitrine select,
+  /* A ÚNICA LINHA DE RESET QUE SOBREVIVEU, e ela sobrevive porque o preflight
+     NÃO a tem: o Tailwind v4 deixou de pôr `cursor: pointer` em <button>. Sem
+     esta regra todo botão da loja passa a exibir a setinha em vez da mãozinha —
+     o que não quebra nada, não aparece em teste nenhum, e faz a loja parecer
+     menos clicável exatamente nos alvos que precisam parecer mais. */
   .vitrine button {
-    font: inherit;
-    color: inherit;
-    letter-spacing: inherit;
-  }
-
-  .vitrine button {
-    background: none;
     cursor: pointer;
   }
 
-  /* O navegador nao quebra palavra dentro de <textarea> herdando isto, mas
-     resize horizontal estoura grid — trava so o eixo vertical. */
-  .vitrine textarea {
-    resize: vertical;
+  /* -------------------------------------------------------------------------
+     O PAINEL — o segundo escopo, e a Onda 7 é onde ele encolheu.
+
+     Este bloco já foi a segunda cópia do reset, escrita quando o preflight não
+     podia ser global porque o painel legado se desfazia com ele. Apagado o
+     legado, o reset saiu daqui e ficou o que nunca foi reset.
+
+     A DIFERENÇA PARA `.vitrine`, e ela é deliberada: aqui o padrão é DENSO.
+     `font-size: 14px` na raiz do painel, contra os 16px da loja. Painel
+     administrativo é lido de perto, com muita linha na tela, por quem passa o
+     dia nele — R22 da pesquisa: "densidade alta e cor escassa; mas comprima o
+     PADDING da célula, nunca o alvo de toque".
+
+     O QUE ISTO NÃO ALCANÇA, e é bom saber antes de sair procurando: o
+     `Radix.Portal` dos diálogos monta em `document.body`, fora deste contêiner.
+     Ele herda de `body:has(.painel)` a fonte e a tinta, mas NÃO os 14px — um
+     diálogo do painel desenha em 16px. É assim desde que o painel novo nasceu;
+     fica escrito porque só se percebe medindo, não olhando.
+  ------------------------------------------------------------------------- */
+  body:has(.painel) {
+    font-family: var(--font-ui);
+    line-height: 1.45;
+    color: var(--color-fuligem);
+    background-color: var(--color-cal);
   }
+
+  .painel {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--color-fuligem);
+    background-color: var(--color-cal);
+    min-height: 100vh;
+  }
+
+  /* A TINTA PADRÃO DO FILETE, e é só isto que sobrou do reset do painel.
+
+     O preflight zera a borda com `border: 0 solid` e SEM cor, o que faz o
+     navegador cair em `currentColor` — a tinta do texto, quase preta. No painel
+     o filete é `fuligem-20`, um cinza quente: é a linha da tabela, a moldura do
+     campo, a divisa entre seções.
+
+     Hoje NENHUM elemento depende deste padrão, e isso foi medido: toda classe
+     de largura de borda do painel (`border`, `border-t`, `border-l-2`) vem
+     acompanhada da cor, seja no mesmo literal, seja pela variante. A regra fica
+     mesmo assim, porque é ela que define o que `border` SEM cor significa neste
+     escopo. Sem ela, o primeiro `border-t` escrito distraidamente desenha um
+     traço preto no meio da tabela — e ninguém vai vir procurar aqui. */
+  .painel *,
+  .painel *::before,
+  .painel *::after {
+    border-color: var(--color-fuligem-20);
+  }
+
+  /* Todo NÚMERO em monoespaçada com numeral tabular — R23. É o que faz comparar
+     valores numa coluna ser comparar POSIÇÃO, e não comprimento de string. */
+  .painel [data-dado],
+  .painel td[data-dado],
+  .painel .dado {
+    font-family: var(--font-dado);
+    font-variant-numeric: tabular-nums;
+  }
+
 }
 
 @layer components {
@@ -284,10 +322,11 @@
    do <CardCafe>, cada `translate` de hover e cada `scroll-behavior: smooth`
    cobra dessa pessoa.
 
-   FORA DO `.vitrine` DE PROPOSITO — e a unica regra deste arquivo que alcanca
-   /dashboard tambem. O painel legado tem animacao propria em
-   styled-components, e a preferencia do sistema vale para o site inteiro:
-   respeitar so metade seria nao respeitar.
+   FORA DO `.vitrine` DE PROPOSITO — a preferencia do sistema vale para o site
+   inteiro, e respeitar so metade seria nao respeitar. Quando este bloco foi
+   escrito ele era a UNICA regra do arquivo que alcancava /dashboard, porque
+   tudo o mais estava escopado; desde a Onda 7 o preflight tambem e global e
+   este bloco deixou de ser a excecao — mas o `*` continua sendo deliberado.
 
    `!important` porque isto precisa vencer qualquer utilitario do Tailwind e
    qualquer estilo inline; e o unico lugar do arquivo em que ele se justifica.

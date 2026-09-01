@@ -2,10 +2,7 @@
 
 import Image from "next/image";
 import type { Kit } from "@/lib/catalogo/tipos";
-import {
-  formatarPreco,
-  precoParaLeitor,
-} from "@/lib/catalogo/repositorio";
+import { precoExibido } from "@/lib/catalogo/promocao";
 import { COR_DA_LINHA, rotuloDaEmbalagem } from "@/lib/catalogo/rotulos";
 import {
   dimensaoDaArte,
@@ -13,6 +10,7 @@ import {
   traduzirKit,
 } from "@/lib/catalogo/produtos";
 import { Botao } from "@/components/ui/Botao";
+import { Preco } from "@/components/ui/Preco";
 import { useAdicionarNaSacola } from "@/lib/sacola/usar-adicionar";
 import { dicionario } from "@/lib/i18n/dicionario";
 import { LOCALE_PADRAO, type Locale } from "@/lib/i18n/tipos";
@@ -114,6 +112,9 @@ export function CardKit({
     // Gravado, e portanto em português — ver `nomeDoKitNaSacola`.
     rotuloGravado: kitCru.rotuloEmbalagem,
     precoCentavos: kit.preco,
+    ...(kit.precoPromocional === undefined
+      ? {}
+      : { precoPromocionalCentavos: kit.precoPromocional }),
     estoque: kit.estoque,
     imagem: kit.imagem,
   });
@@ -158,12 +159,11 @@ export function CardKit({
                 {d.comum.esgotado}
               </span>
             ) : (
-              <span
-                className="font-dado text-[17px]"
-                aria-label={precoParaLeitor(kit.preco)}
-              >
-                {formatarPreco(kit.preco)}
-              </span>
+              <Preco
+                preco={precoExibido(kit)}
+                tamanho="compacto"
+                locale={locale}
+              />
             )}
 
             <Botao

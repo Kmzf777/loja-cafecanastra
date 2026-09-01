@@ -52,7 +52,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 
 -- ----------------------------------------------------------------------------
--- 1. Estrutura: as 16 migrações, na ordem do runner
+-- 1. Estrutura: as 24 migrações, na ordem do runner
 -- ----------------------------------------------------------------------------
 
 -- Identico ao BOOTSTRAP de db/migrar.js — inclusive os REVOKE em
@@ -3413,6 +3413,3236 @@ $redigir$;
 -- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
 -- primeiro CREATE de objeto ja existente.
 INSERT INTO canastra.migracoes (versao) VALUES ('0016_redacao_ampliada')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0030_vitrine
+-- ----------------------------------------------------------------------------
+
+-- O conteudo editavel da vitrine: o heroi da home e a barra de aviso.
+--
+-- POR QUE ISTO EXISTE. `config_loja` ja tinha `banner_desktop`, `banner_mobile`
+-- e `barra_de_aviso`, o painel legado ja os editava — e a vitrine nova NUNCA
+-- LEU nenhum dos tres. O heroi da home e `<Image src="/imagem-banner.jpg">`,
+-- arquivo estatico, com kicker/titulo/texto numa tabela chumbada dentro do
+-- proprio `page.tsx`. Eram tres campos write-only: o gestor salvava e nada
+-- acontecia em lugar nenhum.
+--
+-- POR QUE DUAS TABELAS E NAO COLUNAS EM `config_loja`. A loja fala tres
+-- idiomas (`app/[locale]`), e o texto do heroi precisa existir nos tres. Em
+-- coluna isso seriam quinze colunas novas (cinco campos x tres idiomas) que
+-- viram trinta no dia em que entrar um quarto idioma. A imagem, ao contrario,
+-- e UMA para os tres — pedir tres uploads da mesma foto e trabalho inventado.
+-- Dai a divisao: imagem numa linha unica, texto numa linha por (chave, idioma).
+--
+-- POR QUE 0030 E NAO 0017, que seria o proximo numero livre nesta pasta. O 17
+-- esta TRIPLAMENTE disputado fora daqui: a worktree `melhor-envio` tem um
+-- `0017_melhor_envio.sql` e a `whatsapp-bot` vai de `0017` a `0021`. O runner
+-- (`db/migrar.js`) ABORTA em numero repetido — e a chave de controle em
+-- `canastra.migracoes` e o NOME COMPLETO do arquivo, entao uma migracao ja
+-- aplicada nao pode ser renomeada depois sem rodar de novo. Deixar a faixa
+-- 0017-0029 livre custa nada e evita um merge que so falha no deploy.
+--
+-- `config_loja` NAO E TOCADA AQUI, de proposito. As duas convivem nesta onda:
+-- migrar `banner_desktop`/`banner_mobile` para ca e depois remove-los e decisao
+-- de outra tarefa, e faze-la junto misturaria "criar o lugar novo" com "esvaziar
+-- o velho" numa migracao so.
+
+CREATE TABLE canastra.vitrine_heroi (
+  id               integer PRIMARY KEY DEFAULT 1
+                     CONSTRAINT vitrine_heroi_linha_unica CHECK (id = 1),
+  imagem_desktop   text,
+  imagem_mobile    text,
+  atualizado_em    timestamptz NOT NULL DEFAULT now()
+);
+
+-- O MESMO GUARDA DUPLO de `config_loja` (ver 0005): um INSERT com id explicito
+-- diferente de 1 bate no CHECK (23514); um INSERT sem citar `id` pega o DEFAULT,
+-- passa pelo CHECK e bate na chave primaria (23505). Quem tratar erro no painel
+-- precisa esperar os dois SQLSTATEs.
+
+CREATE TABLE canastra.vitrine_texto (
+  chave         text NOT NULL
+                  CONSTRAINT vitrine_texto_chave_valida
+                    CHECK (chave IN ('heroi', 'barra_aviso')),
+  -- 'pt', 'en', 'es' — os mesmos tres de `app/[locale]`. Lista fechada por
+  -- CHECK e nao texto livre: um 'pt-BR' gravado por engano nunca seria lido
+  -- pela vitrine, que procura por 'pt', e o gestor veria o texto sumir sem
+  -- nenhuma mensagem de erro.
+  locale        text NOT NULL
+                  CONSTRAINT vitrine_texto_locale_valido
+                    CHECK (locale IN ('pt', 'en', 'es')),
+  kicker        text,
+  titulo        text,
+  texto         text,
+  rotulo_botao  text,
+  destino       text,
+  imagem_alt    text,
+  atualizado_em timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (chave, locale)
+);
+
+-- TODA COLUNA DE CONTEUDO E NULAVEL, e isso e a regra de seguranca do §3.6 da
+-- spec escrita no schema: o valor de hoje, chumbado em `page.tsx`, vira o
+-- FALLBACK. Linha ausente, coluna nula ou string vazia => a home aparece como
+-- aparece hoje. Um NOT NULL aqui obrigaria o gestor a preencher os seis campos
+-- dos tres idiomas antes de trocar uma foto, e um formulario salvo pela metade
+-- apagaria o topo da loja.
+
+-- A vitrine mostra heroi e barra de aviso ANTES de qualquer login, entao as
+-- duas levam GRANT proprio — mesma regra de 0001 que `promocoes` e
+-- `config_loja` ja seguem. (0001 inverteu o default de proposito: tabela nova
+-- NAO nasce legivel por `anon`, para que o esquecimento vire 404 barulhento em
+-- vez de vazamento calado. Quem e publico de verdade diz isso aqui.)
+GRANT SELECT ON canastra.vitrine_heroi TO anon;
+GRANT SELECT ON canastra.vitrine_texto TO anon;
+
+ALTER TABLE canastra.vitrine_heroi ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.vitrine_texto ENABLE ROW LEVEL SECURITY;
+
+-- Leitura publica, escrita so de admin — `canastra.eh_admin()` (0006:120) le
+-- `canastra.admins`, e NUNCA um claim do JWT: a instancia do Supabase e
+-- compartilhada, e um token de projeto vizinho carrega o que quiser em
+-- `user_metadata`.
+--
+-- O `TO anon, authenticated` NAO E ENFEITE, e o plano desta onda o trazia
+-- implicito. Sem clausula TO, a politica nasce `TO public` — e `public` alcanca
+-- tambem o DONO das tabelas, que e exatamente o papel de que `eh_cliente()` e
+-- `eh_admin()` dependem para ler `clientes` e `admins` por baixo da RLS. Manter
+-- toda politica presa aos dois papeis do navegador e o que mantem aquele
+-- caminho livre, e `test/rls.test.js` afirma isso como invariante sobre
+-- `pg_policies` (a lista `semPapel`), nao como lista de nomes.
+CREATE POLICY vitrine_heroi_publico_le ON canastra.vitrine_heroi
+  FOR SELECT TO anon, authenticated
+  USING (true);
+CREATE POLICY vitrine_texto_publico_le ON canastra.vitrine_texto
+  FOR SELECT TO anon, authenticated
+  USING (true);
+
+-- `USING (true)` SO EM LEITURA, e so aqui porque estas duas relacoes sao
+-- publicas de verdade — o heroi e a primeira coisa que um visitante sem conta
+-- ve. Escrita com `true` foi o erro que 0003 nomeou e que um revisor demonstrou
+-- funcionando contra `produto_opcoes`; a mesma invariante de `pg_policies` que
+-- vigia o TO acima reprova qualquer `true` fora de um SELECT de relacao publica.
+CREATE POLICY vitrine_heroi_admin_escreve ON canastra.vitrine_heroi
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+CREATE POLICY vitrine_texto_admin_escreve ON canastra.vitrine_texto
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+-- REDUNDANTE HOJE, ESCRITO ASSIM MESMO. O `ALTER DEFAULT PRIVILEGES` de 0001 ja
+-- da INSERT/UPDATE/DELETE a `authenticated` em toda tabela nova de `canastra`,
+-- entao estas duas linhas nao mudam nada agora. Elas existem porque aquele
+-- default so alcanca objeto criado pelo MESMO papel que rodou o ALTER: uma
+-- destas tabelas recriada por outro caminho (psql com outro usuario, Supabase
+-- Studio, restore parcial) nasceria SEM privilegio de escrita, e o painel do
+-- admin passaria a levar 42501 com toda a RLS correta. GRANT decide TABELA,
+-- politica decide LINHA — as duas somam, e nenhuma substitui a outra.
+GRANT INSERT, UPDATE, DELETE ON canastra.vitrine_heroi TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON canastra.vitrine_texto TO authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0030_vitrine')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0031_correcoes_de_privilegio
+-- ----------------------------------------------------------------------------
+
+-- Tres buracos de privilegio, achados pela pesquisa que antecede a reescrita do
+-- painel (docs/pesquisa/2026-08-26-riscos-da-reescrita.md, secao 3).
+--
+-- O QUE OS TRES TEM EM COMUM, e e por isso que eles cabem numa migracao so:
+-- nenhum deles e um erro de POLITICA. As politicas de 0006 e de 0014 dizem a
+-- coisa certa sobre LINHA — o dono mexe na propria, o admin modera, o publico
+-- le o que e publico. O que esta errado nos tres e o PRIVILEGIO por baixo, que
+-- e mais largo do que a politica precisa. E a regra que 0006:282 ja tinha
+-- escrito: GRANT decide TABELA e COLUNA, RLS decide LINHA — onde o recorte e de
+-- coluna, ou de operacao inteira, ele nao tem como morar numa politica.
+--
+-- POR QUE 0031 E NAO 0017. A faixa 0017-0029 continua reservada pelo mesmo
+-- motivo que 0030 registrou: `0017` esta triplamente disputado fora daqui (a
+-- worktree `melhor-envio` tem um `0017_melhor_envio.sql`, a `whatsapp-bot` vai
+-- de `0017` a `0021`), o runner (`db/migrar.js`) ABORTA em numero repetido, e a
+-- chave de controle em `canastra.migracoes` e o NOME COMPLETO do arquivo —
+-- migracao ja aplicada nao pode ser renomeada sem rodar de novo.
+--
+-- `service_role` NAO E TOCADO em lugar nenhum deste arquivo. Todo REVOKE aqui
+-- nomeia `authenticated`, que e o papel do NAVEGADOR. O que o servico Node faz
+-- pela `DATABASE_URL` (que conecta como dono do banco) e o que ele faz pelo
+-- `service_role` seguem exatamente como estavam — e e disso que dependem os
+-- consertos abaixo para nao virarem regressao.
+
+/* ------------------------------------------------------------------------- *
+ * 1. `clientes.cpf`: o UNIQUE que virou oraculo de enumeracao
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O PROBLEMA NAO E O CPF DA ANA, E O DE TODO MUNDO.
+ *
+ * `clientes_dono_atualiza` (0006:367) autoriza o cliente a dar UPDATE na
+ * PROPRIA linha — e politica de RLS nao restringe coluna, entao "a propria
+ * linha" inclui `cpf`. Junte a isso o `UNIQUE (cpf)` de 0002 e o endpoint passa
+ * a responder duas coisas distinguiveis:
+ *
+ *   UPDATE ... SET cpf = <numero livre>  ->  sucesso
+ *   UPDATE ... SET cpf = <numero alheio> ->  23505, unique_violation
+ *
+ * Isto e, "este CPF tem conta nesta loja?" respondido um por vez, sem limite,
+ * por qualquer cliente, usando so a propria linha. Nenhum dado de terceiro
+ * atravessa — o que vaza e a EXISTENCIA, que aqui e o dado. Numa loja, saber
+ * que um CPF especifico e cliente ja e informacao vendavel; num vazamento de
+ * base alheia, e o que transforma uma lista de CPFs em uma lista de clientes
+ * desta loja.
+ *
+ * O CONSERTO E DE COLUNA PORQUE O PROBLEMA E DE COLUNA. A linha continua sendo
+ * do dono (a politica nao muda); o que muda e o que "atualizar" quer dizer.
+ * `nome` e `telefone` sao os dois campos que 0006:326 nomeou ao decidir manter o
+ * UPDATE de `clientes` de pe ("porque o cliente corrige mesmo o proprio
+ * telefone"), e sao os dois que sobram aqui.
+ *
+ * QUEM CONTINUA ESCREVENDO `cpf`, e sao os dois caminhos que ja o tratavam:
+ *
+ *   · `canastra.garantir_cliente` (0008), SECURITY DEFINER, no cadastro. Roda
+ *     como o DONO das tabelas, entao este REVOKE nao a alcanca. Ela normaliza o
+ *     numero (`nullif(btrim(...), '')`) e traduz o 23505 numa frase de loja em
+ *     vez de devolver "clientes_cpf_key".
+ *   · o servico Node (`src/utils/cpf.js`), no checkout e na adesao do Clube.
+ *     Ele conecta pela `DATABASE_URL`, como dono, e tambem passa por cima.
+ *
+ * O QUE ESTE REVOKE **NAO** FECHA, dito aqui para ninguem ler o paragrafo acima
+ * como "acabou": `garantir_cliente` continua distinguindo CPF ocupado de CPF
+ * livre — e o codigo dela e o mesmo 23505. A diferenca e o CUSTO, e ele muda de
+ * ordem de grandeza: la o INSERT tem `ON CONFLICT (user_id) DO NOTHING`, entao
+ * quem JA e cliente nao chega a tocar o indice de CPF; sondar exige uma conta
+ * nova, com e-mail confirmado, POR TENTATIVA. Fechar tambem aquela porta e
+ * decisao de outra tarefa (ela mexe na mensagem que o cadastro mostra), e o
+ * numero de tentativas por hora ali e assunto de rate limit, nao de DDL.
+ *
+ * Medido em test/rls.test.js: com um CPF que existe na loja, a recusa passa a
+ * ser 42501 (privilegio, ANTES do indice) e nao mais 23505 (unicidade, DEPOIS
+ * de o indice ter respondido). A troca de codigo E o conserto: 42501 e uma
+ * porta fechada, 23505 e uma porta que conta quem esta do outro lado.
+ */
+REVOKE UPDATE ON canastra.clientes FROM authenticated;
+GRANT UPDATE (nome, telefone) ON canastra.clientes TO authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * 2. `config_loja`: o DELETE que leva o token do Bling junto
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A OPERACAO QUE ESCAPOU DO RECORTE DE 0012.
+ *
+ * 0012 guardou o `bling_refresh_token` na linha unica de `config_loja` e o
+ * protegeu com privilegio de COLUNA: `REVOKE SELECT/INSERT/UPDATE` e a lista
+ * explicita de volta, todas as colunas MENOS o token. Nem a admin le, nem a
+ * admin escreve o token pelo PostgREST — so o servico Node, que conecta como
+ * dono.
+ *
+ * O DELETE ficou de fora daquele recorte, porque naquele momento ele nao era
+ * uma forma de ler nem de escrever coluna nenhuma. E nao e mesmo: e a unica
+ * operacao que LEVA a coluna sem nunca a ter tocado. `DELETE FROM config_loja`
+ * apaga o token junto com o resto da configuracao, e o refresh token do Bling e
+ * ROTATIVO (0012:75) — nao existe copia em lugar nenhum, e recuperar exige
+ * refazer o OAuth a mao. A politica `config_loja_admin_escreve` (0006:438) e
+ * `FOR ALL`, entao ela autoriza a linha; o privilegio de DELETE veio do GRANT
+ * de tabela de 0006:271. Duas camadas concordando com um comando que ninguem
+ * precisa dar.
+ *
+ * NINGUEM PRECISA DELE, e isso e verificavel e nao opinativo: a tabela e de UMA
+ * linha (o CHECK de 0005), o caminho de mudar configuracao e UPDATE, e os dois
+ * modulos do servico que escrevem ali (`src/repositories/configRepository.js` e
+ * `src/services/blingClient.js`) fazem `INSERT ... ON CONFLICT (id) DO NOTHING`
+ * e UPDATE — nenhum DELETE em `canastra.config_loja` existe no repositorio.
+ *
+ * POR QUE E REVOKE E NAO UMA POLITICA, pela regra do cabecalho: uma politica de
+ * DELETE ausente ja recusaria, mas ausencia de politica e propriedade que um
+ * `CREATE POLICY ... FOR ALL` distraido apaga sem querer — e `FOR ALL` e
+ * exatamente o formato que esta tabela ja usa. O privilegio nao se perde assim.
+ * E o mesmo argumento que 0006:301 usou para `clientes` e `pedidos`.
+ *
+ * `INSERT` NAO ENTRA NESTE REVOKE, e a distincao e proposital: o DELETE tira
+ * algo que nao volta, o INSERT nao tira nada — o CHECK `id = 1` de 0005 ja
+ * impede uma segunda linha, e um INSERT contra a linha existente bate na chave
+ * primaria. Ele hoje nao tem chamador pelo navegador (quem cria a linha e o
+ * servico, com `ON CONFLICT (id) DO NOTHING`, conectado como dono), entao
+ * revoga-lo tambem seria defensavel — mas e uma decisao de outra tarefa, e
+ * misturar "fechar um caminho destrutivo" com "podar privilegio sem uso" numa
+ * migracao so tira a clareza do diff que fecha o buraco.
+ */
+REVOKE DELETE ON canastra.config_loja FROM authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * 3. `avaliacoes.user_id`: o vinculo pessoa-compra aberto para a instancia
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O QUE ESTAVA ABERTO. 0014:234 deu `GRANT SELECT` de TABELA a `authenticated`
+ * — a tabela inteira, `user_id` incluso — e a politica
+ * `avaliacoes_aprovadas_publicas` mostra toda avaliacao aprovada a qualquer
+ * `authenticated`. Numa instancia compartilhada, "qualquer authenticated" quer
+ * dizer tambem um token emitido para OUTRO projeto da VPS: ele lia, de uma vez,
+ * o uuid de todos os avaliadores da loja.
+ *
+ * E O UUID E O DADO. Ele e a MESMA chave de `auth.users` da instancia inteira,
+ * entao ele liga a avaliacao ("comprei este cafe, recebi em agosto") a qualquer
+ * outra tabela de qualquer outro projeto que guarde o mesmo uuid. O texto da
+ * avaliacao ja e publico de proposito; o vinculo com a PESSOA nao era para ser.
+ *
+ * O RECORTE E O MESMO QUE `anon` JA TINHA (0014:232), mais `moderado_em`. Nao e
+ * arbitrario: sao exatamente as nove colunas que a tela de moderacao do painel
+ * pede (`AvaliacoesManager.jsx`, constante `COLUNAS`), verificadas uma a uma —
+ * ela nao le `user_id` em lugar nenhum, e modera por `id`
+ * (`update(...).in("id", ids)`). O admin autentica como `authenticated` como
+ * todo mundo, entao o GRANT dele e este mesmo.
+ *
+ * O QUE ISTO QUEBROU, E POR QUE A FUNCAO ABAIXO EXISTE. Privilegio de coluna
+ * vale para a consulta INTEIRA, nao so para a projecao: `WHERE user_id = ...`
+ * exige SELECT em `user_id` do mesmo jeito que `SELECT user_id` exigiria. E a
+ * vitrine tinha exatamente essa consulta — `minhasAvaliacoes()`, em
+ * `frontend/lib/avaliacoes/avaliacoes.ts`, fazia `.eq("user_id", uid)` para
+ * saber quais cafes a pessoa JA avaliou. Medido: depois do REVOKE ela responde
+ * 42501, e o modo de falha daquele modulo e devolver `[]` com um `console.warn`
+ * — ou seja, a pagina do pedido voltaria a oferecer formulario para cafe ja
+ * avaliado, em silencio, e o envio morreria em 23505.
+ *
+ * O MESMO VALE PARA ESCRITA, e isto morde o painel: um
+ * `UPDATE avaliacoes SET status = ... WHERE user_id = ...` passa a responder
+ * 42501 ATE para o admin, porque o `user_id` do WHERE e leitura. A tela real ja
+ * modera por `id` (`update(...).in("id", ids)`), entao nada quebrou hoje — mas
+ * quem escrever consulta nova de moderacao tem de chavear por `id`, nunca por
+ * autor. Esta frase existe porque o sintoma (42501 numa tela de admin que
+ * "sempre funcionou") manda procurar o erro na politica, e o erro nao esta la.
+ *
+ * NAO DA PARA RESOLVER ISSO COM POLITICA, e vale escrever por que para ninguem
+ * tentar: politica corta LINHA, GRANT corta COLUNA, e o que se queria aqui era
+ * "esta coluna, so nas linhas que sao suas" — um corte que o Postgres nao faz
+ * em nenhuma das duas camadas. Por isso a pergunta muda de forma: em vez de o
+ * navegador FILTRAR por `user_id`, ele PERGUNTA "quais sao as minhas", e quem
+ * responde e uma funcao que ja sabe quem esta perguntando.
+ */
+REVOKE SELECT ON canastra.avaliacoes FROM authenticated;
+
+GRANT SELECT (id, sku, nota, titulo, texto, nome_exibicao, status, criado_em,
+              moderado_em)
+  ON canastra.avaliacoes TO authenticated;
+
+/**
+ * "Quais avaliacoes sao minhas?" — a substituta do `.eq("user_id", uid)`.
+ *
+ * SECURITY DEFINER, e aqui e PRIVILEGIO MESMO (o caso de 0008, nao o de
+ * 0006/0014): ela roda como o dono justamente para poder ler a coluna que o
+ * REVOKE acima acabou de tirar de quem chama. `user_id` entra no WHERE e NAO
+ * na projecao — o chamador recebe as proprias avaliacoes sem receber de volta o
+ * proprio uuid, que ele ja tem, e sem que a funcao vire um jeito indireto de
+ * ler a coluna.
+ *
+ * SEM ARGUMENTO, pelo motivo de `eh_admin()` em 0006:96: uma
+ * `minhas_avaliacoes(uid uuid)` executavel por `authenticated` seria o mesmo
+ * vazamento por outra porta — qualquer token da instancia varreria uuids e leria
+ * as avaliacoes de quem quisesse. Lendo so `auth.uid()`, ela nao responde nada
+ * sobre terceiros. Este e o ponto do arquivo inteiro e nao pode ser "melhorado"
+ * depois por conveniencia de tela.
+ *
+ * `auth.uid()` NULO (sessao `anon`, ou claim vazio) casa `user_id = NULL`, que e
+ * NULL e nunca TRUE: zero linhas, sem erro. E o desfecho certo — e o mesmo que a
+ * pessoa sem avaliacao nenhuma recebe.
+ *
+ * `canastra.eh_cliente()` NA FRENTE e a Regra 2 de 0006. Aqui ela e quase
+ * redundante (quem nao e cliente nunca conseguiu INSERIR uma avaliacao, entao
+ * nao teria linha para achar), e entra assim mesmo por duas razoes: a regra vale
+ * por si, sem depender de a politica de INSERT continuar exigindo cadastro; e
+ * ela torna a resposta a um token estrangeiro uma DECISAO ("voce nao e cliente
+ * desta loja") em vez de um acidente ("por acaso nao ha linhas suas").
+ *
+ * `SET search_path` e obrigatorio em DEFINER, com `pg_temp` por ultimo, e
+ * `auth.uid()` qualificado porque `auth` nao esta no caminho — as tres pelo que
+ * 0006:88 explica.
+ *
+ * `SET row_security = off` PELO MOTIVO DE 0006/0014, e ele morde exatamente
+ * aqui: se um dia ligarem `FORCE ROW LEVEL SECURITY` em `avaliacoes`, o dono
+ * deixa de ser isento, nenhuma politica daquela tabela e `TO` dono, o SELECT
+ * volta ZERO LINHAS — e a tela do pedido diria "voce ainda nao avaliou nada"
+ * para todo mundo, sem erro nenhum, que e a mesma mudez que 0006 documentou.
+ * Com o SET, a mesma situacao responde 42501 nomeando a tabela.
+ *
+ * ORDER BY DENTRO DA FUNCAO: a ordenacao faz parte da resposta, e nao um
+ * detalhe do chamador. Um `.order()` do supabase-js sobre o retorno de uma RPC
+ * nao vira ORDER BY nenhum — sem isto aqui, a lista chegaria na ordem que o
+ * Postgres quisesse e a tela mais nova/mais velha mudaria sozinha.
+ */
+CREATE FUNCTION canastra.minhas_avaliacoes()
+  RETURNS TABLE (
+    id        uuid,
+    sku       text,
+    nota      integer,
+    titulo    text,
+    texto     text,
+    status    text,
+    criado_em timestamptz
+  )
+  LANGUAGE sql
+  STABLE
+  SECURITY DEFINER
+  SET search_path = canastra, pg_temp
+  SET row_security = off
+AS $$
+  SELECT a.id, a.sku, a.nota, a.titulo, a.texto, a.status, a.criado_em
+    FROM canastra.avaliacoes a
+   WHERE canastra.eh_cliente()
+     AND a.user_id = auth.uid()
+   ORDER BY a.criado_em DESC
+$$;
+
+-- `proacl` nasce nulo (EXECUTE para PUBLIC), o que numa funcao SECURITY DEFINER
+-- e higiene mal feita mesmo quando inofensivo: REVOKE primeiro, lista explicita
+-- depois — 0006, 0008 e 0014 fazem igual.
+--
+-- SO `authenticated`, e a lista curta e a mesma de `garantir_cliente` (0008),
+-- nao a de `pode_avaliar` (0014). O criterio e o que a funcao responde: esta
+-- so fala sobre `auth.uid()`, entao para `anon` ela devolveria sempre zero
+-- linhas (fingir resposta) e para `service_role` nao ha uid nenhum na sessao.
+-- Nenhuma politica deste schema a chama, entao nao ha o caso de 0006:136 — o
+-- 42501 que `anon` recebe e a frase correta: "entre na sua conta".
+REVOKE EXECUTE ON FUNCTION canastra.minhas_avaliacoes() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.minhas_avaliacoes() TO authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0031_correcoes_de_privilegio')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0032_motor_de_promocao
+-- ----------------------------------------------------------------------------
+
+-- O motor de promocao: promocao e cupom viram UMA entidade, com sete tabelas.
+--
+-- O PROBLEMA. Hoje o desconto vive em duas estruturas que nunca se falam.
+-- `canastra.promocoes` (0005) e desconto de VITRINE, aplicado por produto em
+-- `src/utils/preco.js:23` com um `Math.min` ingenuo entre todas as promocoes que
+-- casam. `canastra.cupons` (0010) e desconto de CHECKOUT, sobre o subtotal. Elas
+-- divergem em silencio — cupom tem minimo, limite de uso e janela opcional;
+-- promocao nao tem minimo, nao tem limite — e uma das divergencias e uma
+-- armadilha real: a promocao SO e aplicada com `inicio_em` E `fim_em`
+-- preenchidos (`promotionsRepository.findActivePromotionsForCheckout`), embora
+-- as duas colunas sejam nulaveis. Uma promocao salva com `ativa = true` e sem
+-- datas nunca vale, sem aviso nenhum.
+--
+-- A UNIFICACAO. Shopify, Medusa e Saleor modelam isto como uma entidade com um
+-- campo `metodo`: `automatico` aplica sozinho no carrinho, `codigo` exige o
+-- cliente digitar. Mesma regra, porta de entrada diferente. Unificar da UMA
+-- tela, UMA ordem de aplicacao e UM relatorio.
+--
+-- ESTA MIGRACAO NAO CALCULA NADA. A Onda 4 e quem escreve o motor. O criterio de
+-- pronto aqui e outro: o banco ACEITA E RECUSA as coisas certas. Por isso quase
+-- toda coluna nova carrega um CHECK — hoje `promocoes.tipo` e
+-- `promocoes.aplica_a` sao `text` sem CHECK nenhum, e so o JavaScript de UM
+-- caminho valida.
+--
+-- ---------------------------------------------------------------------------
+-- A DECISAO DE NOME, E A MEDICAO QUE A SUSTENTA
+-- ---------------------------------------------------------------------------
+--
+-- A tabela nova tambem se chama `promocoes`, e nao pode haver duas. As saidas
+-- eram: a nova nasce com outro nome e o legado e absorvido depois; ou o legado e
+-- renomeado AGORA e a nova assume o nome. Esta migracao faz a segunda, e o que
+-- decidiu foi a contagem de quem nomeia a tabela hoje:
+--
+--   src/repositories/promotionsRepository.js .. 5 consultas, todas com a string
+--                                               literal `canastra.promocoes`.
+--                                               E o UNICO modulo da aplicacao.
+--   src/utils/preco.js ........................ ZERO. Ele recebe as linhas
+--                                               prontas de
+--                                               `findActivePromotionsForCheckout`
+--                                               e nao conhece coluna de banco.
+--   frontend/ ................................. ZERO. Nao existe
+--                                               `.from("promocoes")` em lugar
+--                                               nenhum; o painel legado fala com
+--                                               o Express, nao com o PostgREST.
+--   test/ ..................................... f6_cupons, painel_repositorios e
+--                                               rls, todos atualizados no MESMO
+--                                               commit.
+--
+-- E o modo de falha de um ponto esquecido e ALTO, nao calado: a tabela nova nao
+-- tem NENHUMA das colunas do contrato antigo (`titulo`, `tipo`, `aplica_a`,
+-- `categoria`, `produto_id`, `ativa`, `criada_em`), e as cinco consultas citam
+-- pelo menos uma delas cada. Um esquecimento vira 42703 na primeira chamada, e
+-- nao uma leitura errada.
+--
+-- A JANELA DE DEPLOY, medida e nao suposta: `deploy/deploy.sh` roda as migracoes
+-- ANTES de construir a imagem da API, entao existiria um intervalo com schema
+-- novo e codigo velho. Ele nao morde aqui porque `deploy/stack.swarm.yml:78`
+-- mantem `loja_api` em `replicas: 0` de proposito (o servico recusa subir sem as
+-- credenciais do Mercado Pago) — nao ha consumidor de `canastra.promocoes`
+-- servindo em producao. Quem religar a API antes de a imagem nova estar no ar
+-- precisa saber disto, e por isso esta escrito aqui e nao so no relatorio.
+--
+-- ---------------------------------------------------------------------------
+-- AS DUAS TABELAS ANTIGAS FICAM DE PE, e isso e deliberado
+-- ---------------------------------------------------------------------------
+--
+-- `canastra.promocoes_legado` (a de 0005, renomeada) e `canastra.cupons` (0010)
+-- continuam existindo, com seus dados, seus GRANTs e suas politicas. O checkout
+-- de hoje ainda as le, e derruba-las agora quebraria a loja.
+--
+-- QUEM AS TIRA: `0036_aposentar_promocoes_e_cupons.sql`, na Onda 4 — a mesma que
+-- troca `promotionsRepository`, `cuponsRepository` e `utils/cupom.js` para o
+-- motor novo. A ordem la e a inversa da daqui, e e a ordem segura: o codigo novo
+-- sobe PRIMEIRO (as tabelas novas ja existem desde 0032), e so depois as velhas
+-- caem. E por isso que a 0036 pode dropar sem janela nenhuma, e esta aqui nao
+-- poderia ter criado o motor sob outro nome sem empurrar a mesma janela para la.
+--
+-- ---------------------------------------------------------------------------
+-- POR QUE 0032. A faixa 0017-0029 continua reservada pelo motivo que 0030 e 0031
+-- registraram: `0017` esta triplamente disputado fora daqui (a worktree
+-- `melhor-envio` tem um `0017_melhor_envio.sql`, a `whatsapp-bot` vai de `0017` a
+-- `0021`), o runner (`db/migrar.js`) ABORTA em numero repetido, e a chave em
+-- `canastra.migracoes` e o NOME COMPLETO do arquivo — migracao ja aplicada nao
+-- pode ser renomeada sem rodar de novo.
+
+/* ------------------------------------------------------------------------- *
+ * 1. O legado sai do caminho
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O RENAME LEVA JUNTO GRANTs, POLITICAS E DADOS, e isso e o que se quer: a
+ * `promocoes_legado` continua exatamente tao publica e tao editavel pela admin
+ * quanto era, porque nada do checkout de hoje pode mudar de comportamento nesta
+ * onda.
+ *
+ * A CONSTRAINT PRECISA SER RENOMEADA JUNTO, e este e o detalhe que faz a
+ * migracao falhar se for esquecido. Nome de CONSTRAINT e por tabela, mas o
+ * indice que sustenta uma PRIMARY KEY e um objeto de SCHEMA — e o `CREATE TABLE
+ * canastra.promocoes` logo abaixo tentaria criar um indice `promocoes_pkey` que
+ * ja existe, com 42P07. `RENAME CONSTRAINT` renomeia o indice junto.
+ *
+ * As politicas tambem sao renomeadas, so por legibilidade: `pg_policies` passa a
+ * dizer `promocoes_legado.promocoes_legado_leitura_publica`, e quem for ler a
+ * lista `PUBLICAS` de `test/rls.test.js` nao precisa adivinhar qual das duas
+ * tabelas de promocao aquela linha descreve.
+ */
+ALTER TABLE canastra.promocoes RENAME TO promocoes_legado;
+ALTER TABLE canastra.promocoes_legado
+  RENAME CONSTRAINT promocoes_pkey TO promocoes_legado_pkey;
+ALTER POLICY promocoes_leitura_publica ON canastra.promocoes_legado
+  RENAME TO promocoes_legado_leitura_publica;
+ALTER POLICY promocoes_admin_escreve ON canastra.promocoes_legado
+  RENAME TO promocoes_legado_admin_escreve;
+
+/* ------------------------------------------------------------------------- *
+ * 2. `promocoes` — o cabecalho da regra
+ * ------------------------------------------------------------------------- */
+
+CREATE TABLE canastra.promocoes (
+  id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome      text NOT NULL,
+  descricao text,
+
+  -- AS DUAS PORTAS DE ENTRADA. `automatico` aplica sozinho no carrinho;
+  -- `codigo` exige o cliente digitar. Um terceiro valor nao seria uma porta
+  -- nova: seria uma regra que nenhum caminho do motor encontra, salva com
+  -- sucesso e invisivel para sempre — o mesmo modo de falha da promocao legada
+  -- sem datas, que e justamente o que esta migracao existe para nao repetir.
+  metodo text NOT NULL
+           CONSTRAINT promocoes_metodo_valido
+             CHECK (metodo IN ('automatico', 'codigo')),
+
+  -- SOBRE O QUE o desconto incide. E o campo que hoje nao existe, e a ausencia
+  -- dele e a razao de `promocoes` e `cupons` divergirem em silencio: uma
+  -- desconta por produto e a outra sobre o subtotal, sem nada no schema dizendo
+  -- qual e qual.
+  classe text NOT NULL
+           CONSTRAINT promocoes_classe_valida
+             CHECK (classe IN ('produto', 'pedido', 'frete')),
+
+  mecanica text NOT NULL
+             CONSTRAINT promocoes_mecanica_valida
+               CHECK (mecanica IN ('percentual', 'valor_fixo', 'preco_fixo',
+                                   'leve_x_pague_y', 'progressivo', 'brinde',
+                                   'frete_gratis')),
+
+  -- A UNIDADE DE `valor` DEPENDE DA MECANICA, e isso e herdado de `cupons`
+  -- (0010) de proposito, para o vocabulario do painel nao mudar de significado:
+  --   percentual .......... pontos percentuais (10 = 10%)
+  --   valor_fixo .......... REAIS abatidos
+  --   preco_fixo .......... REAIS que o item passa a custar
+  --   leve_x_pague_y ...... o X; o Y mora em `promocao_faixas`
+  --   progressivo ......... nao usa: as faixas e que carregam os valores
+  --   brinde / frete_gratis nao usam
+  --
+  -- Dinheiro de COMPARACAO continua em centavos e inteiro (`minimo_valor`,
+  -- `teto_desconto_centavos`, `orcamento_centavos`), pela regra de 0009/0010:
+  -- numeric na fronteira do "vale/nao vale" convida aritmetica de ponto
+  -- flutuante exatamente onde ela custa caro.
+  valor numeric(10,2)
+          CONSTRAINT promocoes_valor_positivo
+            CHECK (valor IS NULL OR valor > 0),
+
+  -- O MESMO TETO DE 90% DE `cupons`, e agora tambem da promocao. La ele ja
+  -- estava no banco porque "cupom e um segredo que circula fora da loja
+  -- (anuncio, influencer) e o custo de um erro e maior" (0010:28). Na promocao
+  -- ele so existia em `promotionsRepository.validarDesconto`, isto e, no
+  -- JavaScript de UM caminho — quem escrevesse pelo PostgREST, por uma tela nova
+  -- ou por um INSERT de emergencia passava direto. Um "100%" libera a loja de
+  -- graca para quem abrir a pagina.
+  --
+  -- `valor_fixo` continua SEM teto, pelo mesmo motivo de 0010: o servico trava o
+  -- desconto no subtotal do pedido, entao um fixo maior que a compra desconta a
+  -- compra e para.
+  CONSTRAINT promocoes_percentual_ate_90
+    CHECK (mecanica <> 'percentual'
+           OR (valor IS NOT NULL AND valor > 0 AND valor <= 90)),
+
+  -- O TETO EM DINHEIRO, que e a outra metade da defesa. "20% de desconto" numa
+  -- compra de R$ 3.000 sao R$ 600 que ninguem aprovou. NULL = sem teto.
+  teto_desconto_centavos integer
+    CONSTRAINT promocoes_teto_positivo
+      CHECK (teto_desconto_centavos IS NULL OR teto_desconto_centavos > 0),
+
+  -- O MINIMO E UM PAR, E O PAR TEM DE SER COERENTE. So tres formas sao validas,
+  -- e as duas invalidas sao armadilhas caladas:
+  --   'nenhum'   + valor NULL ... a regra nao tem piso
+  --   'subtotal' + centavos ..... piso em dinheiro
+  --   'quantidade' + unidades ... piso em itens
+  --   'nenhum'   + 15000 ........ o gestor digitou o piso e depois trocou o tipo
+  --                               para "nenhum"; a tela mostra R$ 150 e o motor
+  --                               ignora. Ninguem descobre.
+  --   'subtotal' + NULL ......... "acima de nada", isto e, vale sempre, com o
+  --                               gestor achando que colocou um piso.
+  minimo_tipo text NOT NULL DEFAULT 'nenhum'
+                CONSTRAINT promocoes_minimo_tipo_valido
+                  CHECK (minimo_tipo IN ('nenhum', 'subtotal', 'quantidade')),
+  minimo_valor integer,
+  CONSTRAINT promocoes_minimo_coerente CHECK (
+    (minimo_tipo = 'nenhum' AND minimo_valor IS NULL)
+    OR (minimo_tipo IN ('subtotal', 'quantidade')
+        AND minimo_valor IS NOT NULL AND minimo_valor > 0)
+  ),
+
+  -- A ORDEM DE APLICACAO, que hoje e um `Math.min` ingenuo entre tudo que casa
+  -- (`utils/preco.js:56`). Maior prioridade primeiro; empate desempata por
+  -- `criada_em`, e isso e decisao do motor (Onda 4), nao do schema.
+  prioridade integer NOT NULL DEFAULT 0,
+
+  -- `exclusiva` diz "esta regra nao acumula". `grupo_exclusividade` diz COM QUEM
+  -- ela nao acumula — duas promocoes de pagamento se excluem entre si e ainda
+  -- assim somam com uma de frete. Um grupo preenchido numa regra que acumula e
+  -- um campo que nao faz nada, e o CHECK impede que ele seja salvo.
+  exclusiva boolean NOT NULL DEFAULT false,
+  grupo_exclusividade text,
+  CONSTRAINT promocoes_grupo_exige_exclusiva
+    CHECK (grupo_exclusividade IS NULL OR exclusiva),
+
+  -- O DESCONTO NO PIX, e a armadilha que ele quase trouxe junto. O que o
+  -- checkout GRAVA em `pedidos.metodo_pagamento` e o `payment_method_id` do
+  -- Mercado Pago (`PaymentController.js:815`), que e um vocabulario ABERTO:
+  -- 'visa', 'master', 'elo', 'bolbradesco'... Uma regra escrita contra 'visa'
+  -- simplesmente nao se aplicaria a um Mastercard, em silencio.
+  --
+  -- Entao a lista aqui e a da LOJA, fechada, e traduzir do Mercado Pago para ela
+  -- e trabalho do motor na Onda 4 — num lugar so, testavel. Lista VAZIA e
+  -- recusada porque nao quer dizer "todos": quer dizer "nenhum", e a regra
+  -- nunca valeria (a mesma confusao que 0010 barrou em `limite_usos = 0`).
+  meios_pagamento text[]
+    CONSTRAINT promocoes_meios_pagamento_validos
+      CHECK (meios_pagamento IS NULL
+             OR (cardinality(meios_pagamento) > 0
+                 AND meios_pagamento <@ ARRAY['pix', 'credito', 'debito', 'boleto'])),
+
+  -- NULL = sem limite, nos tres. Zero e recusado pelo motivo de 0010: nao
+  -- significa "ilimitado" nem "esgotado desde o inicio", significa que alguem
+  -- confundiu os dois — e melhor descobrir no INSERT que no primeiro cliente
+  -- recusado.
+  --
+  -- `limite_por_cliente` e por CPF, nao por e-mail, e o porque esta em
+  -- `promocao_resgates`.
+  limite_usos integer
+    CONSTRAINT promocoes_limite_usos_positivo
+      CHECK (limite_usos IS NULL OR limite_usos > 0),
+  limite_por_cliente integer
+    CONSTRAINT promocoes_limite_cliente_positivo
+      CHECK (limite_por_cliente IS NULL OR limite_por_cliente > 0),
+  orcamento_centavos integer
+    CONSTRAINT promocoes_orcamento_positivo
+      CHECK (orcamento_centavos IS NULL OR orcamento_centavos > 0),
+
+  -- A JANELA, COM AS DUAS PONTAS OPCIONAIS — e esta e a correcao mais importante
+  -- do arquivo. No legado as duas eram nulaveis E obrigatorias para valer, o que
+  -- e uma contradicao que so aparece em producao. Aqui NULL quer dizer "sem
+  -- limite deste lado", como em `cupons`, e o CHECK barra a unica combinacao que
+  -- nunca poderia valer: uma campanha que termina antes de comecar.
+  inicio_em timestamptz,
+  fim_em    timestamptz,
+  CONSTRAINT promocoes_janela_coerente
+    CHECK (inicio_em IS NULL OR fim_em IS NULL OR inicio_em < fim_em),
+
+  -- O KILL-SWITCH, SEPARADO DAS DATAS. `agendada`, `vigente` e `expirada` sao
+  -- DERIVADOS de `inicio_em`/`fim_em`/`arquivada_em` e NAO existem como coluna —
+  -- foi gravar status derivado que produziu a armadilha do painel legado, onde
+  -- editar uma promocao fora da janela a desativava para sempre (o formulario
+  -- devolvia o status que a tela tinha calculado). Aqui `habilitada` so muda
+  -- quando alguem move o interruptor.
+  habilitada boolean NOT NULL DEFAULT true,
+
+  -- `arquivada_em` E NAO DELETE (R13). Promocao apagada quebra o relatorio do
+  -- pedido que a usou, e `pedido_ajustes_desconto` aponta para ca. Hoje nao
+  -- existe DELETE de promocao nem de cupom em lugar nenhum da pilha: o painel so
+  -- oferece "desativar", e a lista so cresce. O REVOKE de DELETE la embaixo e o
+  -- que faz esta coluna ser o unico caminho.
+  arquivada_em timestamptz,
+
+  criada_em     timestamptz NOT NULL DEFAULT now(),
+  -- MANTIDA POR QUEM ESCREVE, como em 0004/0005/0010: nao ha trigger de
+  -- moddatetime neste schema. Todo UPDATE escreve `atualizada_em = now()` junto,
+  -- ou a coluna mente.
+  atualizada_em timestamptz NOT NULL DEFAULT now()
+);
+
+-- O indice que o motor vai varrer a cada carrinho: as automaticas que valem
+-- agora. Parcial porque a maior parte da tabela, com o tempo, sera campanha
+-- arquivada — e um indice total faria a leitura mais quente da loja passear por
+-- ela.
+CREATE INDEX promocoes_vigentes_idx
+  ON canastra.promocoes (metodo, prioridade DESC, inicio_em, fim_em)
+  WHERE habilitada AND arquivada_em IS NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 3. `promocao_codigos` — uma regra, N codigos
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O QUE ISTO PERMITE E QUE HOJE NAO EXISTE: 500 codigos de influenciador
+ * rastreaveis individualmente, com UM relatorio so. Em `cupons` seriam 500
+ * linhas, cada uma com sua propria copia da regra (valor, minimo, janela),
+ * divergindo na primeira correcao — e sem nenhuma forma de perguntar "quanto a
+ * campanha inteira vendeu".
+ */
+CREATE TABLE canastra.promocao_codigos (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- CASCADE: o codigo e PARTE da regra, nao um registro do que aconteceu. Quem
+  -- guarda o que aconteceu e `promocao_resgates`, e la a chave e RESTRICT.
+  promocao_id uuid NOT NULL
+                REFERENCES canastra.promocoes (id) ON DELETE CASCADE,
+
+  -- O MESMO CHECK DE FORMATO DE `cupons` (0010:20), palavra por palavra, e pelo
+  -- mesmo motivo: o codigo e salvo MAIUSCULO pelo servico (quem digita "cafe10"
+  -- quis dizer "CAFE10") e a busca do checkout e por igualdade EXATA. Um codigo
+  -- minusculo gravado por um caminho que nao passe pelo servico — um INSERT
+  -- manual de emergencia — seria invisivel para sempre. A-Z e 0-9 apenas, 3 a 30
+  -- caracteres: e o que cabe num anuncio e num campo de checkout sem ambiguidade
+  -- de espaco, acento ou emoji.
+  --
+  -- O UNIQUE E DA LOJA INTEIRA, nao da promocao: dois donos para 'CAFE20'
+  -- fariam o desconto que o cliente recebe depender da ordem de varredura do
+  -- Postgres, e a segunda campanha nunca apareceria.
+  codigo text NOT NULL UNIQUE
+           CONSTRAINT promocao_codigos_formato
+             CHECK (codigo ~ '^[A-Z0-9]{3,30}$'),
+
+  -- Codigo de uso unico e o caso do "cupom de desculpas" mandado a UMA pessoa.
+  -- Diferente de `limite_usos = 1` so na intencao, e a intencao e o que a tela
+  -- mostra.
+  uso_unico boolean NOT NULL DEFAULT false,
+
+  -- Contador DENORMALIZADO, e ele existe sabendo que e denormalizado: quem tem a
+  -- verdade e `promocao_resgates` (ver la). Este aqui e para o incremento
+  -- atomico do checkout continuar sendo o mesmo desenho de `cuponsRepository`
+  -- (`SET usos = usos + 1 WHERE ... usos < limite_usos`, dentro da transacao de
+  -- reserva de estoque) — dois checkouts simultaneos no ultimo uso serializam e
+  -- o segundo recebe "esgotado" ANTES de ser cobrado.
+  usos integer NOT NULL DEFAULT 0
+         CONSTRAINT promocao_codigos_usos_nao_negativo CHECK (usos >= 0),
+
+  limite_usos integer
+    CONSTRAINT promocao_codigos_limite_positivo
+      CHECK (limite_usos IS NULL OR limite_usos > 0),
+
+  ativo boolean NOT NULL DEFAULT true,
+
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  atualizado_em timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX promocao_codigos_promocao_idx
+  ON canastra.promocao_codigos (promocao_id);
+
+/* ------------------------------------------------------------------------- *
+ * 4. `promocao_escopo` — o que a regra alcanca, e o que ela NAO alcanca
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O `incluir = false` E O PONTO DESTA TABELA. Ele e o que permite dizer
+ * "10% na loja toda, MENOS o micro-lote" — uma frase que hoje nao tem como ser
+ * escrita: o escopo legado sao tres colunas mutuamente exclusivas (`aplica_a`,
+ * `categoria`, `produto_id`), com UM produto_id so e sem chave estrangeira.
+ *
+ * `alvo` E TEXTO E NAO FK, de proposito e pela licao do carrinho sem FK para
+ * produtos (0004): ele guarda um SKU, um nome de categoria ou um uuid conforme
+ * o `tipo`, e amarrar tres tipos diferentes a tres colunas FK devolveria
+ * exatamente o desenho de tres colunas exclusivas que esta tabela substitui. O
+ * troco e real e fica registrado: um SKU renomeado sai do escopo em silencio, e
+ * a tela de promocao da Onda 4 precisa validar o alvo contra o catalogo na hora
+ * de salvar.
+ */
+CREATE TABLE canastra.promocao_escopo (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  promocao_id uuid NOT NULL
+                REFERENCES canastra.promocoes (id) ON DELETE CASCADE,
+
+  tipo text NOT NULL
+         CONSTRAINT promocao_escopo_tipo_valido
+           CHECK (tipo IN ('produto', 'categoria', 'sku', 'todos', 'assinante')),
+
+  alvo text,
+
+  -- AS DUAS INCOERENCIAS QUE O CHECK IMPEDE, e as duas custam dinheiro:
+  --   'todos' COM alvo ...... "todos os produtos, especificamente este". O motor
+  --                           teria de escolher qual metade obedecer.
+  --   'sku' SEM alvo ........ alcanca TUDO em vez de nada, que e o caro dos
+  --                           dois: 10% na loja inteira por um campo em branco.
+  -- 'assinante' nao tem alvo porque a pergunta e sim/nao (o Clube, 0015).
+  CONSTRAINT promocao_escopo_alvo_coerente CHECK (
+    (tipo IN ('todos', 'assinante') AND alvo IS NULL)
+    OR (tipo IN ('produto', 'categoria', 'sku')
+        AND alvo IS NOT NULL AND btrim(alvo) <> '')
+  ),
+
+  incluir boolean NOT NULL DEFAULT true,
+
+  criado_em timestamptz NOT NULL DEFAULT now()
+);
+
+-- O MESMO ALVO DUAS VEZES NA MESMA PROMOCAO e o pior caso possivel: uma linha
+-- dizendo "inclua o micro-lote" e outra dizendo "exclua", com o resultado
+-- dependendo da ordem de leitura. O indice IGNORA `incluir` de proposito — e
+-- assim que a contradicao deixa de ser representavel, em vez de ser detectada
+-- depois. `coalesce(alvo, '')` porque NULL nao colide com NULL num indice unico,
+-- e duas linhas 'todos' na mesma promocao seriam a mesma contradicao.
+CREATE UNIQUE INDEX promocao_escopo_alvo_unico_idx
+  ON canastra.promocao_escopo (promocao_id, tipo, coalesce(alvo, ''));
+
+/* ------------------------------------------------------------------------- *
+ * 5. `promocao_faixas` — progressivo e leve-3-pague-2, checaveis no banco
+ * ------------------------------------------------------------------------- */
+
+CREATE TABLE canastra.promocao_faixas (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  promocao_id uuid NOT NULL
+                REFERENCES canastra.promocoes (id) ON DELETE CASCADE,
+
+  quantidade_min integer NOT NULL
+                   CONSTRAINT promocao_faixas_quantidade_positiva
+                     CHECK (quantidade_min > 0),
+
+  desconto_tipo text NOT NULL
+                  CONSTRAINT promocao_faixas_tipo_valido
+                    CHECK (desconto_tipo IN ('percentual', 'valor_fixo',
+                                             'preco_fixo', 'pague_y')),
+
+  desconto_valor numeric(10,2) NOT NULL
+                   CONSTRAINT promocao_faixas_valor_positivo
+                     CHECK (desconto_valor > 0),
+
+  -- O TETO DE 90% VALE AQUI TAMBEM, e este e o lugar onde ele seria esquecido:
+  -- numa promocao `progressivo` o percentual nao mora em `promocoes.valor`, mora
+  -- aqui. Um teto so no cabecalho seria um teto com um buraco do tamanho da
+  -- mecanica que mais usa faixas.
+  CONSTRAINT promocao_faixas_percentual_ate_90
+    CHECK (desconto_tipo <> 'percentual' OR desconto_valor <= 90),
+
+  -- "leve 3 pague 3" nao e promocao, e "leve 3 pague 4" e um acrescimo escrito
+  -- com cara de desconto. O Y tem de ser menor que o X.
+  CONSTRAINT promocao_faixas_pague_menor_que_leve
+    CHECK (desconto_tipo <> 'pague_y' OR desconto_valor < quantidade_min),
+
+  criado_em timestamptz NOT NULL DEFAULT now(),
+
+  -- Duas faixas com o mesmo piso e uma regra sem resposta: leve 6, pague 15% ou
+  -- 20%? O motor escolheria pela ordem do heap. Isto fica no BANCO, com CHECK, e
+  -- nao num jsonb solto que ninguem consegue validar — que era a alternativa.
+  CONSTRAINT promocao_faixas_piso_unico UNIQUE (promocao_id, quantidade_min)
+);
+
+/* ------------------------------------------------------------------------- *
+ * 6. `promocao_frete` — o item que sangra margem toda semana
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Hoje o frete gratis e UM NUMERO GLOBAL: `config_loja.frete_gratis_minimo_
+ * centavos = 14900` (0009). A pesquisa foi direta: cafe tem frete comparavel ao
+ * produto, e sem teto "frete gratis acima de R$ 149" significa bancar um SEDEX
+ * de R$ 90 para o Acre, toda semana, saindo da margem.
+ *
+ * UMA CONFIGURACAO POR PROMOCAO — a chave primaria e o proprio `promocao_id`.
+ * Duas linhas dariam dois tetos para a mesma regra, e nao ha desempate possivel.
+ * Varias faixas de CEP se fazem com varias promocoes, cada uma com sua UF e seu
+ * teto, que e como o gestor pensa o problema de qualquer forma ("Sudeste ate R$
+ * 30, Nordeste ate R$ 50").
+ */
+CREATE TABLE canastra.promocao_frete (
+  promocao_id uuid PRIMARY KEY
+                REFERENCES canastra.promocoes (id) ON DELETE CASCADE,
+
+  -- Acima deste valor a regra NAO vale, e o cliente paga o frete normal.
+  teto_frete_centavos integer
+    CONSTRAINT promocao_frete_teto_positivo
+      CHECK (teto_frete_centavos IS NULL OR teto_frete_centavos > 0),
+
+  -- Lista fechada nas 27 unidades da federacao. Um 'XX' gravado por engano nunca
+  -- casaria com o estado de ninguem, e a regra ficaria salva e inerte. Lista
+  -- VAZIA e recusada porque nao quer dizer "todas": quer dizer "nenhuma".
+  ufs text[]
+    CONSTRAINT promocao_frete_ufs_validas
+      CHECK (ufs IS NULL
+             OR (cardinality(ufs) > 0
+                 AND ufs <@ ARRAY['AC','AL','AP','AM','BA','CE','DF','ES','GO',
+                                  'MA','MT','MS','MG','PA','PB','PR','PE','PI',
+                                  'RJ','RN','RS','RO','RR','SC','SP','SE','TO'])),
+
+  -- SEM ELE O CLIENTE ESCOLHE SEDEX DE GRACA quando a loja queria bancar o PAC.
+  -- Nao e detalhe: e a diferenca entre subsidiar R$ 25 e subsidiar R$ 90 na
+  -- mesma venda.
+  apenas_modalidade_mais_barata boolean NOT NULL DEFAULT false,
+
+  -- O CEP ENTRA NORMALIZADO A DIGITOS, E O CHECK E QUEM GARANTE. Comparar
+  -- '01310-100' com '01310100' e um bug que passa em todo teste escrito com o
+  -- formato certo e falha em producao no primeiro cliente que digitar o hifen —
+  -- e ESTA LOJA JA TEVE UM DESSA FAMILIA no CEP de origem (commit 7fe8d36). O
+  -- CHECK nao normaliza: ele faz o caminho que esquecer de normalizar ERRAR.
+  cep_inicio text
+    CONSTRAINT promocao_frete_cep_inicio_formato
+      CHECK (cep_inicio IS NULL OR cep_inicio ~ '^[0-9]{8}$'),
+  cep_fim text
+    CONSTRAINT promocao_frete_cep_fim_formato
+      CHECK (cep_fim IS NULL OR cep_fim ~ '^[0-9]{8}$'),
+
+  -- Meia faixa e faixa nenhuma: com so uma ponta, "de 30000000 em diante" e uma
+  -- leitura, "ate 30000000" e outra, e o motor teria de adivinhar.
+  CONSTRAINT promocao_frete_faixa_completa
+    CHECK ((cep_inicio IS NULL) = (cep_fim IS NULL)),
+  -- E a faixa invertida ('39999999' a '30000000') nao alcanca CEP nenhum: a
+  -- regra e salva com sucesso e nunca vale. A comparacao e de TEXTO e isso
+  -- basta, porque os dois lados tem exatamente 8 digitos pelo CHECK acima.
+  CONSTRAINT promocao_frete_faixa_ordenada
+    CHECK (cep_inicio IS NULL OR cep_inicio <= cep_fim),
+
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  atualizado_em timestamptz NOT NULL DEFAULT now()
+);
+
+/* ------------------------------------------------------------------------- *
+ * 7. `promocao_resgates` — a verdade do uso
+ * ------------------------------------------------------------------------- */
+
+/**
+ * E ESTA TABELA, E NAO UM CONTADOR, QUE E A VERDADE. Duas razoes:
+ *
+ *   · pedido cancelado ou PIX expirado precisa DEVOLVER o uso, e um contador
+ *     decrementado nao diz de quem era o uso devolvido;
+ *   · e dela que sai o relatorio de campanha — quantas vendas, quanto de
+ *     desconto, por qual codigo.
+ *
+ * A propria Shopify documenta que o contador denormalizado dela fica defasado.
+ * `promocao_codigos.usos` continua existindo para o incremento atomico do
+ * checkout, e sabendo que e uma copia.
+ *
+ * NINGUEM ESCREVE AQUI PELO NAVEGADOR — nem a admin. O resgate nasce na mesma
+ * transacao que reserva estoque, no servico Node, exatamente como
+ * `cuponsRepository.js:125-130` ja faz. O argumento e o de `pedidos` em 0006:
+ * valor de venda escrito por quem nao passou pelo checkout foi o achado de
+ * auditoria que aquela fase fechou.
+ */
+CREATE TABLE canastra.promocao_resgates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- RESTRICT, e nao CASCADE: o resgate e registro do que aconteceu, nao parte da
+  -- regra. Uma promocao com resgate nao se apaga de jeito nenhum — nem pelo
+  -- dono, nem por um script de limpeza distraido. A recusa e 23503, alta.
+  promocao_id uuid NOT NULL
+                REFERENCES canastra.promocoes (id) ON DELETE RESTRICT,
+
+  -- Tambem RESTRICT, e pelo mesmo motivo: apagar o codigo de um influenciador ja
+  -- usado deixaria o resgate orfao de campanha, e o relatorio dele passaria a
+  -- mentir por omissao. Codigo NAO usado continua podendo ser removido.
+  codigo_id uuid
+              REFERENCES canastra.promocao_codigos (id) ON DELETE RESTRICT,
+
+  pedido_id uuid NOT NULL
+              REFERENCES canastra.pedidos (pedido_id) ON DELETE CASCADE,
+
+  -- NULAVEL E `ON DELETE SET NULL`, PELA ARMADILHA DE 0005, que vale igual aqui:
+  -- o Postgres ACEITA declarar SET NULL numa coluna NOT NULL — o DDL nao reclama
+  -- — e a incompatibilidade so aparece no DELETE do cliente, que estoura com
+  -- 23502 e deixa a exclusao de dados pessoais impossivel. Seria uma armadilha
+  -- que so dispara no dia do primeiro pedido de exclusao (LGPD art. 18).
+  user_id uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
+
+  -- SHA-256 DO CPF, NUNCA O CPF. E-mail e infinito e gratuito: cupom de primeira
+  -- compra controlado por e-mail e cupom permanente, e por isso o limite por
+  -- cliente e por CPF. Guardar o numero seria mais uma copia de dado pessoal, e
+  -- as migracoes 0013 e 0016 desta loja ja pagaram esse preco uma vez.
+  --
+  -- O CHECK E O QUE TRANSFORMA "COMBINAMOS DE GUARDAR O HASH" NUMA GARANTIA: um
+  -- CPF tem 11 digitos e um CPF formatado tem 14, e nenhum dos dois casa
+  -- `^[0-9a-f]{64}$`. Quem esquecer o hash leva 23514 antes de escrever no
+  -- disco, em vez de deixar um numero de documento numa tabela que ninguem mais
+  -- vai reler. Hex MINUSCULO porque e o que `crypto.createHash(...).digest('hex')`
+  -- do Node produz — aceitar as duas caixas faria dois hashes do mesmo CPF nao
+  -- casarem no `WHERE`.
+  --
+  -- NULL e permitido: pedido de convidado sem CPF existe, e ali o limite por
+  -- cliente simplesmente nao se aplica.
+  documento_hash text
+    CONSTRAINT promocao_resgates_hash_formato
+      CHECK (documento_hash IS NULL OR documento_hash ~ '^[0-9a-f]{64}$'),
+
+  valor_centavos integer NOT NULL
+    CONSTRAINT promocao_resgates_valor_nao_negativo CHECK (valor_centavos >= 0),
+
+  resgatado_em timestamptz NOT NULL DEFAULT now(),
+  -- DEVOLVER O USO E ISTO, e nao DELETE: apagar a linha apagaria junto o
+  -- registro de que a campanha foi tentada, que e metade do relatorio.
+  estornado_em timestamptz,
+  CONSTRAINT promocao_resgates_estorno_depois
+    CHECK (estornado_em IS NULL OR estornado_em >= resgatado_em),
+
+  -- O UNIQUE QUE SUSTENTA O CONTADOR. O Mercado Pago reenvia notificacao POR
+  -- DESENHO (e por isso os indices parciais de idempotencia de 0005 existem):
+  -- sem esta chave, uma reentrega de webhook gravaria o resgate de novo e o
+  -- relatorio contaria duas vendas onde houve uma.
+  CONSTRAINT promocao_resgates_uma_vez_por_pedido UNIQUE (promocao_id, pedido_id)
+);
+
+CREATE INDEX promocao_resgates_documento_idx
+  ON canastra.promocao_resgates (promocao_id, documento_hash)
+  WHERE documento_hash IS NOT NULL AND estornado_em IS NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 8. `pedido_ajustes_desconto` — a fundacao silenciosa
+ * ------------------------------------------------------------------------- */
+
+/**
+ * PARECE BUROCRACIA E NAO E. Sem uma linha por desconto aplicado nao existe:
+ *
+ *   · NF-e com desconto rateado POR ITEM — o Bling exige, e hoje os dois POST de
+ *     emissao vao sem corpo nenhum;
+ *   · estorno proporcional em devolucao parcial;
+ *   · resposta para "por que este pedido saiu por R$ 137,40?".
+ *
+ * As tres saem da mesma tabela, e por isso ela entra nesta onda e nao na
+ * seguinte: `pedidos.desconto` (0010) e UM numero agregado, e nao ha como
+ * decompo-lo depois.
+ */
+CREATE TABLE canastra.pedido_ajustes_desconto (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  pedido_id uuid NOT NULL
+              REFERENCES canastra.pedidos (pedido_id) ON DELETE CASCADE,
+
+  -- SET NULL, e nao RESTRICT como em `promocao_resgates`, e a diferenca e
+  -- proposital: aqui a linha ja carrega `codigo` e `rotulo`, que sao a
+  -- FOTOGRAFIA do que foi aplicado. E a mesma licao de `pedidos.cupom_codigo`
+  -- ser texto e nao FK (0010:75): o pedido guarda o que foi usado na compra, e
+  -- apagar ou renomear a campanha amanha nao pode tocar uma venda ja feita.
+  promocao_id uuid REFERENCES canastra.promocoes (id) ON DELETE SET NULL,
+  codigo text,
+
+  alvo text NOT NULL
+         CONSTRAINT pedido_ajustes_alvo_valido
+           CHECK (alvo IN ('item', 'pedido', 'frete')),
+
+  -- QUAL item. Um desconto de item sem dizer qual e um desconto que a NF-e nao
+  -- consegue ratear — e o rateio por item e exatamente o que o Bling exige. O
+  -- inverso ('pedido' COM alvo_ref) e um dado que contradiz o proprio alvo.
+  alvo_ref text,
+  CONSTRAINT pedido_ajustes_alvo_ref_coerente CHECK (
+    (alvo = 'item' AND alvo_ref IS NOT NULL AND btrim(alvo_ref) <> '')
+    OR (alvo IN ('pedido', 'frete') AND alvo_ref IS NULL)
+  ),
+
+  -- A ORDEM E PARTE DA RESPOSTA. Dois descontos com a mesma sequencia deixariam
+  -- "por que R$ 137,40" com duas contas diferentes conforme a varredura — e a
+  -- ordem importa de verdade quando um desconto e percentual sobre o que sobrou
+  -- do anterior.
+  sequencia integer NOT NULL
+              CONSTRAINT pedido_ajustes_sequencia_positiva CHECK (sequencia > 0),
+
+  valor_centavos integer NOT NULL
+    CONSTRAINT pedido_ajustes_valor_positivo CHECK (valor_centavos > 0),
+
+  -- O que a tela e a NF-e mostram. NOT NULL porque uma linha de desconto sem
+  -- nome nao responde a pergunta que a tabela existe para responder.
+  rotulo text NOT NULL,
+
+  criado_em timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT pedido_ajustes_sequencia_unica UNIQUE (pedido_id, sequencia)
+);
+
+CREATE INDEX pedido_ajustes_promocao_idx
+  ON canastra.pedido_ajustes_desconto (promocao_id)
+  WHERE promocao_id IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 9. A migracao dos dados
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A GUARDA VEM ANTES, e ela recusa a migracao inteira em vez de perder uma
+ * regra.
+ *
+ * `promocoes_legado.tipo` e `text` SEM CHECK (0005) e `valor` e nulavel: o teto
+ * de 90% e o vocabulario `percent`/`fixed` so existem em
+ * `promotionsRepository.validarDesconto`, isto e, no JavaScript de UM caminho. O
+ * banco de producao pode ter linha que nenhuma `mecanica` nova representa.
+ *
+ * As saidas seriam tres, e duas sao ruins: PULAR a linha perde uma regra em
+ * silencio (o oposto do que este schema existe para fazer); ADIVINHAR uma
+ * mecanica muda o dinheiro que o cliente paga. Sobra PARAR, com a lista dos ids
+ * e o comando que resolve. O runner aplica cada migracao numa transacao propria
+ * (`db/migrar.js:266`), entao o banco fica exatamente como estava.
+ *
+ * Num banco limpo — os testes, o `instalacao-completa.sql`, qualquer instalacao
+ * nova — as duas tabelas estao vazias e este bloco e um no-op.
+ */
+DO $migracao$
+DECLARE
+  intrusos text;
+BEGIN
+  SELECT string_agg(id::text, ', ')
+    INTO intrusos
+    FROM canastra.promocoes_legado
+   WHERE (tipo IS DISTINCT FROM 'percent' AND tipo IS DISTINCT FROM 'fixed')
+      OR valor IS NULL
+      OR valor <= 0
+      OR (tipo = 'percent' AND valor > 90);
+
+  IF intrusos IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Promocoes legadas que nenhuma mecanica nova representa: %. '
+      'Corrija-as em canastra.promocoes_legado (tipo tem de ser percent ou '
+      'fixed, valor > 0, e percent no maximo 90) e rode a migracao de novo. '
+      'Ignora-las aqui apagaria uma regra de desconto em silencio.',
+      intrusos;
+  END IF;
+
+  -- A SEGUNDA GUARDA COBRE A JANELA, e ela existe para trocar um erro mudo por
+  -- um erro que se explica. Nem `promocoes` nem `cupons` tem CHECK de ordem nas
+  -- datas, entao uma linha com `inicio_em >= fim_em` — que nunca valeu em
+  -- instante nenhum — bateria no `promocoes_janela_coerente` la em cima e o
+  -- operador leria so o nome de uma constraint que ele nunca viu.
+  SELECT string_agg(origem || ' ' || id::text, ', ')
+    INTO intrusos
+    FROM (
+      SELECT 'promocoes_legado' AS origem, id, inicio_em, fim_em
+        FROM canastra.promocoes_legado
+      UNION ALL
+      SELECT 'cupons', id, inicio_em, fim_em FROM canastra.cupons
+    ) j
+   WHERE inicio_em IS NOT NULL AND fim_em IS NOT NULL AND inicio_em >= fim_em;
+
+  IF intrusos IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Regras legadas com janela que nunca vale (inicio_em >= fim_em): %. '
+      'Corrija as datas na tabela de origem e rode a migracao de novo.',
+      intrusos;
+  END IF;
+END
+$migracao$;
+
+/**
+ * Os cupons viram promocoes de `metodo = 'codigo'`.
+ *
+ * `classe = 'pedido'` porque e o que o cupom SEMPRE foi: `utils/cupom.js`
+ * desconta sobre o SUBTOTAL, nunca por item. Escrever isso no schema e metade da
+ * unificacao — a outra metade e as promocoes legadas virarem `classe =
+ * 'produto'`, que e o que `utils/preco.js` faz com elas.
+ *
+ * O `id` E REAPROVEITADO, e nao sorteado de novo: a linha nova fica rastreavel
+ * ate o cupom que a originou sem uma coluna `origem_id` que so serviria para
+ * isso. Colisao com um id de `promocoes_legado` e possivel em teoria e bateria
+ * na chave primaria, alto — nao ha caminho silencioso.
+ *
+ * `minimo_centavos = 0` vira `'nenhum'` COM VALOR NULO, e nao `'subtotal'` com
+ * zero: um piso de R$ 0,00 e um piso que nao e piso, e o CHECK de coerencia
+ * existe justamente para essa forma nao existir.
+ *
+ * `usos` vai para o codigo e nao para a regra: um cupom com 37 usos de 200
+ * voltaria a ter 200 disponiveis no dia da virada se o contador ficasse para
+ * tras.
+ */
+INSERT INTO canastra.promocoes (
+  id, nome, descricao, metodo, classe, mecanica, valor,
+  minimo_tipo, minimo_valor, limite_usos,
+  inicio_em, fim_em, habilitada, criada_em, atualizada_em
+)
+SELECT
+  c.id,
+  -- `nome` e NOT NULL e a descricao do cupom e opcional; o codigo e o que o
+  -- gestor reconhece na lista quando nao ha descricao.
+  coalesce(nullif(btrim(c.descricao), ''), c.codigo),
+  c.descricao,
+  'codigo',
+  'pedido',
+  CASE c.tipo WHEN 'percent' THEN 'percentual' ELSE 'valor_fixo' END,
+  c.valor,
+  CASE WHEN c.minimo_centavos > 0 THEN 'subtotal' ELSE 'nenhum' END,
+  nullif(c.minimo_centavos, 0),
+  c.limite_usos,
+  c.inicio_em,
+  c.fim_em,
+  -- Cupom sem data SEMPRE valeu ("CAFE10 ate acabar", 0010:63), entao aqui
+  -- `ativo` atravessa cru. Com as promocoes e diferente — ver abaixo.
+  c.ativo,
+  c.criado_em,
+  c.atualizado_em
+FROM canastra.cupons c;
+
+INSERT INTO canastra.promocao_codigos (
+  promocao_id, codigo, usos, limite_usos, ativo, criado_em, atualizado_em
+)
+SELECT c.id, c.codigo, c.usos, c.limite_usos, c.ativo, c.criado_em, c.atualizado_em
+FROM canastra.cupons c;
+
+/**
+ * As promocoes legadas viram `metodo = 'automatico'`.
+ *
+ * `habilitada` NAO E `ativa`, E ESTA E A LINHA MAIS IMPORTANTE DO ARQUIVO.
+ *
+ * No modelo legado a promocao so entrava no checkout com `inicio_em <= now() AND
+ * fim_em >= now()` — e NULL nao satisfaz nenhum dos dois. Uma promocao com
+ * `ativa = true` e sem datas NUNCA valeu, em nenhum dia, e a loja pode ter
+ * varias assim (o painel legado salva as datas vazias como NULL sem reclamar).
+ *
+ * No modelo novo, data nula quer dizer "sem limite deste lado", isto e, VALE
+ * SEMPRE. Migrar `habilitada = ativa` cru LIGARIA, no dia da virada, um desconto
+ * que nunca existiu — em producao, sem ninguem ter pedido, e sem nada no log
+ * apontando para ca. O que atravessa, entao, e o comportamento EFETIVO e nao o
+ * valor cru da coluna.
+ *
+ * O gestor que quiser reativar uma dessas preenche as datas e liga o
+ * interruptor: duas acoes deliberadas, na tela, em vez de uma surpresa.
+ */
+INSERT INTO canastra.promocoes (
+  id, nome, descricao, metodo, classe, mecanica, valor,
+  inicio_em, fim_em, habilitada, criada_em, atualizada_em
+)
+SELECT
+  p.id,
+  p.titulo,
+  p.descricao,
+  'automatico',
+  'produto',
+  CASE p.tipo WHEN 'percent' THEN 'percentual' ELSE 'valor_fixo' END,
+  p.valor,
+  p.inicio_em,
+  p.fim_em,
+  p.ativa AND p.inicio_em IS NOT NULL AND p.fim_em IS NOT NULL,
+  p.criada_em,
+  p.criada_em
+FROM canastra.promocoes_legado p;
+
+/**
+ * E o escopo, sem o qual "15% na categoria Cafe" viraria "15% na loja toda" — o
+ * erro mais caro que esta migracao poderia cometer.
+ *
+ * A CLAUSULA WHERE NAO PERDE NADA, e vale demonstrar porque parece perder: as
+ * combinacoes que ela deixa de fora sao exatamente as que `utils/preco.js` nunca
+ * fez casar. `applies_to = 'category'` com `categoria` nula cai no
+ * `if (promoCategory && ...)` e nunca bate; `'product'` com `produto_id` nulo
+ * compara `"null"` com um uuid e nunca bate; um `applies_to` fora dos tres nao
+ * entra em nenhum ramo. Ou seja, essas promocoes ja eram inertes, e sem linha de
+ * escopo elas continuam inertes — que e o comportamento preservado, nao perdido.
+ */
+INSERT INTO canastra.promocao_escopo (promocao_id, tipo, alvo, incluir, criado_em)
+SELECT
+  p.id,
+  CASE p.aplica_a WHEN 'all' THEN 'todos' WHEN 'category' THEN 'categoria'
+                  ELSE 'produto' END,
+  CASE p.aplica_a WHEN 'all' THEN NULL WHEN 'category' THEN btrim(p.categoria)
+                  ELSE p.produto_id::text END,
+  true,
+  p.criada_em
+FROM canastra.promocoes_legado p
+WHERE p.aplica_a = 'all'
+   OR (p.aplica_a = 'category' AND nullif(btrim(p.categoria), '') IS NOT NULL)
+   OR (p.aplica_a = 'product'  AND p.produto_id IS NOT NULL);
+
+/* ------------------------------------------------------------------------- *
+ * 10. Privilegios
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O QUE `anon` LE, E SO ISSO: o cabecalho da regra, o escopo e as faixas. Sao os
+ * tres de que a vitrine precisa para renderizar "de/por" e a regra de leve-mais
+ * ANTES de qualquer login — e a spec §3.10 nomeia exatamente estes tres.
+ *
+ * 0001 inverteu o padrao de proposito (tabela nova NAO nasce legivel por `anon`,
+ * para o esquecimento virar 404 barulhento em vez de vazamento calado), entao
+ * quem e publico diz isso aqui, na propria migracao.
+ *
+ * `promocao_frete` FICA DE FORA, e a ausencia e uma decisao: a barra de frete
+ * gratis da vitrine (`components/layout/BarraFreteGratis.tsx`) ainda le
+ * `config_loja.frete_gratis_minimo_centavos`, e nenhum leitor desta tabela
+ * existe hoje. Dar GRANT agora seria abrir uma porta sem porteiro do outro lado
+ * — o inverso do campo write-only que 0030 foi consertar. Quem trocar aquela
+ * barra na Onda 4 decide entre este GRANT e um endpoint no servidor.
+ */
+GRANT SELECT ON canastra.promocoes       TO anon;
+GRANT SELECT ON canastra.promocao_escopo TO anon;
+GRANT SELECT ON canastra.promocao_faixas TO anon;
+
+/**
+ * REDUNDANTE HOJE, ESCRITO ASSIM MESMO — o mesmo argumento de 0030:123. O
+ * `ALTER DEFAULT PRIVILEGES` de 0001 ja da INSERT/UPDATE/DELETE a
+ * `authenticated` em toda tabela nova de `canastra`, mas aquele default so
+ * alcanca objeto criado pelo MESMO papel que rodou o ALTER. Uma destas tabelas
+ * recriada por outro caminho (psql com outro usuario, Supabase Studio, restore
+ * parcial) nasceria SEM privilegio de escrita, e o painel do admin passaria a
+ * levar 42501 com toda a RLS correta.
+ *
+ * SO AS CINCO TABELAS DE REGRA. `promocao_resgates` e `pedido_ajustes_desconto`
+ * sao registro do que ja aconteceu e ficam de fora — ver o REVOKE abaixo.
+ */
+GRANT INSERT, UPDATE, DELETE ON canastra.promocoes       TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON canastra.promocao_codigos TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON canastra.promocao_escopo TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON canastra.promocao_faixas TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON canastra.promocao_frete  TO authenticated;
+
+/**
+ * PROMOCAO NAO SE APAGA, E A TRAVA E DE PRIVILEGIO.
+ *
+ * A regra de 0031: onde o recorte e de COLUNA ou de OPERACAO INTEIRA, ele nao
+ * tem como morar numa politica. Aqui a politica do admin e `FOR ALL` — o mesmo
+ * formato de `config_loja`, e o mesmo que 0031 apontou como o que apaga uma
+ * ausencia de politica sem querer. O privilegio nao se perde assim.
+ *
+ * O que se perde num DELETE aqui: `pedido_ajustes_desconto.promocao_id` aponta
+ * para ca com SET NULL, entao a linha do pedido sobreviveria — mas o relatorio
+ * de campanha, nao. E `promocao_resgates` aponta com RESTRICT, o que ja barraria
+ * as promocoes JA USADAS; este REVOKE fecha tambem as que ainda nao foram, que
+ * sao justamente as que alguem apagaria por engano ("essa nunca rodou, pode
+ * tirar"). O caminho que existe e `arquivada_em`.
+ *
+ * As CINCO tabelas filhas mantem DELETE: tirar uma faixa de quantidade ou um
+ * SKU do escopo e EDICAO da regra, nao apagamento de historico.
+ */
+REVOKE DELETE ON canastra.promocoes FROM authenticated;
+
+/**
+ * AS DUAS TABELAS DE REGISTRO SO O SERVICO ESCREVE.
+ *
+ * Nem cliente nem admin. O resgate nasce na transacao de reserva de estoque e o
+ * ajuste e a fotografia do que foi cobrado — os dois pelo servico Node, que
+ * conecta como dono do banco. E o mesmo desenho de `pedidos` em 0006, e pelo
+ * mesmo motivo: numero que vira dinheiro nao vem do navegador.
+ *
+ * `SELECT` NAO ENTRA NO REVOKE, de proposito: o painel LE os dois (relatorio de
+ * campanha, "por que R$ 137,40") e o cliente le os ajustes do proprio pedido.
+ * Quem recorta a LINHA ali e a politica, que e o mecanismo certo para esse
+ * recorte — diferente do DELETE acima, que e operacao inteira.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.promocao_resgates       FROM authenticated;
+REVOKE INSERT, UPDATE, DELETE ON canastra.pedido_ajustes_desconto FROM authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * 11. RLS
+ * ------------------------------------------------------------------------- */
+
+ALTER TABLE canastra.promocoes               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.promocao_codigos        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.promocao_escopo         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.promocao_faixas         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.promocao_frete          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.promocao_resgates       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.pedido_ajustes_desconto ENABLE ROW LEVEL SECURITY;
+
+/**
+ * A LEITURA PUBLICA NAO E `USING (true)`, E ESSA E UMA DECISAO E NAO UM DETALHE.
+ *
+ * `test/rls.test.js` mantem a lista `PUBLICAS` — as relacoes onde um
+ * `FOR SELECT USING (true)` e aceito. Acrescentar um nome ali e afirmar, no
+ * diff, que aquela relacao inteira pode ser lida por quem nao tem conta. Para
+ * `promocoes` isso seria falso, e de tres formas:
+ *
+ *   · a campanha AGENDADA e o calendario comercial da loja; com `true`, um
+ *     concorrente le as promocoes das proximas semanas com um GET;
+ *   · a promocao de CODIGO carrega o valor do cupom que circula em anuncio e com
+ *     influenciador — quem valida codigo e `POST /cupons/validar`, que responde
+ *     so sobre O codigo perguntado (0010:91);
+ *   · expirada, desabilitada e arquivada nao valem hoje e nao interessam a
+ *     ninguem de fora.
+ *
+ * Entao o recorte desce para o PREDICADO, onde ele se le. O troco e que esta
+ * migracao NAO acrescenta nenhum nome a `PUBLICAS`, e a invariante daquele
+ * arquivo continua valendo intocada.
+ *
+ * `now()` NUMA POLITICA e legitimo (a funcao e STABLE e vale o instante da
+ * transacao), e e o mesmo instante que o motor vai usar — o status derivado da
+ * spec, escrito uma vez, no banco, em vez de repetido em cada consulta da
+ * vitrine.
+ */
+CREATE POLICY promocoes_vigentes_publicas ON canastra.promocoes
+  FOR SELECT TO anon, authenticated
+  USING (
+    metodo = 'automatico'
+    AND habilitada
+    AND arquivada_em IS NULL
+    AND (inicio_em IS NULL OR inicio_em <= now())
+    AND (fim_em    IS NULL OR fim_em    >= now())
+  );
+
+/**
+ * O escopo e as faixas seguem o PAI, e o mecanismo tem uma dependencia que
+ * precisa estar escrita: `canastra.promocoes` esta sob RLS, e a subconsulta de
+ * uma politica roda como o INVOCADOR, nao como dono. Ou seja, este EXISTS
+ * enxerga exatamente as promocoes que a politica acima deixa a pessoa enxergar.
+ *
+ * Aqui isso da certo por construcao — a vitrine so precisa do escopo das regras
+ * que ela ja pode ver —, e e a mesma engrenagem que `carrinho_itens_dono` usa em
+ * 0006:497. O acoplamento e igualmente real e igualmente silencioso: se um dia
+ * `promocoes_vigentes_publicas` for estreitada, o escopo e as faixas somem da
+ * vitrine SEM ERRO, e o preco "de/por" volta a ser so "de". Quem mexer naquela
+ * politica tem de reler estas duas.
+ */
+CREATE POLICY promocao_escopo_publico_le ON canastra.promocao_escopo
+  FOR SELECT TO anon, authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM canastra.promocoes p
+      WHERE p.id = promocao_escopo.promocao_id
+    )
+  );
+
+CREATE POLICY promocao_faixas_publico_le ON canastra.promocao_faixas
+  FOR SELECT TO anon, authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM canastra.promocoes p
+      WHERE p.id = promocao_faixas.promocao_id
+    )
+  );
+
+/**
+ * A escrita, nas cinco tabelas de regra: so `canastra.eh_admin()`.
+ *
+ * A funcao le `canastra.admins` e NUNCA um claim do JWT — a instancia do
+ * Supabase e compartilhada com outros projetos do mesmo dono, e um token emitido
+ * para outro projeto chega aqui com assinatura valida, papel `authenticated` e
+ * `auth.uid()` preenchido. Ele carrega no `user_metadata` o que quiser.
+ *
+ * O `TO authenticated` NAO E ENFEITE: sem clausula TO a politica nasce
+ * `TO public`, e `public` alcanca tambem o DONO das tabelas — de quem
+ * `eh_admin()` depende para ler `admins` por baixo da RLS. Foi assim que 0030
+ * descobriu, do jeito dificil.
+ *
+ * `FOR ALL` cobre SELECT junto, o que aqui e util e nao perigoso: e o que faz a
+ * admin enxergar a campanha agendada, a expirada e a arquivada, que a vitrine
+ * nao ve. As politicas permissivas se somam com OR.
+ */
+CREATE POLICY promocoes_admin_escreve ON canastra.promocoes
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY promocao_codigos_admin ON canastra.promocao_codigos
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY promocao_escopo_admin ON canastra.promocao_escopo
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY promocao_faixas_admin ON canastra.promocao_faixas
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY promocao_frete_admin ON canastra.promocao_frete
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+/**
+ * `promocao_codigos` NAO TEM POLITICA PUBLICA, e a ausencia e o ponto: a lista
+ * de codigos e o mapa de descontos da loja, e um GET nela entregaria os 500
+ * codigos de influenciador de uma vez. Alem de nao ter GRANT para `anon`, ela
+ * nao tem politica que alcance quem nao e admin — as duas camadas negam, como em
+ * `cupons` (0010:86).
+ *
+ * `promocao_frete` idem: sem leitor publico hoje, sem politica publica.
+ */
+
+/**
+ * `promocao_resgates` — leitura so da admin.
+ *
+ * NEM O PROPRIO CLIENTE LE OS SEUS: ali mora `documento_hash`, e devolver ao
+ * navegador um dado derivado do CPF seria dar de volta um dado pessoal que nao
+ * precisa sair do servidor. O que o cliente tem direito de ver — quanto foi
+ * descontado e por que — esta em `pedido_ajustes_desconto`, sem vinculo com
+ * documento nenhum.
+ */
+CREATE POLICY promocao_resgates_admin_le ON canastra.promocao_resgates
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+/**
+ * `pedido_ajustes_desconto` — o dono do pedido e a admin.
+ *
+ * "Por que este pedido saiu por R$ 137,40?" e uma pergunta que o CLIENTE faz, na
+ * pagina do proprio pedido. `eh_cliente() AND` na frente e a Regra 2 de 0006: a
+ * igualdade prova que a pessoa e dona daquela linha, mas nao cobre o caminho
+ * para VIRAR dona de uma — e esta tabela nao tem chave estrangeira para
+ * `clientes`, a ligacao passa por `pedidos`.
+ *
+ * O MESMO ACOPLAMENTO DO ESCOPO, e vale repetir porque o modo de falha e mudo: o
+ * EXISTS roda como o invocador e enxerga so os pedidos que `pedidos_dono_le`
+ * mostra. Se aquela politica for estreitada, esta tela esvazia sem erro.
+ *
+ * A politica da admin vai SEPARADA pelo motivo que 0006:530 registrou para
+ * `pedidos`: a chave e `ON DELETE SET NULL`, entao o pedido de um cliente
+ * apagado fica com `user_id IS NULL`, e contra ele a igualdade avalia NULL. O
+ * historico do painel nao pode sumir junto.
+ */
+CREATE POLICY pedido_ajustes_dono_le ON canastra.pedido_ajustes_desconto
+  FOR SELECT TO authenticated
+  USING (
+    canastra.eh_cliente()
+    AND EXISTS (
+      SELECT 1 FROM canastra.pedidos p
+      WHERE p.pedido_id = pedido_ajustes_desconto.pedido_id
+        AND p.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY pedido_ajustes_admin_le ON canastra.pedido_ajustes_desconto
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0032_motor_de_promocao')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0033_marketing
+-- ----------------------------------------------------------------------------
+
+-- Marketing: de onde veio cada venda, quanto custou, quem consentiu, o que foi
+-- enviado e o que dispara sozinho.
+--
+-- O ITEM MAIS URGENTE DA SPEC, E O UNICO IRREVERSIVEL. As dez colunas de
+-- atribuicao em `pedidos` sao dez colunas e uma tarde; o que nao existe e o
+-- CAMINHO DE VOLTA. Nenhum relatorio reconstroi depois de onde veio um pedido de
+-- tres meses atras: o Mercado Pago guarda o pagamento e nao a origem, e o Bling
+-- guarda a nota e nao a origem. Cada dia sem estas colunas e um dia de venda que
+-- nunca mais tera resposta para "o anuncio pagou?".
+--
+-- ESTA MIGRACAO NAO ENVIA NADA. A Onda 4 e quem escreve o disparador, o
+-- descadastro por link e a tela de campanha. O criterio de pronto aqui e o mesmo
+-- de 0032: o banco ACEITA E RECUSA as coisas certas.
+--
+-- ---------------------------------------------------------------------------
+-- A DECISAO DE LGPD: `gclid` E `fbclid` ENTRAM NA REDACAO. `utm_*` NAO.
+-- ---------------------------------------------------------------------------
+--
+-- As migracoes 0013 e 0016 criaram a redacao de dado pessoal desta loja
+-- (`canastra.redigir_dados_do_titular`, `canastra.redigir_endereco`). A pergunta
+-- que esta migracao tinha de responder e se as colunas novas entram nela. A
+-- resposta e SIM para duas delas, e o criterio e o mesmo que 0013 usou para
+-- decidir que cidade e UF FICAM e o resto do endereco SAI: a coluna identifica
+-- uma PESSOA, ou descreve a VENDA?
+--
+--   SAI   `gclid` e `fbclid` — sao identificadores de CLIQUE. O Google e a Meta
+--         resolvem os dois para o perfil de uma pessoa (e o proposito deles: e
+--         assim que a conversao volta para a plataforma). Guardados aqui, ao
+--         lado do nome, do CPF e do endereco do mesmo pedido, sao mais uma copia
+--         de dado pessoal — exatamente a categoria que o cabecalho de 0013 nomeia
+--         ao explicar por que "apagar o cliente" nunca foi apagar os dados da
+--         pessoa. Depois de um pedido de exclusao (art. 18, IV/VI), um gclid
+--         sobrevivente continuaria ligando aquele pedido a uma pessoa por uma
+--         chave que a loja nem controla.
+--
+--   SAI   a QUERY STRING de `referrer` e `landing_page`, e esta e a parte que se
+--         esquece: a landing page de um anuncio carrega o MESMO gclid por
+--         construcao (`/cafes?utm_source=google&gclid=Cj0KAQ`). Redigir a coluna
+--         `gclid` e deixar o identificador na URL ao lado seria teatro de
+--         redacao. Sai tudo depois do primeiro `?` ou `#`; o esquema, o host e o
+--         caminho ficam, que e o equivalente do "prefixo do CEP" de 0013 —
+--         estatistica de origem, nunca a porta da casa.
+--
+--   FICA  `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`
+--         e `canal`. Descrevem a CAMPANHA, nao a pessoa: 'google/cpc/blackfriday26'
+--         e o mesmo valor para as mil pessoas que clicaram no mesmo anuncio, e
+--         nao identifica nenhuma delas nem em conjunto com as outras colunas do
+--         pedido redigido. Sao a estatistica de venda que 0005 preserva de
+--         proposito, pelo mesmo argumento de "total, status e itens de produto
+--         ficam". Apaga-las destruiria o unico registro de origem da venda sem
+--         proteger ninguem.
+--
+--   SAI   `envios.destinatario_final`, pelo motivo direto: e o e-mail ou o
+--         telefone da pessoa, congelado. A linha FICA (quantos envios, quantos
+--         entregues, quantos falharam continua sendo estatistica), o endereco
+--         vira '[redigido]'. Criar aqui uma fotografia de dado pessoal que a
+--         redacao nao alcancasse seria repetir, na mesma casa, o achado que a
+--         0016 existiu para fechar.
+--
+-- O QUE **NAO** ENTRA NA REDACAO, E ISSO E DECISAO E NAO ESQUECIMENTO:
+-- `consentimentos`. Ela e a PROVA do opt-in, e a LGPD poe o onus dessa prova no
+-- controlador (art. 8º, §2º). Apagar o e-mail da linha de consentimento e apagar
+-- a resposta para "com que direito voces mandaram aquela mensagem em marco?" —
+-- inclusive a favor da propria pessoa. Manter o endereco para sempre depois de
+-- uma exclusao tambem nao se defende. As duas leituras sao legitimas e a escolha
+-- depende de PRAZO DE RETENCAO, que e politica e nao DDL: fica registrada aqui
+-- como pendencia explicita para a onda que construir o fluxo de consentimento, e
+-- nao resolvida em silencio por um UPDATE escrito de passagem.
+--
+-- DIVIDA IRMA, REGISTRADA E NAO CONSERTADA (e codigo de aplicacao, fora do
+-- escopo desta onda): `src/routes/lgpd.routes.js` diz, no proprio cabecalho, que
+-- a lista de tabelas exportadas "e a lista de TODA tabela desta loja com dado da
+-- pessoa, e quem criar a proxima tem de voltar aqui". `consentimentos` e `envios`
+-- nascem fora dela, e a exportacao de `pedidos` nao projeta as colunas novas.
+-- Quem for ligar o marketing precisa fechar isso no mesmo passo.
+--
+-- ---------------------------------------------------------------------------
+-- RISCO REGISTRADO, NAO RESOLVIDO: a worktree `whatsapp-bot`
+-- ---------------------------------------------------------------------------
+--
+-- Aquela branch ja tem `canastra.whatsapp_mensagens`, com forma parecida com
+-- `envios`, e colunas de opt-in de WhatsApp em `canastra.clientes`. Esta migracao
+-- NAO recria nada disso e nao toca em `clientes`. Se aquela branch entrar, as
+-- duas estruturas vao existir ao mesmo tempo e a reconciliacao (fundir o log de
+-- WhatsApp em `envios`, e o opt-in de `clientes` em `consentimentos`) e uma
+-- migracao propria, posterior — nao um `IF NOT EXISTS` esperto aqui, que
+-- esconderia a divergencia em vez de resolve-la.
+--
+-- ---------------------------------------------------------------------------
+-- POR QUE 0033. A faixa 0017-0029 continua reservada pelo motivo que 0030, 0031
+-- e 0032 registraram: `0017` esta triplamente disputado fora daqui (a worktree
+-- `melhor-envio` tem um `0017_melhor_envio.sql`, a `whatsapp-bot` vai de `0017` a
+-- `0021`), o runner (`db/migrar.js`) ABORTA em numero repetido, e a chave em
+-- `canastra.migracoes` e o NOME COMPLETO do arquivo — migracao ja aplicada nunca
+-- e renomeada.
+
+/* ------------------------------------------------------------------------- *
+ * 1. `pedidos` — a atribuicao, e o que ela nunca pode fazer
+ * ------------------------------------------------------------------------- */
+
+/**
+ * DEZ COLUNAS DE TEXTO, NULAVEIS, SEM UM UNICO CHECK — e a ausencia dos CHECKs e
+ * a decisao, nao a preguica.
+ *
+ * Todo o resto deste schema fecha vocabulario com CHECK, e 0032 e um arquivo
+ * inteiro defendendo isso. Aqui a regra se inverte por um motivo que vale mais
+ * que a consistencia: quem escreve estas colunas e o INSERT do checkout, na
+ * mesma transacao que reserva estoque e cria a venda. Um CHECK que recusasse um
+ * `utm_source` esquisito — maiusculo, com acento, com 300 caracteres, vindo de
+ * um encurtador que ninguem previu — nao produziria um relatorio melhor:
+ * produziria um PEDIDO PERDIDO, com o cliente ja no cartao. Atribuicao e enfeite
+ * em cima de um pagamento, e enfeite nao derruba a casa.
+ *
+ * O QUE ELAS GUARDAM E O QUE CHEGOU, cru. A normalizacao (minusculo, aparar
+ * espaco, cortar tamanho) e trabalho de quem ESCREVE, na Onda 4, e por isso ela
+ * esta escrita tambem no comentario de `campanhas.utm_campaign` la embaixo — que
+ * e o lado onde o CHECK cabe, porque la quem digita e a gestora e o custo de
+ * recusar e uma mensagem de erro numa tela, nao uma venda.
+ *
+ * E NAO HA CHAVE ESTRANGEIRA de `pedidos.utm_campaign` para `campanhas`, pelo
+ * mesmo motivo elevado ao quadrado: um pedido chegando com o utm de uma campanha
+ * que ninguem cadastrou seria RECUSADO no checkout. O relatorio junta as duas por
+ * igualdade de texto e mostra "sem campanha cadastrada" quando nao casa — que e o
+ * desfecho certo.
+ *
+ * `canal` e a origem em UMA palavra ('pago', 'organico', 'direto', 'indicacao'),
+ * que e a coluna que a tela de pedidos mostra sem obrigar ninguem a ler cinco
+ * utms. Tambem texto livre, e pelo mesmo motivo dos outros nove.
+ */
+ALTER TABLE canastra.pedidos
+  ADD COLUMN utm_source   text,
+  ADD COLUMN utm_medium   text,
+  ADD COLUMN utm_campaign text,
+  ADD COLUMN utm_content  text,
+  ADD COLUMN utm_term     text,
+  ADD COLUMN canal        text,
+  ADD COLUMN referrer     text,
+  ADD COLUMN landing_page text,
+  -- Os dois identificadores de clique. Ver a decisao de LGPD no cabecalho: sao
+  -- as unicas duas colunas deste bloco que a redacao do titular apaga.
+  ADD COLUMN gclid  text,
+  ADD COLUMN fbclid text;
+
+-- O relatorio de campanha e "as vendas desta campanha, no periodo". Parcial
+-- porque a maior parte da tabela — todo pedido que veio de gente digitando o
+-- endereco da loja — tem `utm_campaign` nulo, e nao ha pergunta que passe por
+-- ali.
+CREATE INDEX pedidos_atribuicao_idx
+  ON canastra.pedidos (utm_campaign, criado_em DESC)
+  WHERE utm_campaign IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 2. `campanhas` — sem custo de midia o relatorio e vaidade
+ * ------------------------------------------------------------------------- */
+
+CREATE TABLE canastra.campanhas (
+  id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome text NOT NULL,
+
+  -- ATENCAO: `canal` AQUI NAO E O `canal` DE `envios` NEM O DE `consentimentos`,
+  -- e os tres tem o mesmo nome. Aqui e ONDE O DINHEIRO FOI GASTO (a plataforma
+  -- de midia); la e COMO A MENSAGEM ALCANCA A PESSOA (a caixa de entrada). Uma
+  -- campanha de 'google' manda e-mail; um envio de 'email' pertence a ela. Trocar
+  -- os dois produz um relatorio que soma laranja com maca, e nenhum CHECK pega
+  -- isso porque as duas listas sao validas nos seus lugares.
+  canal text NOT NULL
+          CONSTRAINT campanhas_canal_valido
+            CHECK (canal IN ('google', 'meta', 'email', 'whatsapp', 'sms',
+                             'organico', 'influenciador', 'outro')),
+
+  -- A CHAVE QUE AMARRA A ATRIBUICAO, e o CHECK aqui e a metade que cabe no
+  -- banco. `pedidos.utm_campaign` guarda o que chegou, cru, porque recusar la
+  -- seria perder a venda; a juncao entre os dois e por IGUALDADE DE TEXTO, e
+  -- 'BlackFriday' nunca casa com 'blackfriday'. E a mesma familia do bug de CEP
+  -- que esta loja ja teve (commit 7fe8d36), com o mesmo desfecho: metade das
+  -- vendas fora do relatorio, sem erro nenhum.
+  --
+  -- Entao o lado CADASTRADO — onde quem digita e a gestora e o custo de recusar e
+  -- uma mensagem numa tela — so aceita a forma canonica: minuscula, sem espaco em
+  -- branco. Quem escrever o formulario da Onda 4 normaliza antes de salvar, e o
+  -- CHECK e o que faz "esqueci de normalizar" ERRAR em vez de vazar uma campanha
+  -- que nunca casa com pedido nenhum.
+  --
+  -- Nulavel: campanha de radio, de feira ou de embalagem nao tem utm. O indice
+  -- unico e PARCIAL por isso — ver abaixo.
+  utm_campaign text
+    CONSTRAINT campanhas_utm_canonico
+      CHECK (utm_campaign IS NULL
+             OR (utm_campaign = lower(utm_campaign)
+                 AND utm_campaign !~ '\s'
+                 AND length(utm_campaign) BETWEEN 1 AND 120)),
+
+  -- O CUSTO DE MIDIA NAO E OPCIONAL COMO IDEIA, so como valor: sem ele nao ha
+  -- como saber se a campanha deu lucro, e o "relatorio" vira uma lista de vendas
+  -- que a loja teria feito de qualquer jeito. Em centavos e inteiro, pela regra
+  -- de 0009/0010 — numeric na fronteira do "deu lucro?" convida aritmetica de
+  -- ponto flutuante exatamente onde ela custa caro.
+  --
+  -- ZERO E PERMITIDO e negativo nao: campanha organica custou zero de midia, e
+  -- isso e um fato; custo negativo e um sinal trocado que viraria margem
+  -- inventada no relatorio.
+  custo_centavos integer NOT NULL DEFAULT 0
+    CONSTRAINT campanhas_custo_nao_negativo CHECK (custo_centavos >= 0),
+
+  inicio_em timestamptz,
+  fim_em    timestamptz,
+  -- A mesma unica combinacao impossivel de 0032: campanha que termina antes de
+  -- comecar. NULL continua querendo dizer "sem limite deste lado".
+  CONSTRAINT campanhas_janela_coerente
+    CHECK (inicio_em IS NULL OR fim_em IS NULL OR inicio_em < fim_em),
+
+  ativa boolean NOT NULL DEFAULT true,
+
+  criada_em     timestamptz NOT NULL DEFAULT now(),
+  -- Mantida por quem escreve, como em 0004/0005/0010/0032: nao ha trigger de
+  -- moddatetime neste schema.
+  atualizada_em timestamptz NOT NULL DEFAULT now()
+);
+
+-- PARCIAL, no molde de `produtos_sku_idx` (0003): duas campanhas SEM utm podem
+-- existir (radio e feira nao tem utm), duas com o mesmo utm nao — seriam dois
+-- donos para a mesma origem de venda, e o relatorio teria de escolher um.
+--
+-- O TROCO DE SER PARCIAL, que morde quem escrever o upsert da Onda 4: um
+-- `ON CONFLICT (utm_campaign)` NAO infere um indice parcial. Ou se repete a
+-- clausula (`ON CONFLICT (utm_campaign) WHERE utm_campaign IS NOT NULL`), ou o
+-- comando falha com 42P10. `produtos_sku_idx` tem exatamente a mesma forma e a
+-- mesma pegadinha.
+CREATE UNIQUE INDEX campanhas_utm_idx
+  ON canastra.campanhas (utm_campaign)
+  WHERE utm_campaign IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 3. `consentimentos` — um ESTADO COM PROCEDENCIA, nunca um booleano
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O QUE UM BOOLEANO NAO RESPONDE, e e por isso que esta tabela nao e uma coluna
+ * em `clientes`:
+ *
+ *   · DE ONDE veio o "sim" (rodape, pop-up, checkout, atendimento)? E a
+ *     procedencia que PROVA o consentimento depois — sem ela, "a pessoa aceitou"
+ *     e a palavra da loja contra a da pessoa;
+ *   · QUANDO? Consentimento tem data, e uma politica de privacidade que mudou
+ *     depois nao se aplica retroativamente ao que foi aceito antes;
+ *   · O QUE exatamente foi aceito (`texto_aceito`)? O texto muda; o que a pessoa
+ *     leu naquele dia, nao;
+ *   · e o HISTORICO: revogar nao apaga o "sim" anterior, ACRESCENTA um "nao". Um
+ *     booleano sobrescrito perde a prova de que o envio de marco era legitimo.
+ *
+ * Por isso a tabela e APPEND-ONLY por desenho: o estado atual de um canal e a
+ * linha mais recente daquele contato, e nunca um UPDATE. O indice abaixo existe
+ * para essa pergunta.
+ *
+ * E ELE NUNCA NASCE PRE-MARCADO, em nenhuma regiao — isso e regra de tela e nao
+ * de schema, mas fica escrito aqui porque e aqui que se vai procurar.
+ */
+CREATE TABLE canastra.consentimentos (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- SET NULL e nao CASCADE, pela armadilha de 0005 que 0032 tambem herdou: o
+  -- Postgres ACEITA declarar SET NULL numa coluna NOT NULL e so estoura no
+  -- DELETE do cliente, com 23502, deixando a exclusao de dados pessoais
+  -- impossivel justamente no dia do primeiro pedido de exclusao.
+  --
+  -- E CASCADE seria pior de outro jeito: apagaria a prova de que a mensagem ja
+  -- enviada era autorizada, exatamente quando ela passa a ser necessaria.
+  user_id uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
+
+  -- Nulaveis os dois, e a tabela e por CONTATO e nao por conta: quem se inscreve
+  -- no rodape nao tem cadastro, e o consentimento dela vale igual.
+  email    text,
+  telefone text,
+
+  -- COMO A MENSAGEM ALCANCA A PESSOA. Nao confundir com `campanhas.canal`, que e
+  -- onde o dinheiro foi gasto — ver o comentario la.
+  canal text NOT NULL
+          CONSTRAINT consentimentos_canal_valido
+            CHECK (canal IN ('email', 'whatsapp', 'sms')),
+
+  -- Duas palavras, e nao um booleano, pelo motivo do cabecalho: a revogacao e
+  -- uma LINHA NOVA. Um terceiro valor ('pendente' para o double opt-in) seria
+  -- tentador e esta de fora de proposito — quem ainda nao confirmou nao consentiu,
+  -- e o lugar do "quase" e `newsletter_inscritos.confirmado_em`.
+  estado text NOT NULL
+           CONSTRAINT consentimentos_estado_valido
+             CHECK (estado IN ('concedido', 'revogado')),
+
+  -- NOT NULL E O CORACAO DA TABELA. Consentimento sem procedencia e um booleano
+  -- com mais passos.
+  origem text NOT NULL
+           CONSTRAINT consentimentos_origem_preenchida
+             CHECK (btrim(origem) <> ''),
+
+  -- O texto que a pessoa leu naquele dia. Nulavel porque um consentimento
+  -- importado de outro sistema pode nao ter, e mentir um texto seria pior.
+  texto_aceito text,
+
+  -- `inet` e nao `text`: o tipo valida sozinho, ocupa menos e permite consultar
+  -- por faixa. E dado pessoal — ver a decisao de retencao no cabecalho.
+  ip inet,
+
+  criado_em timestamptz NOT NULL DEFAULT now(),
+
+  -- UM CONSENTIMENTO QUE NAO IDENTIFICA NINGUEM NAO PROVA NADA SOBRE NINGUEM.
+  -- Sem este CHECK, um formulario com o campo errado gravaria linhas validas,
+  -- crescentes e inuteis — e a descoberta seria no dia da auditoria.
+  CONSTRAINT consentimentos_identifica_alguem CHECK (
+    user_id IS NOT NULL
+    OR nullif(btrim(email), '') IS NOT NULL
+    OR nullif(btrim(telefone), '') IS NOT NULL
+  )
+);
+
+-- "ESTA PESSOA CONSENTE COM ESTE CANAL, AGORA?" — a unica pergunta quente da
+-- tabela, e a resposta e a linha mais recente. `lower(email)` porque
+-- 'Bea@Ex.com' e 'bea@ex.com' sao a mesma caixa postal (a mesma normalizacao que
+-- `newsletter.routes.js` ja faz), e um indice sensivel a caixa deixaria o
+-- descadastro de uma nao alcancar a outra.
+CREATE INDEX consentimentos_email_idx
+  ON canastra.consentimentos (canal, lower(email), criado_em DESC)
+  WHERE email IS NOT NULL;
+
+CREATE INDEX consentimentos_titular_idx
+  ON canastra.consentimentos (canal, user_id, criado_em DESC)
+  WHERE user_id IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 4. `envios` — o log por destinatario, agnostico de canal
+ * ------------------------------------------------------------------------- */
+
+/**
+ * AGNOSTICO DE CANAL DE PROPOSITO. Um log por canal (um para e-mail, outro para
+ * WhatsApp) da dois relatorios que nunca somam, e a pergunta real e "quantas
+ * mensagens esta campanha mandou, e quantas chegaram" — que atravessa os canais.
+ *
+ * E O QUE ELE PERMITE QUE HOJE NAO EXISTE: saber que um cliente recebeu tres
+ * lembretes da mesma sacola. Hoje o unico marcador e
+ * `carrinhos.lembrete_enviado_em` (0011), que e um booleano com data e responde
+ * so "ja lembrei?" — de proposito, e aquele comentario diz que "historico de
+ * campanhas e problema de outra tarefa". Esta e a tarefa.
+ */
+CREATE TABLE canastra.envios (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  canal text NOT NULL
+          CONSTRAINT envios_canal_valido
+            CHECK (canal IN ('email', 'whatsapp', 'sms')),
+
+  -- RESTRICT, como `promocao_resgates.promocao_id` em 0032 e pelo mesmo
+  -- argumento: o envio e registro do que aconteceu, nao parte da regra. Apagar
+  -- uma campanha que ja mandou mensagem deixaria o log orfao e o relatorio dela
+  -- passaria a mentir por omissao. A recusa e 23503, alta. Campanha que nunca
+  -- enviou nada continua removivel — e mesmo essa so pelo servico, ver o REVOKE.
+  campanha_id uuid REFERENCES canastra.campanhas (id) ON DELETE RESTRICT,
+
+  user_id uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
+
+  -- O ENDERECO PARA ONDE A MENSAGEM FOI, CONGELADO. NOT NULL porque um envio sem
+  -- destinatario nao e um envio. E dado pessoal: e a coluna que a redacao do
+  -- titular troca por '[redigido]' (ver o cabecalho) — a linha fica, a
+  -- estatistica fica, o endereco sai.
+  destinatario_final text NOT NULL,
+
+  template text,
+
+  estado text NOT NULL DEFAULT 'pendente'
+           CONSTRAINT envios_estado_valido
+             CHECK (estado IN ('pendente', 'enviado', 'entregue', 'lido', 'falhou')),
+
+  -- O id que o provedor devolveu (Resend, a API de WhatsApp). E a chave para
+  -- casar o webhook de status com a linha certa.
+  provedor_id text,
+
+  erro_texto text,
+  -- Texto de erro num envio que deu certo e um dado que contradiz o proprio
+  -- estado — normalmente uma linha reaproveitada por um retry escrito as
+  -- pressas. O CHECK impede a contradicao de existir.
+  CONSTRAINT envios_erro_so_em_falha
+    CHECK (erro_texto IS NULL OR estado = 'falhou'),
+
+  criado_em   timestamptz NOT NULL DEFAULT now(),
+  enviado_em  timestamptz,
+  entregue_em timestamptz,
+  -- Entregue sem ter sido enviado nao e um estado do mundo, e a ordem entre as
+  -- duas datas e o que sustenta qualquer conta de tempo de entrega.
+  CONSTRAINT envios_entrega_depois_do_envio
+    CHECK (entregue_em IS NULL
+           OR (enviado_em IS NOT NULL AND entregue_em >= enviado_em))
+);
+
+-- A REENTREGA DE WEBHOOK GRAVANDO DUAS VEZES E A FALHA CONHECIDA DESTA CASA: o
+-- Mercado Pago reenvia notificacao POR DESENHO (os indices parciais de
+-- idempotencia de 0005 e o UNIQUE de `promocao_resgates` em 0032 existem por
+-- isso), e provedor de e-mail faz igual. Sem esta chave, um retry do provedor
+-- viraria dois envios no relatorio onde houve um.
+--
+-- Por (canal, provedor_id) e nao por `provedor_id` sozinho: o id e unico DENTRO
+-- do provedor, e nada impede a API de WhatsApp e a de e-mail escolherem a mesma
+-- string algum dia.
+CREATE UNIQUE INDEX envios_provedor_idx
+  ON canastra.envios (canal, provedor_id)
+  WHERE provedor_id IS NOT NULL;
+
+CREATE INDEX envios_campanha_idx
+  ON canastra.envios (campanha_id, estado)
+  WHERE campanha_id IS NOT NULL;
+
+CREATE INDEX envios_titular_idx
+  ON canastra.envios (user_id, criado_em DESC)
+  WHERE user_id IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 5. `automacoes` — gatilho, espera, condicao, acao
+ * ------------------------------------------------------------------------- */
+
+CREATE TABLE canastra.automacoes (
+  id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome text NOT NULL,
+
+  -- VOCABULARIO FECHADO, E CADA VALOR APONTA PARA UM EVENTO QUE A LOJA
+  -- REALMENTE PRODUZ HOJE — nao para uma lista de desejos:
+  --   carrinho_abandonado ... o job de `src/jobs/carrinhoAbandonado.js`;
+  --   pedido_aprovado / enviado / entregue ... tres dos nove status que o CHECK
+  --                          `pedidos_status_valido` (0009) admite;
+  --   cliente_novo .......... `canastra.garantir_cliente` (0008);
+  --   newsletter_confirmada . o `confirmado_em` que esta migracao cria;
+  --   assinatura_criada / cancelada ... o Clube (0015).
+  --
+  -- Um gatilho fora da lista nao seria uma automacao nova: seria uma automacao
+  -- que NENHUM caminho do disparador encontra, salva com sucesso e inerte para
+  -- sempre — o mesmo modo de falha da promocao legada sem datas, que 0032 existiu
+  -- para nao repetir. Gatilho novo e uma migracao, junto do codigo que o emite.
+  gatilho text NOT NULL
+            CONSTRAINT automacoes_gatilho_valido
+              CHECK (gatilho IN ('carrinho_abandonado', 'pedido_aprovado',
+                                 'pedido_enviado', 'pedido_entregue',
+                                 'cliente_novo', 'newsletter_confirmada',
+                                 'assinatura_criada', 'assinatura_cancelada')),
+
+  -- Zero = dispara junto com o evento. Negativo seria "mande antes do que
+  -- aconteceu", que o disparador teria de interpretar de alguma forma.
+  espera_minutos integer NOT NULL DEFAULT 0
+    CONSTRAINT automacoes_espera_nao_negativa CHECK (espera_minutos >= 0),
+
+  -- CONDICAO EM JSONB, E AQUI O JSONB E A ESCOLHA CERTA — ao contrario de
+  -- `promocao_faixas`, que 0032 tirou de um jsonb solto de proposito. A diferenca
+  -- e quem valida: la o banco consegue checar quantidade e percentual com CHECK,
+  -- aqui a condicao e uma arvore aberta ("subtotal > 150 E categoria = cafe") que
+  -- nenhum CHECK descreve sem virar uma linguagem. O que o banco garante e a
+  -- FORMA: objeto, nunca escalar nem lista.
+  --
+  -- Nulavel: automacao sem condicao dispara para todo evento do gatilho, que e o
+  -- caso mais comum.
+  condicao jsonb
+    CONSTRAINT automacoes_condicao_e_objeto
+      CHECK (condicao IS NULL OR jsonb_typeof(condicao) = 'object'),
+
+  -- A ACAO E OBRIGATORIA: automacao sem acao e um gatilho que nao faz nada, e
+  -- ela ficaria na tela parecendo que faz.
+  acao jsonb NOT NULL
+         CONSTRAINT automacoes_acao_e_objeto
+           CHECK (jsonb_typeof(acao) = 'object'),
+
+  -- NASCE DESLIGADA, e este default e o contrario do de `promocoes.habilitada`
+  -- (0032), de proposito. Uma promocao salva desconta dinheiro da propria loja;
+  -- uma automacao salva MANDA MENSAGEM PARA CLIENTE DE VERDADE, e mensagem
+  -- enviada nao volta. Entre "o gestor esqueceu de ligar" e "o gestor descobriu
+  -- que ligou ao ver a reclamacao", o primeiro e o erro barato.
+  ativa boolean NOT NULL DEFAULT false,
+
+  criada_em     timestamptz NOT NULL DEFAULT now(),
+  atualizada_em timestamptz NOT NULL DEFAULT now()
+);
+
+-- O disparador pergunta "o que roda neste evento?" a cada evento. Parcial: as
+-- desligadas nunca sao resposta, e sao elas que se acumulam com o tempo.
+CREATE INDEX automacoes_gatilho_idx
+  ON canastra.automacoes (gatilho)
+  WHERE ativa;
+
+/* ------------------------------------------------------------------------- *
+ * 6. `newsletter_inscritos` — a saida da lista
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A CORRECAO DE UM FATO, porque a spec o descreve desatualizado: sair da lista
+ * JA e possivel hoje — `POST /newsletter/descadastrar` existe
+ * (`src/routes/newsletter.routes.js`) e apaga a inscricao por e-mail. O que NAO
+ * existe e o que estas colunas trazem, e o proprio cabecalho daquela rota escreve
+ * a pendencia com todas as letras: "o padrao de mercado e descadastro por LINK
+ * ASSINADO no rodape de cada campanha (...) e o remedio e o MESMO trabalho: a
+ * tarefa que ligar campanha tem de fazer double opt-in COM link assinado de
+ * descadastro em todo envio — e e la que o token nasce". E aqui.
+ *
+ * O QUE MUDA COM AS TRES COLUNAS:
+ *
+ *   `token_descadastro` ... o link do rodape passa a valer para UMA inscricao. A
+ *       rota de hoje aceita qualquer e-mail de qualquer pessoa — um script
+ *       descadastra a lista inteira de quem ele conheca o endereco. Com token,
+ *       so quem RECEBEU a mensagem sai.
+ *   `optout_em` ........... a saida deixa de ser um DELETE. Apagar a linha perde
+ *       a informacao de que aquele endereco PEDIU para nao receber mais, e o
+ *       proximo import da mesma lista o reinscreve — a forma mais comum de
+ *       reincidencia de spam que existe. Uma lista de saida e uma lista de
+ *       supressao, e ela so funciona se guardar quem saiu.
+ *   `confirmado_em` ....... o double opt-in. Hoje a inscricao e single opt-in (a
+ *       Onda 2 assumiu isso por escrito), o que quer dizer que qualquer pessoa
+ *       inscreve o e-mail de terceiro.
+ *
+ * A ROTA DE HOJE CONTINUA APAGANDO A LINHA, e isso e proposital: trocar o DELETE
+ * por `optout_em` e mudanca de CODIGO, e esta onda e so schema. Enquanto a Onda 4
+ * nao trocar, `optout_em` fica nulo em todas as linhas — e essa e a diferenca
+ * entre uma coluna vazia e uma coluna mentindo.
+ */
+ALTER TABLE canastra.newsletter_inscritos
+  ADD COLUMN confirmado_em timestamptz,
+  ADD COLUMN optout_em     timestamptz,
+  -- O CHECK NAO GARANTE ALEATORIEDADE — nada no banco garante —, ele garante que
+  -- o token nao seja CURTO. E a diferenca pratica: 32 caracteres do alfabeto
+  -- URL-safe sao ~190 bits se sorteados, e um `Math.random()` de seis digitos
+  -- escrito com pressa ERRA aqui, no INSERT, em vez de virar um link que qualquer
+  -- um adivinha e usa para descadastrar terceiro. O teto de 128 existe para o
+  -- token caber numa URL de e-mail sem ser quebrado por cliente de e-mail antigo.
+  ADD COLUMN token_descadastro text
+    CONSTRAINT newsletter_token_formato
+      CHECK (token_descadastro IS NULL
+             OR token_descadastro ~ '^[A-Za-z0-9_-]{32,128}$');
+
+-- PARCIAL pelo motivo de sempre (`produtos_sku_idx`, 0003): NULL nao colide com
+-- NULL num indice unico do Postgres, entao a diferenca pratica e so o tamanho do
+-- indice — mas a mesma pegadinha do `ON CONFLICT` vale, e a linha explicita e o
+-- que faz a decisao aparecer.
+CREATE UNIQUE INDEX newsletter_token_idx
+  ON canastra.newsletter_inscritos (token_descadastro)
+  WHERE token_descadastro IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 7. `carrinhos.token_retomada` — metade do e-mail de sacola abandonada
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A OUTRA METADE JA EXISTE: `src/jobs/carrinhoAbandonado.js` acha a sacola parada
+ * e `carrinhos.lembrete_enviado_em` (0011) garante um lembrete por episodio. O
+ * que falta e o LINK devolver a pessoa ao carrinho CHEIO — e um link de e-mail
+ * nao carrega sessao.
+ *
+ * QUEM SORTEIA E O SERVICO, e o token e uma credencial ao portador: quem tem o
+ * link tem a sacola daquela pessoa. Por isso o CHECK de tamanho — o mesmo
+ * argumento de `token_descadastro`, e aqui vale mais, porque a sacola tem nome de
+ * produto e o carrinho leva ao checkout.
+ *
+ * O QUE ESTA COLUNA **NAO** MUDA, e vale escrever porque parece que muda: o dono
+ * continua sendo o unico que ve a propria linha (`carrinhos_dono`, 0006). Ele
+ * enxerga e reescreve o proprio token, e isso e inofensivo — reescrever o proprio
+ * token so invalida o proprio link. Tentar plantar o token de outra pessoa esbarra
+ * no indice unico com 23505; o oraculo que isso abre e teorico (confirmaria a
+ * existencia de um token que a pessoa ja teria de ter adivinhado inteiro), e o
+ * piso de 32 caracteres e o que o mantem teorico.
+ */
+ALTER TABLE canastra.carrinhos
+  ADD COLUMN token_retomada text
+    CONSTRAINT carrinhos_token_formato
+      CHECK (token_retomada IS NULL
+             OR token_retomada ~ '^[A-Za-z0-9_-]{32,128}$');
+
+CREATE UNIQUE INDEX carrinhos_token_retomada_idx
+  ON canastra.carrinhos (token_retomada)
+  WHERE token_retomada IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 8. A redacao de LGPD alcanca o que esta migracao criou
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Tira tudo depois do primeiro `?` ou `#` de uma URL.
+ *
+ * POR QUE UMA FUNCAO COM NOME, e nao a expressao inline: sao DOIS consumidores
+ * (`referrer` e `landing_page`) na mesma UPDATE, e o argumento de 0016 ao extrair
+ * `redigir_endereco` vale igual — duas copias divergem na primeira correcao.
+ *
+ * O QUE ELA PRESERVA e o que 0013 chama de estatistica: esquema, host e caminho
+ * ('https://cafecanastra.com/cafes') dizem de que pagina a venda saiu e nao
+ * identificam ninguem. O que ela tira e a query string, que e onde o `gclid`
+ * viaja por construcao, junto de qualquer coisa que uma plataforma de anuncio
+ * resolva ter pendurado ali amanha — e por isso o corte e por POSICAO (tudo
+ * depois do `?`) e nao por lista de parametros conhecidos: lista de parametros e
+ * denylist, e denylist envelhece.
+ *
+ * FORMAS QUE NAO SAO URL: o que nao tem `?` nem `#` volta inteiro, inclusive
+ * texto solto — `split_part` devolve a string toda quando o separador nao
+ * aparece. NULL vira NULL pelo STRICT, e string vazia continua vazia. Nenhuma
+ * delas derruba a redacao, que e o requisito que 0013 ja tinha ("formas
+ * inesperadas de endereço: nenhuma derruba a redação").
+ *
+ * IMMUTABLE de verdade: so olha o argumento. E idempotente por construcao —
+ * redigir o ja redigido nao acha `?` nenhum e devolve o mesmo texto.
+ */
+CREATE FUNCTION canastra.redigir_url(url text) RETURNS text
+  LANGUAGE sql
+  IMMUTABLE
+  STRICT
+  SET search_path = canastra, pg_temp
+AS $redigir_url$
+  SELECT split_part(split_part(url, '#', 1), '?', 1)
+$redigir_url$;
+
+-- Mesma higiene de 0013/0016: `proacl` nasce nulo (EXECUTE para PUBLIC), o
+-- REVOKE primeiro e a lista explicita depois deixam escrito quem chama.
+-- `service_role` entra pelo mesmo motivo de `redigir_endereco`: o SQL manual de
+-- orfaos do runbook.
+REVOKE EXECUTE ON FUNCTION canastra.redigir_url(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION canastra.redigir_url(text) TO service_role;
+
+/**
+ * A redacao do titular, versao com atribuicao.
+ *
+ * CREATE OR REPLACE sobre a assinatura EXATA de 0013/0016 — mesmo nome, mesmo
+ * parametro, mesmo retorno —, entao todo chamador existente (`conta.routes.js`,
+ * `lgpd.routes.js`) continua valendo, e o contrato do retorno nao muda: continua
+ * sendo a contagem de PEDIDOS redigidos.
+ *
+ * POR QUE UMA COPIA DO CORPO INTEIRO, e nao uma edicao de 0016: migracao
+ * aplicada nao se edita (regra da casa desde 0011), e ha o motivo tecnico que
+ * 0016 ja registrou — plpgsql resolve nomes na PRIMEIRA CHAMADA, entao a funcao
+ * de 0016 nao poderia citar colunas que so existem a partir daqui. Esta versao,
+ * escrita depois do ALTER TABLE la em cima, pode.
+ *
+ * O QUE MUDA EM RELACAO A 0016, e so isto:
+ *   · `gclid` e `fbclid` viram NULL;
+ *   · `referrer` e `landing_page` perdem a query string;
+ *   · `envios.destinatario_final` vira '[redigido]'.
+ * Pedidos (endereco e itens), assinaturas e avaliacoes seguem palavra por palavra
+ * como estavam — inclusive a denylist de itens, que continua sendo denylist pelo
+ * motivo de 0013 (whitelist congelaria a lista e apagaria o proximo campo de
+ * PRODUTO que o checkout gravasse, destruindo registro fiscal).
+ *
+ * CREATE OR REPLACE preserva a ACL (REVOKE PUBLIC + GRANT service_role) mas NAO
+ * preserva atributos declarados: SECURITY INVOKER (default), o `SET search_path`
+ * e o nao-STRICT sao re-declarados aqui de proposito, com as MESMAS razoes de
+ * 0013 — INVOKER porque quem chama ja tem o privilegio, nao-STRICT porque NULL
+ * tem de ser ERRO e nunca no-op silencioso no fluxo de exclusao de conta.
+ */
+CREATE OR REPLACE FUNCTION canastra.redigir_dados_do_titular(alvo_user_id uuid)
+  RETURNS integer
+  LANGUAGE plpgsql
+  SET search_path = canastra, pg_temp
+AS $redigir$
+DECLARE
+  pedidos_redigidos integer;
+BEGIN
+  -- Identico a 0013/0016: NULL e erro de contrato (22004), nunca "nenhum alvo" —
+  -- um no-op silencioso no fluxo de exclusao fabricaria o orfao irredigivel.
+  IF alvo_user_id IS NULL THEN
+    RAISE EXCEPTION 'A redação exige um titular: pedido órfão não tem redação por titular.'
+      USING ERRCODE = 'null_value_not_allowed',
+            HINT = 'Redija ANTES ou JUNTO da exclusão da conta — depois dela o vínculo já se foi.';
+  END IF;
+
+  UPDATE canastra.pedidos p
+     SET
+       endereco_json = CASE
+         WHEN p.endereco_json IS NULL THEN p.endereco_json
+         ELSE canastra.redigir_endereco(p.endereco_json)
+       END,
+       itens = CASE
+         WHEN p.itens IS NULL OR jsonb_typeof(p.itens) <> 'array'
+           THEN p.itens
+         ELSE (
+           SELECT COALESCE(
+             jsonb_agg(
+               CASE
+                 WHEN jsonb_typeof(item.valor) <> 'object' THEN item.valor
+                 ELSE (
+                   SELECT COALESCE(
+                     jsonb_object_agg(
+                       i.chave,
+                       CASE
+                         WHEN lower(i.chave) IN (
+                           'cpf', 'email', 'telefone', 'phone', 'celular',
+                           'nome_cliente', 'destinatario', 'endereco', 'address'
+                         ) THEN to_jsonb('[redigido]'::text)
+                         ELSE i.valor
+                       END
+                     ),
+                     '{}'::jsonb
+                   )
+                   FROM jsonb_each(item.valor) AS i(chave, valor)
+                 )
+               END
+               -- A ordem dos itens e parte do registro da venda.
+               ORDER BY item.ordem
+             ),
+             '[]'::jsonb
+           )
+           FROM jsonb_array_elements(p.itens) WITH ORDINALITY AS item(valor, ordem)
+         )
+       END,
+       -- A ATRIBUICAO, pelo criterio do cabecalho: identificador de clique sai,
+       -- campanha fica. As `utm_*` e `canal` nao aparecem nesta lista de
+       -- proposito — sao a estatistica de venda, o equivalente de cidade e UF em
+       -- 0013.
+       gclid  = NULL,
+       fbclid = NULL,
+       referrer     = canastra.redigir_url(p.referrer),
+       landing_page = canastra.redigir_url(p.landing_page),
+       redigido_em = now(),
+       -- Regra de 0005: sem trigger de moddatetime, quem escreve carimba.
+       atualizado_em = now()
+   WHERE p.user_id = alvo_user_id
+     AND p.redigido_em IS NULL;
+
+  GET DIAGNOSTICS pedidos_redigidos = ROW_COUNT;
+
+  -- ASSINATURAS — so as canceladas, pela decisao 1 de 0016 (enquanto a entrega
+  -- recorrente existe, o endereco congelado e necessario a execucao do contrato).
+  UPDATE canastra.assinaturas a
+     SET endereco_json = canastra.redigir_endereco(a.endereco_json),
+         redigido_em   = now(),
+         atualizado_em = now()
+   WHERE a.user_id = alvo_user_id
+     AND a.status = 'cancelada'
+     AND a.redigido_em IS NULL;
+
+  -- AVALIACOES — o nome publico sai; nota e texto ficam (decisao 2 de 0016).
+  UPDATE canastra.avaliacoes av
+     SET nome_exibicao = 'Cliente Canastra'
+   WHERE av.user_id = alvo_user_id
+     AND av.nome_exibicao <> 'Cliente Canastra';
+
+  /**
+   * ENVIOS — o endereco sai, a linha fica.
+   *
+   * Sem coluna de carimbo nova: a idempotencia E o predicado, como nas
+   * avaliacoes de 0016 — '[redigido]' nao e alvo de novo, e o segundo UPDATE nao
+   * acha linha. O carimbo de auditoria da redacao continua sendo
+   * `pedidos.redigido_em`, que e o que o endpoint do titular responde.
+   *
+   * LIMITE CONHECIDO, o mesmo dos pedidos orfaos de 0013: envio com `user_id`
+   * nulo — mensagem para quem nunca teve conta, ou linha que sobreviveu a um
+   * SET NULL — nao tem redacao por titular, porque o vinculo nao existe mais.
+   * Por isso a redacao acontece ANTES da exclusao da conta, e nao depois.
+   */
+  UPDATE canastra.envios e
+     SET destinatario_final = '[redigido]'
+   WHERE e.user_id = alvo_user_id
+     AND e.destinatario_final <> '[redigido]';
+
+  RETURN pedidos_redigidos;
+END;
+$redigir$;
+
+/* ------------------------------------------------------------------------- *
+ * 9. Privilegios
+ * ------------------------------------------------------------------------- */
+
+/**
+ * `anon` NAO RECEBE NADA AQUI, e as quatro ausencias sao a decisao.
+ *
+ * 0001 inverteu o padrao de proposito — tabela nova NAO nasce legivel por `anon`
+ * —, entao nao ha REVOKE a escrever: o que falta e o GRANT, e ele nao vem.
+ * Tabela a tabela:
+ *
+ *   `consentimentos` e `envios` .. carregam vinculo com pessoa (e-mail, telefone,
+ *       IP). A spec §3.10 as nomeia junto de `promocao_resgates` e `admin_log`.
+ *   `campanhas` .................. carrega o CUSTO DE MIDIA. E o calendario
+ *       comercial e o orcamento da loja num GET — o mesmo argumento que 0032 usou
+ *       para recusar `USING (true)` em `promocoes`, aqui com dinheiro dentro.
+ *   `automacoes` ................. a condicao e a acao descrevem as regras de
+ *       relacionamento da loja, e nenhuma vitrine precisa le-las.
+ *
+ * E as colunas de atribuicao de `pedidos` seguem a tabela: `anon` nunca teve
+ * GRANT nenhum ali, entao um `SELECT gclid FROM canastra.pedidos` como anonimo
+ * responde 42501 — medido em test/marketing.test.js.
+ */
+
+/**
+ * REDUNDANTE HOJE, ESCRITO ASSIM MESMO — o mesmo argumento de 0030:123 e
+ * 0032:877. O `ALTER DEFAULT PRIVILEGES` de 0001 ja da INSERT/UPDATE/DELETE a
+ * `authenticated` em toda tabela nova de `canastra`, mas aquele default so
+ * alcanca objeto criado pelo MESMO papel que rodou o ALTER. Uma destas tabelas
+ * recriada por outro caminho (psql com outro usuario, Supabase Studio, restore
+ * parcial) nasceria SEM privilegio de escrita, e o painel levaria 42501 com toda
+ * a RLS correta.
+ *
+ * SO AS DUAS TABELAS DE REGRA. `consentimentos` e `envios` sao registro do que ja
+ * aconteceu e ficam de fora — ver o REVOKE abaixo.
+ */
+GRANT INSERT, UPDATE, DELETE ON canastra.campanhas  TO authenticated;
+GRANT INSERT, UPDATE, DELETE ON canastra.automacoes TO authenticated;
+
+/**
+ * CAMPANHA NAO SE APAGA, E A TRAVA E DE PRIVILEGIO — o desenho de `promocoes` em
+ * 0032, pelo mesmo motivo elevado: aqui o que se perde no DELETE e o CUSTO DE
+ * MIDIA, que e a metade da conta de lucro e nao existe em lugar nenhum fora desta
+ * linha. Os pedidos guardam o `utm_campaign` em texto e sobrevivem; o quanto se
+ * gastou para consegui-los, nao.
+ *
+ * `envios.campanha_id` aponta para ca com RESTRICT, o que ja barraria as
+ * campanhas QUE JA ENVIARAM. Este REVOKE fecha tambem as que ainda nao enviaram —
+ * que sao justamente as que alguem apaga por engano ("essa nunca rodou, pode
+ * tirar"), e que ja podem ter custado dinheiro em anuncio.
+ *
+ * O caminho que existe e `ativa = false`. `automacoes` MANTEM o DELETE: apagar
+ * uma automacao e edicao de regra, e o que ela ja mandou esta em `envios`.
+ */
+REVOKE DELETE ON canastra.campanhas FROM authenticated;
+
+/**
+ * AS DUAS TABELAS DE REGISTRO SO O SERVICO ESCREVE. Nem cliente nem admin.
+ *
+ * E o mesmo desenho de `promocao_resgates` e `pedido_ajustes_desconto` em 0032, e
+ * a razao e a mesma com outro conteudo: consentimento e envio nascem no gesto que
+ * os produziu — a pessoa marcando a caixa, o provedor confirmando a entrega —,
+ * dentro da transacao do servico. Um consentimento inserido pelo painel seria a
+ * loja escrevendo, com a propria mao, a prova de que a pessoa autorizou. E um
+ * envio inserido a mao e um relatorio de entrega que nao veio de entrega nenhuma.
+ *
+ * `SELECT` NAO ENTRA NO REVOKE, de proposito: o painel LE os dois (a tela de
+ * marketing, o historico de mensagens de um cliente). Quem recorta a LINHA ali e
+ * a politica, que e o mecanismo certo para esse recorte — diferente do DELETE
+ * acima, que e operacao inteira.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.consentimentos FROM authenticated;
+REVOKE INSERT, UPDATE, DELETE ON canastra.envios         FROM authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * 10. RLS
+ * ------------------------------------------------------------------------- */
+
+ALTER TABLE canastra.campanhas      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.consentimentos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.envios         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canastra.automacoes     ENABLE ROW LEVEL SECURITY;
+
+/**
+ * NENHUMA POLITICA PUBLICA, EM NENHUMA DAS QUATRO. `test/rls.test.js` mantem a
+ * lista chumbada `PUBLICAS` — as relacoes onde um `FOR SELECT USING (true)` e
+ * aceito —, e acrescentar um nome ali e afirmar, no diff, que aquela relacao
+ * inteira pode ser lida por quem nao tem conta. Para estas quatro isso seria
+ * falso, entao esta migracao NAO acrescenta nome nenhum aquela lista — como 0032
+ * tambem nao acrescentou.
+ *
+ * O `TO authenticated` NAO E ENFEITE, e esta e a licao que 0030 descobriu do jeito
+ * dificil: sem clausula TO a politica nasce `TO public`, e `public` alcanca
+ * tambem o DONO das tabelas — de quem `eh_admin()` depende para ler `admins` por
+ * baixo da RLS.
+ *
+ * `FOR ALL` com `eh_admin()` cobre SELECT junto, o que aqui e util e nao
+ * perigoso: as politicas permissivas se somam com OR e nao ha nenhuma outra que
+ * alcance quem nao e admin.
+ */
+CREATE POLICY campanhas_admin ON canastra.campanhas
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+CREATE POLICY automacoes_admin ON canastra.automacoes
+  FOR ALL TO authenticated
+  USING (canastra.eh_admin())
+  WITH CHECK (canastra.eh_admin());
+
+/**
+ * `consentimentos` e `envios` — leitura so da admin, e SO leitura.
+ *
+ * `FOR SELECT` e nao `FOR ALL`, e a diferenca importa mesmo com o REVOKE de
+ * escrita ja no lugar: e a mesma disciplina de 0031 — o privilegio e a tranca de
+ * producao, a politica e a que aparece no diff. Uma politica `FOR ALL` aqui
+ * ficaria esperando o dia em que alguem devolvesse o GRANT de escrita "so para
+ * testar".
+ *
+ * NEM O PROPRIO CLIENTE LE OS SEUS, e a decisao e a de `promocao_resgates` em
+ * 0032: o direito de acesso do titular (art. 18, II) e servido pela rota de
+ * exportacao do Express, que roda como dono e monta a resposta inteira — nao por
+ * um SELECT do navegador numa tabela que tambem guarda o IP e o texto aceito de
+ * outras pessoas. (Que aquela rota ainda NAO inclui estas duas tabelas esta
+ * registrado no cabecalho como divida de codigo, fora do escopo desta onda.)
+ */
+CREATE POLICY consentimentos_admin_le ON canastra.consentimentos
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+CREATE POLICY envios_admin_le ON canastra.envios
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0033_marketing')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0034_produto_fiscal
+-- ----------------------------------------------------------------------------
+
+-- O bloco fiscal de `produtos`, o estado do produto, e o snapshot de custo.
+--
+-- O ITEM QUE DECIDE A ACEITACAO DO CLIENTE. A loja hoje nunca CRIA produto no
+-- Bling — `src/services/blingPedidos.js` so confere se o SKU ja existe la — e os
+-- dois POST de emissao de NF-e vao SEM CORPO NENHUM: 100% da regra fiscal mora
+-- na conta Bling, escrita a mao, produto por produto. As doze colunas abaixo sao
+-- o que falta para a loja ser a fonte daquele cadastro.
+--
+-- O MODO DE FALHA QUE ELAS FECHAM E O PIOR QUE EXISTE, e vale escrever inteiro
+-- porque e ele que justifica cada CHECK deste arquivo: um produto sem NCM PASSA
+-- na sincronizacao, PASSA no cadastro, PASSA na venda — e so falha na
+-- TRANSMISSAO A SEFAZ, com o pedido do cliente ja pago e parado esperando nota.
+-- O erro e criado meses antes de aparecer, e aparece na unica hora em que nao da
+-- para consertar com calma. Todo CHECK aqui existe para antecipar essa recusa
+-- para o INSERT, onde ela custa uma mensagem de tela.
+--
+-- ESTA MIGRACAO NAO EMITE NADA. Quem monta o corpo do POST de emissao e a Onda 4.
+--
+-- ---------------------------------------------------------------------------
+-- O QUE NAO SE TOCA: A COLUNA `peso`
+-- ---------------------------------------------------------------------------
+--
+-- `canastra.produtos.peso` e `numeric(10,3) NOT NULL DEFAULT 0.3` desde 0003 e
+-- serve ao FRETE: o `ShippingController` a le hoje para cotar com os Correios, e
+-- ela esta na projecao de `produtos_publicos` e no GRANT de coluna de `anon`
+-- (0006:232). Ela NAO e renomeada, NAO e reaproveitada como peso liquido e NAO
+-- muda de default. `peso_liquido` e `peso_bruto` entram AO LADO porque sao
+-- grandezas diferentes: a NF-e quer o peso do produto e o peso com embalagem, e
+-- o frete quer o peso que vai na caixa. Confundir os tres e cotar frete errado
+-- ou emitir nota errada — e o primeiro e silencioso.
+--
+-- ---------------------------------------------------------------------------
+-- A DECISAO DO SNAPSHOT DE CUSTO: A CHAVE VAI NO JSONB DE `pedidos.itens`
+-- ---------------------------------------------------------------------------
+--
+-- `produtos.custo` existe, mas custo muda: cafe cru sobe, o dolar mexe, o frete
+-- de entrada muda. Recalcular a margem de uma venda de marco com o custo de hoje
+-- MENTE sobre o passado, e essa mentira e sistematica (sempre a favor ou sempre
+-- contra, conforme o custo subiu ou caiu). Congelar o custo do item no momento da
+-- venda e o que faz o relatorio de margem existir.
+--
+-- AS DUAS SAIDAS ERAM: acrescentar a chave `custo_centavos` em cada item de
+-- `pedidos.itens` (que e `jsonb`), ou criar uma tabela `pedido_itens` de verdade.
+-- Esta migracao faz a PRIMEIRA, e o que decidiu foi o modo de falha de cada uma:
+--
+--   O JSONB JA E O LUGAR DA FOTOGRAFIA. 0005 chama `pedidos.itens` de "fotografia
+--   congelada" e e exatamente isso que se quer aqui — nome, preco e agora custo,
+--   como estavam no dia. A chave nova entra na mesma linha, na mesma transacao,
+--   escrita pelo mesmo `INSERT` do checkout. Nao ha janela em que metade da venda
+--   esteja gravada.
+--
+--   A REDACAO DE LGPD JA A COBRE, e isto foi VERIFICADO e nao suposto: a redacao
+--   de `itens` em 0013/0016 e por DENYLIST — chave de PRODUTO passa intacta,
+--   chave de PESSOA vira "[redigido]" — e aquele comentario explica que a
+--   denylist foi escolhida justamente para "nao apagar o proximo campo de PRODUTO
+--   que o checkout gravasse, destruindo registro fiscal". `custo_centavos` e
+--   campo de produto. Medido em test/produto_fiscal.test.js: depois de
+--   `redigir_dados_do_titular`, o custo e o nome do produto continuam la e o CPF
+--   plantado no mesmo item sai.
+--
+--   E A TABELA NOVA TERIA UM FURO QUE ESTA ONDA NAO PODE FECHAR. `pedido_itens`
+--   so vale se o checkout escrever nela, e o checkout e codigo de aplicacao — que
+--   esta onda nao toca. A tabela nasceria VAZIA e continuaria vazia a cada venda
+--   nova ate a Onda 4, enquanto `pedidos.itens` seguiria sendo a verdade. Duas
+--   representacoes do mesmo item, uma delas silenciosamente incompleta, e um
+--   relatorio que soma zero sem erro nenhum. Alem disso, a migracao de dados dos
+--   pedidos existentes so poderia preencher o custo com NULL — o custo daquele
+--   dia nao esta guardado em lugar nenhum —, entao nem o passado ela resolveria.
+--
+-- O PRECO DESTA ESCOLHA, escrito para nao se perder: o banco NAO consegue exigir
+-- a chave. Um CHECK sobre `itens` que a tornasse obrigatoria recusaria todo
+-- pedido que o checkout de hoje grava, isto e, derrubaria a loja — e um NOT VALID
+-- so adiaria o mesmo estrago para o proximo INSERT. Entao a garantia aqui e de
+-- CODIGO, na Onda 4, com teste; o que esta migracao entrega e a decisao escrita
+-- no lugar onde ela vai ser procurada, e a prova de que a redacao a preserva.
+-- `pedido_ajustes_desconto` (0032) ja aponta para o item por `alvo_ref` em texto,
+-- pela mesma razao: hoje a identidade do item de pedido e a entrada do jsonb.
+--
+-- ---------------------------------------------------------------------------
+-- POR QUE 0034. Mesma razao de 0030 a 0033: a faixa 0017-0029 esta disputada
+-- fora daqui (worktrees `melhor-envio` e `whatsapp-bot`), o runner ABORTA em
+-- numero repetido e a chave em `canastra.migracoes` e o nome completo do arquivo.
+
+/* ------------------------------------------------------------------------- *
+ * 1. O bloco fiscal
+ * ------------------------------------------------------------------------- */
+
+/**
+ * TODAS AS COLUNAS FISCAIS SAO NULAVEIS E NENHUMA TEM DEFAULT, e isso e uma
+ * decisao, nao um esquecimento.
+ *
+ * A tentacao obvia era dar um NCM padrao de cafe torrado a todo mundo e acabar
+ * com o problema numa linha. Ela esta recusada porque os dois erros nao sao
+ * simetricos:
+ *
+ *   NCM VAZIO ..... a SEFAZ recusa a transmissao. Alto, imediato, com o nome do
+ *                   campo na mensagem. Alguem conserta hoje.
+ *   NCM ERRADO .... a SEFAZ ACEITA. A nota sai, o cliente recebe, e o imposto
+ *                   recolhido esta errado por meses — ate uma fiscalizacao, uma
+ *                   auditoria do contador ou uma malha. Sem sintoma nenhum.
+ *
+ * Classificacao fiscal e decisao do CONTADOR, nao do desenvolvedor — a propria
+ * spec §7-C ja registra isso ao deixar "serie e natureza de operacao da NF-e"
+ * como decisao que passa pelo contador. Este arquivo garante a FORMA (quantos
+ * digitos, que faixa) e se recusa a inventar o CONTEUDO.
+ *
+ * `unidade` e a unica excecao, e por nao ser classificacao fiscal: e como o
+ * produto se conta. Todo item do catalogo de hoje e vendido por unidade (sacos
+ * de 250 g, caixas de 3), e um NULL ali derrubaria a nota por um fato que
+ * ninguem disputa.
+ */
+ALTER TABLE canastra.produtos
+  -- NCM — Nomenclatura Comum do Mercosul, 8 digitos. O contador escreve com
+  -- ponto ('0901.11.10') e a SEFAZ quer sem ('09011110'); e a mesma familia do
+  -- CEP com hifen que esta loja ja teve (commit 7fe8d36). O CHECK nao normaliza:
+  -- ele faz o caminho que esquecer de normalizar ERRAR, no INSERT, em vez de
+  -- virar uma nota recusada meses depois.
+  ADD COLUMN ncm text
+    CONSTRAINT produtos_ncm_formato
+      CHECK (ncm IS NULL OR ncm ~ '^[0-9]{8}$'),
+
+  -- CEST — Codigo Especificador da Substituicao Tributaria, 7 digitos. Nulavel
+  -- de verdade e nao por preguica: so produto sujeito a ST tem CEST, e cafe
+  -- torrado em geral nao tem. Preencher por via das duvidas seria informar
+  -- substituicao que nao existe.
+  ADD COLUMN cest text
+    CONSTRAINT produtos_cest_formato
+      CHECK (cest IS NULL OR cest ~ '^[0-9]{7}$'),
+
+  -- Origem da mercadoria, tabela da SEFAZ: 0 = nacional, 1 = importacao direta,
+  -- ... 8 = nacional com conteudo de importacao superior a 70%. `smallint`
+  -- porque e um digito e o tipo ja e metade da validacao; o CHECK fecha a faixa,
+  -- porque `9` nao existe na tabela e nao seria recusado por tipo nenhum.
+  ADD COLUMN origem_fiscal smallint
+    CONSTRAINT produtos_origem_fiscal_valida
+      CHECK (origem_fiscal IS NULL OR origem_fiscal BETWEEN 0 AND 8),
+
+  -- GTIN (o antigo EAN): 8, 12, 13 ou 14 digitos, e mais nada. Os tamanhos sao
+  -- os do padrao GS1 e nao uma faixa inventada — 9, 10 ou 11 digitos nao sao um
+  -- GTIN "quase certo", sao um numero que a SEFAZ recusa.
+  --
+  -- E 'SEM GTIN' NAO E UM PLACEHOLDER NOSSO: e a string literal que a SEFAZ
+  -- EXIGE no campo cEAN quando o produto nao tem codigo de barras. Deixar vazio
+  -- e a causa mais comum de rejeicao de nota em loja pequena, e por isso o valor
+  -- entra no CHECK em vez de virar convencao oral. Em maiuscula porque e assim
+  -- que a norma escreve e a comparacao la e exata.
+  ADD COLUMN gtin text
+    CONSTRAINT produtos_gtin_formato
+      CHECK (gtin IS NULL OR gtin = 'SEM GTIN'
+             OR gtin ~ '^[0-9]{8}$' OR gtin ~ '^[0-9]{12,14}$'),
+
+  -- O GTIN da CAIXA (cEANTrib/embalagem). Separado do de cima porque sao dois
+  -- codigos diferentes para o mesmo produto, e a nota pede os dois.
+  ADD COLUMN gtin_embalagem text
+    CONSTRAINT produtos_gtin_embalagem_formato
+      CHECK (gtin_embalagem IS NULL OR gtin_embalagem = 'SEM GTIN'
+             OR gtin_embalagem ~ '^[0-9]{8}$' OR gtin_embalagem ~ '^[0-9]{12,14}$'),
+
+  -- Unidade comercial. Ate 6 caracteres maiusculos, que e o que o layout da NF-e
+  -- aceita ('UN', 'KG', 'CX', 'PC'). Ver o cabecalho para o porque do default.
+  ADD COLUMN unidade text NOT NULL DEFAULT 'UN'
+    CONSTRAINT produtos_unidade_formato
+      CHECK (unidade ~ '^[A-Z]{1,6}$'),
+
+  -- Tipo do item, tabela 4.1.1 do SPED — a mesma lista que o cadastro de produto
+  -- do Bling oferece: 00 revenda, 01 materia-prima, 02 embalagem, 03 produto em
+  -- processo, 04 produto acabado, 05 subproduto, 06 produto intermediario,
+  -- 07 uso e consumo, 08 ativo imobilizado, 09 servicos, 10 outros insumos,
+  -- 99 outras. Fechado porque um codigo fora da tabela e recusado no SPED, e la
+  -- a recusa chega pelo contador, no mes seguinte.
+  ADD COLUMN tipo_item text
+    CONSTRAINT produtos_tipo_item_valido
+      CHECK (tipo_item IS NULL
+             OR tipo_item IN ('00','01','02','03','04','05','06','07','08','09',
+                              '10','99')),
+
+  -- CFOP padrao de venda, 4 digitos (5102 dentro do estado, 6102 fora). E o
+  -- PADRAO do produto: o CFOP real da nota depende do destino, e quem decide
+  -- isso e a emissao, nao o cadastro.
+  ADD COLUMN cfop_padrao text
+    CONSTRAINT produtos_cfop_formato
+      CHECK (cfop_padrao IS NULL OR cfop_padrao ~ '^[0-9]{4}$'),
+
+  -- CSOSN tem 3 digitos (101, 102, 500...) e e o campo de quem esta no Simples
+  -- Nacional, que e o caso da loja hoje. O CHECK aceita 2 TAMBEM, de proposito:
+  -- fora do Simples o campo equivalente e o CST de ICMS, com 2 digitos. Exigir 3
+  -- transformaria uma mudanca de regime tributario — que ja e um mes tenso — numa
+  -- migracao de banco de emergencia. A coluna guarda "o codigo de tributacao do
+  -- ICMS deste produto"; qual dos dois vocabularios vale depende do regime, e o
+  -- regime nao mora aqui.
+  ADD COLUMN csosn text
+    CONSTRAINT produtos_csosn_formato
+      CHECK (csosn IS NULL OR csosn ~ '^[0-9]{2,3}$'),
+
+  -- Os dois pesos da NF-e, na mesma precisao de `peso` (gramas, com tres casas).
+  ADD COLUMN peso_liquido numeric(10,3)
+    CONSTRAINT produtos_peso_liquido_positivo
+      CHECK (peso_liquido IS NULL OR peso_liquido > 0),
+  ADD COLUMN peso_bruto numeric(10,3)
+    CONSTRAINT produtos_peso_bruto_positivo
+      CHECK (peso_bruto IS NULL OR peso_bruto > 0),
+  -- EMBALAGEM TEM MASSA. Bruto menor que liquido nao e um erro de digitacao
+  -- inofensivo: e o par invertido, e ele viaja para a nota e para a etiqueta dos
+  -- Correios sem nenhum outro sistema reclamar. Iguais sao aceitos (granel).
+  ADD CONSTRAINT produtos_peso_bruto_nao_menor
+    CHECK (peso_bruto IS NULL OR peso_liquido IS NULL OR peso_bruto >= peso_liquido),
+
+  -- O ID DO PRODUTO NO BLING. Hoje a integracao encontra o produto BUSCANDO POR
+  -- SKU (`blingPedidos.js:286-292`), o que quer dizer que renomear um SKU no
+  -- Bling desliga a ligacao em silencio e o pedido passa a ir sem item
+  -- reconhecido. Com o id guardado, a busca vira uma chave.
+  --
+  -- `text` e nao `integer` porque e um identificador de OUTRO sistema: ele nao se
+  -- soma nem se ordena aqui, e o dia em que o Bling devolver um id com letra ou
+  -- passar de 2^31 nao pode virar uma migracao.
+  ADD COLUMN codigo_bling text
+    CONSTRAINT produtos_codigo_bling_preenchido
+      CHECK (codigo_bling IS NULL OR btrim(codigo_bling) <> ''),
+
+  /**
+   * `estado` — e por que ele nao e um DELETE.
+   *
+   * R13: nada e apagado de verdade. Produto apagado quebra o pedido historico
+   * que aponta para ele — e `pedidos.itens` guarda `product_id` sem chave
+   * estrangeira (0004/0005 decidiram assim de proposito), entao o estrago nao e
+   * um erro de FK: e um pedido antigo cujo item nao existe mais em lugar nenhum.
+   *
+   * DEFAULT 'ativo' PARA AS LINHAS QUE JA EXISTEM, e essa e a unica escolha
+   * possivel: qualquer outro default tiraria da loja, no instante do deploy, o
+   * catalogo inteiro que esta vendendo.
+   */
+  ADD COLUMN estado text NOT NULL DEFAULT 'ativo'
+    CONSTRAINT produtos_estado_valido
+      CHECK (estado IN ('rascunho', 'ativo', 'arquivado'));
+
+/**
+ * PARCIAL, no molde de `produtos_sku_idx` (0003) e pelo mesmo motivo: a maior
+ * parte do catalogo nao tem codigo do Bling hoje — a loja nunca criou produto
+ * la —, e NULL nao colide com NULL num indice unico do Postgres de qualquer
+ * forma.
+ *
+ * A PEGADINHA QUE VEM JUNTO, a mesma do SKU: `ON CONFLICT (codigo_bling)` NAO
+ * infere um indice parcial. O upsert da sincronizacao da Onda 4 precisa repetir
+ * a clausula (`ON CONFLICT (codigo_bling) WHERE codigo_bling IS NOT NULL`) ou
+ * levar 42P10.
+ */
+CREATE UNIQUE INDEX produtos_codigo_bling_idx
+  ON canastra.produtos (codigo_bling)
+  WHERE codigo_bling IS NOT NULL;
+
+/**
+ * AVISO QUE PRECISA ESTAR PRESO A COLUNA `estado`, porque ela promete mais do
+ * que entrega hoje: ELA NAO ESCONDE NADA AINDA.
+ *
+ * A vitrine le `canastra.produtos_publicos`, e aquela view NAO tem WHERE nenhum
+ * (0003:140). Ou seja, um produto salvo como 'rascunho' hoje APARECE na loja,
+ * exatamente como se estivesse ativo. Nao ha regressao — nada escreve 'rascunho'
+ * ainda, e o DEFAULT e 'ativo' —, mas quem ligar a tela de produto da Onda 4 sem
+ * mexer na view publica um rascunho no primeiro salvamento.
+ *
+ * O QUE FAZER LA, e os dois lados andam juntos por regra de 0006:228 — "coluna
+ * que entrar na view sem entrar no GRANT quebra a vitrine com 42501, e coluna que
+ * entrar no GRANT sem ser publica de verdade vaza": filtrar a view por
+ * `estado = 'ativo'` e, se `estado` for projetado, acrescenta-lo ao
+ * `GRANT SELECT (...)` de `anon`.
+ *
+ * E O QUE VERIFICAR ANTES DE FILTRAR, porque nao e obvio: `AvaliarPedido.tsx`
+ * usa a MESMA view para mapear `product_id` -> `sku` e decidir o que a pessoa
+ * pode avaliar. Um produto 'arquivado' invisivel ali tira o formulario de
+ * avaliacao de quem ja comprou o cafe. A view publica tem dois leitores, nao um.
+ *
+ * Esta migracao nao filtra porque a Onda 3 e so schema e filtrar e mudar o que a
+ * vitrine mostra. O aviso fica aqui, que e onde se vai procurar.
+ */
+
+/* ------------------------------------------------------------------------- *
+ * 2. Privilegios: as colunas novas NAO entram no GRANT de `produtos`
+ * ------------------------------------------------------------------------- */
+
+/**
+ * ESTE BLOCO E UMA AUSENCIA DELIBERADA, e por isso ele e um comentario com o
+ * tamanho de uma decisao em vez de uma linha de GRANT.
+ *
+ * `canastra.produtos` e a relacao com privilegio de SELECT por COLUNA (0006:226):
+ * `REVOKE SELECT ... FROM authenticated` tirou o acesso de tabela, e um
+ * `GRANT SELECT (14 colunas) TO anon, authenticated` devolveu so a lista publica.
+ * `custo`, `criado_em` e `tsv` ficaram de fora de proposito. Coluna nova
+ * acrescentada por ALTER TABLE nao herda GRANT nenhum — ela nasce ilegivel para
+ * `anon` e para `authenticated`, e legivel so pelo dono e pelo `service_role`.
+ *
+ * A PERGUNTA CERTA NAO E "COMO EVITAR O 42501", E "QUEM LE ESTAS COLUNAS". A
+ * resposta foi medida no repositorio, nao suposta:
+ *
+ *   frontend/ ................. le `produtos_publicos`, a VIEW, em todo lugar
+ *                               (catalogo, PDP, AvaliarPedido.tsx). Nao existe
+ *                               `.from("produtos")` em lugar nenhum.
+ *   o painel .................. le e escreve `canastra.produtos` pelo Express,
+ *                               em `src/repositories/dashboardRepository.js`,
+ *                               com o pool que conecta como DONO do banco — sem
+ *                               RLS e sem privilegio de coluna no caminho. E o
+ *                               que a spec §7-C decidiu tambem para `custo`:
+ *                               "rota admin no Express, que conecta como dono".
+ *   o contrato do painel ...... e uma lista explicita de colunas
+ *                               (`COLUNAS_DO_CONTRATO`), nunca `SELECT *`. As
+ *                               colunas novas nao mudam nenhuma resposta de API.
+ *
+ * Ou seja: nao existe leitor destas colunas pelo PostgREST, hoje. Dar
+ * `GRANT SELECT` a `authenticated` seria entregar o cadastro fiscal do catalogo a
+ * QUALQUER token da instancia Supabase compartilhada — inclusive de outro projeto
+ * da mesma VPS — para servir um leitor que nao existe. E o inverso exato do que
+ * 0032 recusou ao deixar `promocao_frete` sem GRANT: nao se abre porta sem
+ * porteiro do outro lado.
+ *
+ * O QUE ACONTECE SE ALGUEM ESQUECER DISTO: uma tela nova escrita com supabase-js
+ * contra `canastra.produtos` leva 42501 na primeira consulta — barulhento, na
+ * hora, e com este paragrafo esperando. E o modo de falha que 0001 escolheu de
+ * proposito para o schema inteiro ("o esquecimento vira 404 barulhento em vez de
+ * vazamento calado"). O conserto, se um dia o painel migrar para o PostgREST, e
+ * um `GRANT SELECT (lista) ON canastra.produtos TO authenticated` — de COLUNA,
+ * nunca de tabela, senao `custo` vai junto.
+ *
+ * E `RETURNING *` CONTINUA RESPONDENDO 42501 nesta tabela, ate para a admin,
+ * exatamente como 0006:197 mediu. As colunas novas nao pioram nem melhoram isso;
+ * test/produto_fiscal.test.js afirma a propriedade para que ela nao se perca sem
+ * aparecer no diff.
+ *
+ * A ESCRITA NAO MUDA: `GRANT INSERT, UPDATE, DELETE ON canastra.produtos TO
+ * authenticated` (0006:269) e de TABELA e alcanca as colunas novas sozinho, com a
+ * politica `produtos_admin_escreve` decidindo a linha. Nada a fazer aqui.
+ *
+ * E A RLS NAO MUDA TAMBEM: `canastra.produtos` ja tem RLS ligada desde 0002/0006,
+ * com leitura publica e escrita de admin. Coluna nova nao pede politica nova —
+ * politica corta LINHA, GRANT corta COLUNA, e o que mudou aqui foram colunas.
+ */
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0034_produto_fiscal')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0035_auditoria
+-- ----------------------------------------------------------------------------
+
+-- Auditoria: quem mexeu no que, e com que papel.
+--
+-- O QUE NAO EXISTE HOJE, e e o problema inteiro: `canastra.admins` tem duas
+-- colunas — `user_id` e `criado_em` — e nada mais. Todo administrador pode tudo,
+-- e NENHUM gesto do painel deixa rastro. Num painel que cria promocao, muda
+-- preco e emite NF-e, tres perguntas normais de operacao nao tem resposta:
+--
+--   "quem aprovou este desconto de 50%?"
+--   "quem mudou o preco do micro-lote na sexta a noite?"
+--   "quem baixou a base inteira com CPF e e-mail?"
+--
+-- A terceira e a mais urgente e e a que a spec §3.9 nomeia: a exportacao de
+-- pedidos de hoje baixa TUDO quando as datas ficam vazias — sem confirmacao, sem
+-- teto e sem registro nenhum de quem pediu. Toda exportacao de lista com dado
+-- pessoal passa a gravar aqui quem exportou e quando, e isso e requisito de LGPD
+-- (prestacao de contas, art. 6º, X), nao capricho de auditoria.
+--
+-- ESTA MIGRACAO NAO REGISTRA NADA SOZINHA. Ela cria o lugar; quem escreve a linha
+-- e a Onda 4, no mesmo gesto que faz a acao. Ver o limite conhecido, abaixo.
+
+/* ------------------------------------------------------------------------- *
+ * 1. `admins.papel`
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A COLUNA NASCE SEM INTERFACE, DE PROPOSITO. A spec §8 e explicita: "papeis e
+ * permissoes granulares" estao FORA do escopo — o painel tem dois usuarios, e
+ * uma matriz de permissao para duas pessoas e cerimonia. Ela entra agora por um
+ * motivo so: acrescentar coluna a `canastra.admins` depois exigiria uma migracao
+ * no meio de uma onda de interface, e o custo de ter a coluna vazia e zero.
+ *
+ * DEFAULT 'dono' PARA AS LINHAS QUE JA EXISTEM, e essa e a unica escolha segura:
+ * qualquer outro default REBAIXARIA, no instante do deploy, as duas pessoas que
+ * hoje administram a loja. O default certo aqui e o mais permissivo, porque a
+ * coluna ainda nao decide nada — e no dia em que decidir, quem rebaixa alguem faz
+ * isso de propria vontade, na tela.
+ *
+ * A LISTA FECHADA MAPEIA AS TELAS QUE EXISTEM, nao uma hierarquia inventada:
+ *   dono ....... tudo, inclusive dinheiro (custo, promocao, configuracao, Bling);
+ *   gerente .... catalogo, promocao e pedido — o dia a dia comercial;
+ *   operador ... expedicao: status, rastreio, etiqueta. Nao ve custo nem margem.
+ * Um papel fora da lista nao seria uma permissao nova: seria uma pessoa que
+ * NENHUMA tela sabe classificar, e o codigo teria de escolher entre negar tudo
+ * (ela para de trabalhar) ou permitir tudo (o papel nao serviu para nada). As
+ * duas saidas sao piores que 23514 no UPDATE.
+ *
+ * QUEM ESCREVE ESTA COLUNA E SO O SERVICO. 0003:269 revogou
+ * INSERT/UPDATE/DELETE de `authenticated` em `canastra.admins` e nenhuma politica
+ * de escrita existe — as duas camadas negam, que e como tem de ser na tabela onde
+ * o estrago e maior. Isso vale para `papel` sem nada a acrescentar aqui: um
+ * `UPDATE admins SET papel = 'dono' WHERE user_id = auth.uid()` seria a
+ * auto-promocao que aquele REVOKE existe para impedir.
+ */
+ALTER TABLE canastra.admins
+  ADD COLUMN papel text NOT NULL DEFAULT 'dono'
+    CONSTRAINT admins_papel_valido
+      CHECK (papel IN ('dono', 'gerente', 'operador'));
+
+/**
+ * O TRIGGER `admins_nunca_zero` (0002:118) CONTINUA VALENDO, e foi conferido em
+ * vez de suposto.
+ *
+ * Ele e `AFTER DELETE ... REFERENCING OLD TABLE AS apagados FOR EACH STATEMENT`,
+ * e a funcao so pergunta duas coisas: se a tabela de transicao tem alguma linha,
+ * e se sobrou algum admin. Nenhuma das duas olha a LISTA de colunas — uma tabela
+ * de transicao acompanha o formato da tabela sozinha —, entao um ALTER TABLE ADD
+ * COLUMN nao a alcanca. Medido em test/auditoria.test.js: com duas admins,
+ * remover uma passa; remover a segunda recusa com 23001, como sempre recusou.
+ *
+ * Este paragrafo existe porque o modo de falha seria MUDO — a loja aceitando
+ * ficar sem administrador nenhum — e ninguem procuraria a causa numa coluna nova.
+ */
+
+/* ------------------------------------------------------------------------- *
+ * 2. `admin_log`
+ * ------------------------------------------------------------------------- */
+
+CREATE TABLE canastra.admin_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  /**
+   * A CHAVE APONTA PARA `clientes`, E NAO PARA `admins`, E ESSA E A DECISAO DA
+   * TABELA.
+   *
+   * `admins.user_id` e a escolha obvia — o log e "quem administrou" — e ela tem
+   * um efeito que so aparece tarde: `ON DELETE CASCADE` apagaria o log inteiro de
+   * quem deixasse de ser admin, e `ON DELETE SET NULL` anonimizaria. Nos dois
+   * casos, tirar alguem do time apagaria o nome dela do que ela ja fez — no
+   * exato momento em que alguem pergunta o que ela fez. Uma democao nao pode ser
+   * uma borracha.
+   *
+   * Apontando para `clientes`, sair de `canastra.admins` nao toca o log (medido),
+   * e o unico evento que anonimiza a linha e a EXCLUSAO DA CONTA — que e o que a
+   * LGPD manda mesmo. `SET NULL` e nao `CASCADE` pelo motivo de `pedidos` em
+   * 0005: o registro do que aconteceu sobrevive a pessoa; e a coluna e NULAVEL de
+   * verdade, pela armadilha que 0005 e 0032 ja documentaram (o Postgres ACEITA
+   * declarar SET NULL numa coluna NOT NULL e so estoura no DELETE, com 23502,
+   * deixando a exclusao de dados pessoais impossivel).
+   *
+   * O TROCO, escrito para nao surpreender: um log com `admin_user_id` nulo diz
+   * "uma conta que nao existe mais fez isto". E menos do que se queria e mais do
+   * que se tem hoje, que e nada.
+   */
+  admin_user_id uuid REFERENCES canastra.clientes (user_id) ON DELETE SET NULL,
+
+  /**
+   * `acao` E TEXTO LIVRE, E ISSO CONTRARIA O RESTO DESTA ONDA DE PROPOSITO.
+   *
+   * 0032 fecha todo vocabulario com CHECK, e 0033 e 0034 fazem o mesmo. Aqui a
+   * regra se inverte pelo mesmo motivo que inverteu nas colunas de atribuicao de
+   * 0033: o log e gravado na MESMA TRANSACAO da acao que ele registra — e essa e
+   * a unica forma de ele nao mentir por omissao. Entao um CHECK que recusasse uma
+   * `acao` fora da lista nao produziria um relatorio melhor: faria ROLLBACK DA
+   * ACAO. A auditoria passaria a poder DERRUBAR a loja, e derrubaria justamente
+   * na tela nova, que e a que ninguem lembrou de acrescentar a lista.
+   *
+   * O troco e real e conhecido: 'preco_alterado' e 'precoAlterado' viram duas
+   * linhas de relatorio. A disciplina de vocabulario mora numa constante do
+   * servico, na Onda 4, onde o custo de errar e um relatorio feio e nao uma venda
+   * perdida. O CHECK que fica e so o que nao pode custar nada: nao ser vazio.
+   */
+  acao text NOT NULL
+         CONSTRAINT admin_log_acao_preenchida CHECK (btrim(acao) <> ''),
+
+  -- SOBRE O QUE ('produto', 'promocao', 'pedido', 'config_loja', 'pedidos' numa
+  -- exportacao). Mesma razao de `acao` para nao ser lista fechada.
+  entidade text NOT NULL
+             CONSTRAINT admin_log_entidade_preenchida CHECK (btrim(entidade) <> ''),
+
+  -- QUAL. `text` e nao `uuid` porque nem toda entidade tem uuid (`config_loja` e
+  -- a linha 1, um SKU e texto) e porque uma FK aqui amarraria o log ao objeto —
+  -- e apagar o objeto nao pode apagar o registro de que ele foi apagado.
+  --
+  -- NULAVEL: a exportacao de uma LISTA nao tem entidade_id, e e justamente o
+  -- gesto mais sensivel da tabela. Exigir um id aqui obrigaria a inventar um.
+  entidade_id text,
+
+  -- O QUE ERA E O QUE FICOU. Os dois nulaveis, e as tres formas sao legitimas:
+  -- criacao tem so `depois`, remocao tem so `antes`, alteracao tem os dois. Uma
+  -- exportacao nao tem nenhum dos dois e o `depois` guarda o filtro usado, que e
+  -- o que responde "baixou a base inteira ou so a semana?".
+  --
+  -- Sem CHECK de "pelo menos um": um log de leitura (exportacao, consulta de
+  -- custo) legitimamente nao tem antes nem depois, e a acao ja diz o que foi.
+  antes  jsonb,
+  depois jsonb,
+
+  criado_em timestamptz NOT NULL DEFAULT now()
+);
+
+-- A tela de auditoria abre em "o que aconteceu por ultimo".
+CREATE INDEX admin_log_recente_idx ON canastra.admin_log (criado_em DESC);
+
+-- "O historico DESTE produto" — a pergunta que se faz olhando para uma coisa
+-- especifica, que e como a duvida costuma chegar ("por que este cafe esta com
+-- este preco?").
+CREATE INDEX admin_log_entidade_idx
+  ON canastra.admin_log (entidade, entidade_id, criado_em DESC);
+
+-- "O que ESTA pessoa fez" — a pergunta do dia da democao. Parcial porque a linha
+-- de autor nulo (conta excluida) nunca e resposta dela.
+CREATE INDEX admin_log_autor_idx
+  ON canastra.admin_log (admin_user_id, criado_em DESC)
+  WHERE admin_user_id IS NOT NULL;
+
+/* ------------------------------------------------------------------------- *
+ * 3. Privilegios
+ * ------------------------------------------------------------------------- */
+
+/**
+ * `anon` NAO RECEBE NADA, e nao ha REVOKE a escrever: 0001 inverteu o padrao de
+ * proposito e tabela nova nao nasce legivel por visitante anonimo. O log carrega
+ * o uuid de quem administra a loja e o jsonb de antes/depois de cada mudanca —
+ * incluindo preco de custo e, num log de exclusao de cliente, o que foi apagado.
+ * A spec §3.10 o nomeia junto de `promocao_resgates`, `consentimentos` e
+ * `envios`. Medido em test/auditoria.test.js: `SELECT` como `anon` responde
+ * 42501.
+ */
+
+/**
+ * NEM A ADMIN ESCREVE AQUI PELO NAVEGADOR — e este REVOKE e o que faz o log ser
+ * um log.
+ *
+ * E o desenho de `promocao_resgates` e `pedido_ajustes_desconto` em 0032 ("as
+ * duas tabelas de registro so o servico escreve"), e aqui ele vale com mais
+ * forca, por duas razoes que se somam:
+ *
+ *   1. O LOG PRECISA NASCER NA TRANSACAO DA ACAO. Um INSERT separado, disparado
+ *      pelo navegador depois do UPDATE, e um log que some quando a rede cai entre
+ *      os dois — e some exatamente na hora em que alguma coisa deu errado, que e
+ *      quando ele seria lido. Escrito pelo servico, na mesma transacao, ou os
+ *      dois acontecem ou nenhum.
+ *   2. UM LOG QUE O AUDITADO REESCREVE NAO E AUDITORIA. `UPDATE` e `DELETE`
+ *      concedidos a `authenticated` deixariam a admin corrigir a propria
+ *      pegada — e o alcance seria a linha inteira, porque politica de RLS nao
+ *      restringe coluna. Sem privilegio, nao ha politica distraida que reabra.
+ *
+ * `SELECT` NAO ENTRA NO REVOKE, de proposito: a admin LE o log (e a tela de
+ * auditoria). Quem recorta a LINHA e a politica, que e o mecanismo certo para
+ * esse recorte — diferente das operacoes inteiras acima. A distincao e a regra de
+ * 0006:282 que 0031 repetiu: GRANT decide TABELA e COLUNA, RLS decide LINHA.
+ *
+ * LIMITE CONHECIDO, E ELE E O UNICO HONESTO A REGISTRAR: o log e escrito pelo
+ * MESMO codigo que faz a acao, entao uma acao nova cujo autor esqueceu de chamar
+ * o registro nao deixa rastro nenhum — e a ausencia e silenciosa. A alternativa
+ * a prova de esquecimento seria um trigger no banco, e ele NAO consegue fazer
+ * este trabalho aqui: o painel escreve pelo pool do Express, que conecta como
+ * DONO do banco e sem claim nenhum, entao `auth.uid()` dentro de um trigger seria
+ * NULL e todo log sairia sem autor — que e a unica coluna que a tabela existe
+ * para guardar. Registrar quem foi exige que quem SABE quem foi escreva a linha.
+ * O que fecha essa lacuna e teste, na Onda 4, por rota.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.admin_log FROM authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * 4. RLS
+ * ------------------------------------------------------------------------- */
+
+ALTER TABLE canastra.admin_log ENABLE ROW LEVEL SECURITY;
+
+/**
+ * Leitura so da admin, e nada mais — nem cliente, nem `anon`, nem o token valido
+ * de outro projeto da instancia compartilhada.
+ *
+ * `FOR SELECT` e nao `FOR ALL`, mesmo com o REVOKE de escrita ja no lugar: uma
+ * politica `FOR ALL` aqui ficaria esperando o dia em que alguem devolvesse o
+ * GRANT "so para testar", e a decisao de que ninguem escreve pelo navegador
+ * deixaria de aparecer no diff. E a disciplina de 0031 — o privilegio e a tranca
+ * de producao, a politica e a que se le.
+ *
+ * `TO authenticated` NAO E ENFEITE: sem clausula TO a politica nasce `TO public`,
+ * e `public` alcanca tambem o DONO das tabelas — de quem `eh_admin()` depende
+ * para ler `admins` por baixo da RLS. Foi assim que 0030 descobriu, do jeito
+ * dificil.
+ *
+ * `canastra.eh_admin()` e nao um claim de JWT, pela razao do cabecalho de 0006: a
+ * instancia do Supabase e COMPARTILHADA com outros projetos do mesmo dono, e um
+ * token emitido para outro projeto chega aqui com assinatura valida, papel
+ * `authenticated` e `auth.uid()` preenchido — carregando no `user_metadata` o que
+ * quiser. Ser admin desta loja e ter LINHA em `canastra.admins`.
+ *
+ * E NENHUM NOME NOVO VAI PARA A LISTA `PUBLICAS` de test/rls.test.js: nao ha aqui
+ * politica `USING (true)` nenhuma, como nao houve em 0032 nem em 0033.
+ */
+CREATE POLICY admin_log_admin_le ON canastra.admin_log
+  FOR SELECT TO authenticated
+  USING (canastra.eh_admin());
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0035_auditoria')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0037_vitrine_por_estado
+-- ----------------------------------------------------------------------------
+
+-- A vitrine passa a respeitar `produtos.estado` — e o SEGUNDO leitor da view
+-- continua enxergando o que ela deixa de mostrar.
+--
+-- O NUMERO PULA 0036 DE PROPOSITO. Aquele numero esta reservado por NOME
+-- (`0036_aposentar_promocoes_e_cupons.sql`) num comentario de
+-- `controllers/PaymentController.js`, que descreve a ponte entre o motor novo e
+-- o caminho legado e diz quem a remove. Tomar o 0036 aqui obrigaria a corrigir
+-- aquele texto ou a deixar uma referencia mentindo. O runner aplica por ordem
+-- numerica e ignora buraco; um 0036 criado depois simplesmente roda depois
+-- desta, e as duas nao se tocam.
+--
+-- O QUE 0034 DEIXOU ANOTADO, e e o problema inteiro: a coluna `estado` nasceu
+-- com CHECK ('rascunho','ativo','arquivado') e NAO ESCONDE NADA. A view
+-- `canastra.produtos_publicos` (0003:140) nao tem WHERE nenhum, entao todo
+-- produto aparece na loja qualquer que seja o estado. Nao houve regressao ate
+-- aqui — nada escreve 'rascunho' e o DEFAULT e 'ativo' —, mas a tela de produto
+-- da Onda 5 publica um rascunho no primeiro salvamento se a view continuar como
+-- esta.
+--
+-- E O AVISO QUE VEM COLADO NELE: A VIEW TEM DOIS LEITORES, NAO UM.
+--
+--   a vitrine ............... catalogo e PDP, por `produtos_publicos`;
+--   `AvaliarPedido.tsx` ..... usa a MESMA view para mapear product_id -> sku e
+--                             decidir o que a pessoa pode avaliar.
+--
+-- Filtrar sem mais nada tiraria o formulario de avaliacao de quem comprou um
+-- cafe que a loja arquivou depois — o pedido esta entregue, `pode_avaliar(sku)`
+-- diz sim, e o formulario simplesmente nao apareceria, sem erro nenhum na tela.
+-- Por isso esta migracao faz DUAS coisas: filtra a view da vitrine e cria uma
+-- segunda janela, estreita, para o mapeamento produto->SKU.
+
+/* ------------------------------------------------------------------------- *
+ * 1. `produtos_publicos` deixa de mostrar o arquivado
+ * ------------------------------------------------------------------------- */
+
+/**
+ * O RECORTE E `estado <> 'arquivado'`, E NAO `estado = 'ativo'` — e a diferenca
+ * precisa estar escrita porque ela decide o que a loja mostra.
+ *
+ * Com este predicado, 'rascunho' CONTINUA VISIVEL na vitrine. Hoje isso e um
+ * no-op (nada escreve 'rascunho'), e amanha e uma decisao de produto que a tela
+ * da Onda 5 tem de conhecer: se o formulario de produto salvar rascunho, o
+ * rascunho aparece. Quem quiser que 'rascunho' esconda tem de trocar este
+ * predicado por `estado = 'ativo'` — uma linha, nesta view, com o mesmo GRANT
+ * abaixo continuando valido.
+ *
+ * `estado` ENTRA NA PROJECAO, e nao e escolha estetica: com
+ * `security_invoker = true` (0006) a view roda com os privilegios de QUEM
+ * CHAMA, e o Postgres confere privilegio de COLUNA sobre tudo que a consulta
+ * referencia — inclusive o que so aparece no WHERE. Sem `GRANT SELECT (estado)`
+ * a vitrine inteira responderia 42501, e `canastra.produtos` e a unica relacao
+ * do schema com privilegio por coluna justamente para `custo` nao vazar. Uma
+ * vez que a coluna precisa do GRANT, projeta-la e o que mantem a invariante que
+ * test/rls.test.js afirma desde 0006: "a lista publica de colunas de `produtos`
+ * e EXATAMENTE a projecao da view". Deixar as duas listas diferentes seria abrir
+ * a excecao que aquele teste existe para nao deixar acontecer.
+ *
+ * E o que `estado` conta a quem le e o que a propria filtragem ja contou: as
+ * linhas que sobram sao as nao-arquivadas. `custo`, `criado_em` e `tsv`
+ * continuam fora das duas listas.
+ *
+ * CREATE OR REPLACE preserva a ACL da view (o GRANT de 0003 e o REVOKE de
+ * escrita), mas as OPCOES sao redeclaradas — por isso o `WITH` vem explicito
+ * aqui com o `security_invoker = true` que 0006 ligou. Sem ele, a view voltaria
+ * a rodar com os poderes do dono, e a vitrine passaria a depender de novo da
+ * isencao de RLS que 0006 desmontou de proposito (o modo de falha daquele
+ * arranjo e silencioso: FORCE RLS -> vitrine vazia, sem erro e sem log).
+ */
+CREATE OR REPLACE VIEW canastra.produtos_publicos
+  WITH (security_invoker = true)
+AS
+  SELECT produto_id, nome, tamanho, categoria, preco, imagem, quantidade,
+         descricao, peso, largura, altura, comprimento, destacado_em, sku,
+         estado
+  FROM canastra.produtos
+  WHERE estado <> 'arquivado';
+
+-- A lista publica de coluna e a projecao da view andam juntas, e agora as duas
+-- ganham `estado`. Ver o paragrafo acima: sem este GRANT o proprio WHERE da
+-- view seria 42501 para `anon`.
+GRANT SELECT (estado) ON canastra.produtos TO anon, authenticated;
+
+/* ------------------------------------------------------------------------- *
+ * 2. `produtos_sku`: a janela do SEGUNDO leitor
+ * ------------------------------------------------------------------------- */
+
+/**
+ * DUAS COLUNAS, E SO ELAS: `produto_id` e `sku`.
+ *
+ * `AvaliarPedido.tsx` faz uma coisa com a view publica — traduz o `product_id`
+ * que esta congelado em `pedidos.itens` para o `sku` por onde a avaliacao e
+ * gravada (`canastra.avaliacoes.sku`, 0014). Quem decide se aquela pessoa PODE
+ * avaliar continua sendo `canastra.pode_avaliar(sku)`, que confere pedido
+ * `entregue` do proprio `auth.uid()` e nao olha estado nenhum: um produto
+ * arquivado depois da venda continua avaliavel, e e assim que tem de ser — a
+ * pessoa comprou, recebeu e tem o que dizer.
+ *
+ * Ou seja, a view precisa mostrar TODOS os estados. Se ela filtrasse igual a de
+ * cima, arquivar um cafe apagaria em silencio o formulario de avaliacao de quem
+ * o comprou; e se a de cima nao filtrasse, o rascunho ia para a loja. Sao dois
+ * recortes diferentes porque sao duas perguntas diferentes.
+ *
+ * `TO authenticated` E NAO `anon`: so quem tem conta abre a pagina do proprio
+ * pedido. `anon` nao tem por que enumerar SKU de produto arquivado.
+ *
+ * `security_invoker = true`, como a irma: a leitura passa pelo GRANT de coluna
+ * de `canastra.produtos` (produto_id e sku ja estao na lista publica desde
+ * 0006) e pela politica `produtos_leitura_publica`. Nenhuma isencao de dono no
+ * caminho — a mesma correcao que 0006 fez na view da vitrine, feita de nascenca
+ * aqui.
+ */
+CREATE VIEW canastra.produtos_sku
+  WITH (security_invoker = true)
+AS
+  SELECT produto_id, sku
+  FROM canastra.produtos;
+
+GRANT SELECT ON canastra.produtos_sku TO authenticated;
+
+/**
+ * A view e uma janela de LEITURA, e este REVOKE nao e higiene: e conserto.
+ *
+ * Os ALTER DEFAULT PRIVILEGES de 0001 valem tambem para VIEWS ("TABLES" ali
+ * abrange tabela, view e foreign table), entao esta view NASCE com
+ * INSERT/UPDATE/DELETE concedidos a `authenticated` — e ela e auto-atualizavel
+ * (projecao simples de uma tabela so, sem DISTINCT, GROUP BY, agregado ou
+ * juncao), entao o Postgres aceitaria escrita atraves dela. E o mesmo furo que
+ * 0003 fechou em `produtos_publicos` depois de medi-lo. Aqui a politica
+ * `produtos_admin_escreve` ja barraria a linha (a view e security_invoker), mas
+ * duas trancas continuam melhores que uma, e o REVOKE e a que nao depende de
+ * nenhuma politica continuar existindo.
+ *
+ * `service_role` fica de fora do REVOKE, como sempre: e credencial de servidor.
+ */
+REVOKE INSERT, UPDATE, DELETE ON canastra.produtos_sku FROM authenticated;
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0037_vitrine_por_estado')
+  ON CONFLICT (versao) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- 1.0038_rascunho_nao_vai_para_a_loja
+-- ----------------------------------------------------------------------------
+
+-- O rascunho deixa de aparecer na vitrine.
+--
+-- A 0037 recortou `produtos_publicos` por `estado <> 'arquivado'` e escreveu, no
+-- proprio arquivo, que a escolha deixava 'rascunho' VISIVEL — e que trocar por
+-- `estado = 'ativo'` seria uma linha. Esta e a linha.
+--
+-- POR QUE A DECISAO INVERTEU. Enquanto nada escrevia 'rascunho', os dois
+-- predicados eram o mesmo no-op e a diferenca era teorica. A tela de produto da
+-- Onda 5 acaba com isso: ela salva rascunho, e com o predicado antigo o rascunho
+-- ia para a loja NO PRIMEIRO SALVAMENTO — cafe sem foto, sem descricao e com
+-- preco provisorio, publicado por alguem que achou que estava rascunhando. O
+-- estado se chama 'rascunho' justamente porque a promessa dele e nao estar
+-- publicado; um predicado que o publica desmente o nome da coluna.
+--
+-- A LISTA BRANCA E A DEFESA CERTA AQUI. `<> 'arquivado'` e lista negra: um
+-- estado novo no CHECK amanha (digamos 'em_revisao') nasce PUBLICO por omissao,
+-- e a falha e por esquecimento, que e a que ninguem revisa. `= 'ativo'` faz o
+-- contrario: estado novo nasce invisivel, e quem quiser publica-lo tem de vir
+-- aqui e escrever isso num diff.
+--
+-- POR QUE UMA MIGRACAO NOVA E NAO UMA EDICAO DA 0037. A chave de controle em
+-- `canastra.migracoes` e o NOME COMPLETO do arquivo: uma 0037 ja aplicada nao
+-- roda de novo, entao editar o conteudo dela mudaria o schema de quem instalasse
+-- do zero e NAO mudaria o de quem ja aplicou. Duas realidades com o mesmo numero
+-- e pior do que um numero a mais.
+
+/**
+ * O que NAO muda, e precisa continuar assim:
+ *
+ *  - `WITH (security_invoker = true)`. `CREATE OR REPLACE` preserva a ACL, mas
+ *    REDECLARA as opcoes: omitir aqui faria a view voltar a rodar com os poderes
+ *    do dono, e a vitrine dependeria de novo da isencao de RLS que 0006
+ *    desmontou de proposito. O modo de falha daquele arranjo e silencioso —
+ *    FORCE RLS ligado, vitrine vazia, sem erro e sem log.
+ *
+ *  - A projecao, incluindo `estado`. Com `security_invoker`, o Postgres exige
+ *    privilegio de coluna sobre tudo que a view referencia, inclusive o que so
+ *    aparece no WHERE. O `GRANT SELECT (estado)` de 0037 continua valendo e e o
+ *    que impede este WHERE de virar 42501 para `anon`.
+ *
+ *  - `canastra.produtos_sku` fica INTACTA, e e por isso que ela existe. Ela
+ *    mostra todos os estados de proposito: `AvaliarPedido.tsx` traduz o
+ *    `product_id` congelado em `pedidos.itens` para o `sku` da avaliacao, e quem
+ *    comprou um cafe que foi arquivado depois continua tendo o que dizer. Sao
+ *    dois recortes diferentes porque sao duas perguntas diferentes.
+ */
+CREATE OR REPLACE VIEW canastra.produtos_publicos
+  WITH (security_invoker = true)
+AS
+  SELECT produto_id, nome, tamanho, categoria, preco, imagem, quantidade,
+         descricao, peso, largura, altura, comprimento, destacado_em, sku,
+         estado
+  FROM canastra.produtos
+  WHERE estado = 'ativo';
+
+-- Registra a versao, exatamente como db/migrar.js faria. SEM ISTO, um
+-- `npm run db:migrar` posterior tentaria reaplicar esta migracao e morreria no
+-- primeiro CREATE de objeto ja existente.
+INSERT INTO canastra.migracoes (versao) VALUES ('0038_rascunho_nao_vai_para_a_loja')
   ON CONFLICT (versao) DO NOTHING;
 
 

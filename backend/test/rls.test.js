@@ -39,6 +39,11 @@ const DORA = "dddddddd-0000-0000-0000-000000000004";
 // SO em `auth.users`. Usuaria de outro projeto da instancia compartilhada — o
 // motivo de este arquivo existir.
 const ESTRANHA = "eeeeeeee-0000-0000-0000-000000000005";
+// Conta DESTA loja com e-mail confirmado que ainda nao virou cliente: e o unico
+// estado em que `canastra.garantir_cliente` (0008) grava CPF, e por isso ela
+// existe — sem ela nao da para provar que o REVOKE de UPDATE em `clientes`
+// (0031) fecha o oraculo sem fechar o cadastro junto.
+const NOVA = "faaaaaaa-0000-0000-0000-000000000006";
 
 const CAFE = "cccccccc-0000-0000-0000-000000000001";
 const END_ANA = "a1111111-0000-0000-0000-000000000001";
@@ -50,13 +55,46 @@ const PED_BRUNO = "b3333333-0000-0000-0000-000000000002";
 // Pedido de cliente ja apagado: `pedidos.user_id` e ON DELETE SET NULL (0005).
 const PED_ORFAO = "03333333-0000-0000-0000-000000000009";
 
-/** As quatro relacoes genuinamente publicas da loja. */
-const PUBLICAS = ["config_loja", "produto_opcoes", "produtos", "promocoes"];
+/**
+ * As relacoes genuinamente publicas da loja — as unicas em que um
+ * `FOR SELECT USING (true)` e aceito pela invariante mais abaixo.
+ *
+ * ESTA LISTA E UMA DECISAO, NAO UM INVENTARIO, e por isso ela mora aqui e nao
+ * sai de `pg_policies`: derivar "o que e publico" das proprias politicas faria
+ * o teste concordar com qualquer politica que alguem escrevesse. Acrescentar um
+ * nome aqui e afirmar, no diff, que aquela relacao pode ser lida por quem nao
+ * tem conta.
+ *
+ * `vitrine_heroi` e `vitrine_texto` (0030) entraram porque o heroi e a barra de
+ * aviso sao a PRIMEIRA coisa que a home mostra, antes de qualquer login — sem
+ * leitura anonima a loja abre com o topo em branco. Elas nao guardam vinculo
+ * com pessoa nenhuma; a escrita continua so de admin, como as outras quatro.
+ *
+ * `promocoes` VIROU `promocoes_legado` EM 0032, E A LISTA NAO CRESCEU. Aquela
+ * migracao renomeou a tabela de 0005 e deu o nome `promocoes` ao motor novo —
+ * entao a linha aqui e a MESMA relacao de sempre, com o nome que ela passou a
+ * ter. O motor novo NAO entra: as sete tabelas de 0032 nao tem uma unica
+ * politica `USING (true)`. A leitura anonima de `promocoes` la e recortada no
+ * predicado (automatica, habilitada, dentro da janela, nao arquivada), porque a
+ * campanha AGENDADA e calendario comercial e a promocao de CODIGO carrega o
+ * valor de um cupom que circula em anuncio. Um nome a mais nesta lista teria
+ * dito, no diff, que a tabela inteira pode ser lida por quem nao tem conta — e
+ * seria falso.
+ */
+const PUBLICAS = [
+  "config_loja",
+  "produto_opcoes",
+  "produtos",
+  "promocoes_legado",
+  "vitrine_heroi",
+  "vitrine_texto",
+];
 
 const SESSAO_ANA = { papel: "authenticated", sub: ANA };
 const SESSAO_BRUNO = { papel: "authenticated", sub: BRUNO };
 const SESSAO_DORA = { papel: "authenticated", sub: DORA };
 const SESSAO_ESTRANHA = { papel: "authenticated", sub: ESTRANHA };
+const SESSAO_NOVA = { papel: "authenticated", sub: NOVA };
 const SESSAO_ANON = { papel: "anon" };
 
 /**
@@ -99,6 +137,13 @@ before(async () => {
        ($1,'ana@ex.com'), ($2,'bruno@ex.com'), ($3,'dora@ex.com'), ($4,'estranha@outroprojeto.com')`,
     [ANA, BRUNO, DORA, ESTRANHA],
   );
+  // NOVA entra num INSERT proprio porque e a UNICA que precisa de
+  // `email_confirmed_at`: a RPC de 0008 le essa coluna (e nao um claim) antes de
+  // criar o vinculo, e sem data ela recusaria com 28000 em vez de gravar o CPF.
+  await bd.pool.query(
+    "INSERT INTO auth.users (id, email, email_confirmed_at) VALUES ($1,'nova@ex.com', now())",
+    [NOVA],
+  );
   await bd.pool.query(
     `INSERT INTO canastra.clientes (user_id, nome) VALUES
        ($1,'Ana'), ($2,'Bruno'), ($3,'Dora')`,
@@ -115,7 +160,9 @@ before(async () => {
   await bd.pool.query(
     "INSERT INTO canastra.produto_opcoes (tipo, valor) VALUES ('tamanho', '250 g')",
   );
-  await bd.pool.query("INSERT INTO canastra.promocoes (titulo) VALUES ('Frete gratis')");
+  await bd.pool.query(
+    "INSERT INTO canastra.promocoes_legado (titulo) VALUES ('Frete gratis')",
+  );
   await bd.pool.query(
     "INSERT INTO canastra.config_loja (id, titulo_site) VALUES (1, 'Cafe Canastra')",
   );
@@ -232,9 +279,11 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
   // tabela ja NAO barra a Estranha, e quem barra e so a politica. Este teste e
   // quem prova que a troca foi paga.
   //
-  // Repare nos DOIS desfechos, que sao diferentes e os dois sao recusa:
+  // Repare nos TRES desfechos, que sao diferentes e os tres sao recusa:
   //   INSERT ........... 42501, o WITH CHECK barra a linha nova
   //   UPDATE / DELETE .. 0 linhas afetadas, SEM erro — o USING nao casa nada
+  //   DELETE em `config_loja` .. 42501 desde 0031, porque ali a recusa deixou
+  //     de ser de politica e passou a ser de privilegio (ver o fim do teste)
   await exigeRecusa(
     SESSAO_ESTRANHA,
     "INSERT INTO canastra.produtos (nome, preco) VALUES ('Invasor', 0.01)",
@@ -249,7 +298,7 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
   );
   await exigeRecusa(
     SESSAO_ESTRANHA,
-    "INSERT INTO canastra.promocoes (titulo) VALUES ('Invasor')",
+    "INSERT INTO canastra.promocoes_legado (titulo) VALUES ('Invasor')",
     [],
     "insercao de promocao",
   );
@@ -258,9 +307,8 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
     "UPDATE canastra.produtos SET preco = 0.01",
     "DELETE FROM canastra.produtos",
     "DELETE FROM canastra.produto_opcoes",
-    "UPDATE canastra.promocoes SET titulo = 'Invasor'",
+    "UPDATE canastra.promocoes_legado SET titulo = 'Invasor'",
     "UPDATE canastra.config_loja SET titulo_site = 'Invadido'",
-    "DELETE FROM canastra.config_loja",
   ];
   for (const sql of SILENCIOSOS) {
     const afetadas = await comoPapel(bd.pool, SESSAO_ESTRANHA, async (cliente) => {
@@ -270,12 +318,24 @@ test("ESTRANHA nao escreve o catalogo — e o que ela recebe de volta", async ()
     assert.equal(afetadas, 0, `nao deveria afetar linha nenhuma: ${sql}`);
   }
 
+  // O SEXTO ITEM DAQUELA LISTA MUDOU DE DESFECHO EM 0031, e a mudanca e a
+  // melhora: `DELETE FROM canastra.config_loja` era recusa calada de politica
+  // (0 linhas) e agora e recusa de PRIVILEGIO, que erra. Vale para ela, para o
+  // cliente e para a admin — quem apaga aquela linha unica leva junto o
+  // `bling_refresh_token` (0012), e "sucesso, 0 linhas" nao avisa ninguem disso.
+  await exigeRecusa(
+    SESSAO_ESTRANHA,
+    "DELETE FROM canastra.config_loja",
+    [],
+    "intrusa apagando a configuracao",
+  );
+
   // E o catalogo continua de pe, o que e a pergunta que realmente importa.
   const { rows } = await bd.pool.query(`
     SELECT
       (SELECT count(*)::int FROM canastra.produtos)       AS produtos,
       (SELECT count(*)::int FROM canastra.produto_opcoes) AS opcoes,
-      (SELECT count(*)::int FROM canastra.promocoes)      AS promocoes,
+      (SELECT count(*)::int FROM canastra.promocoes_legado) AS promocoes,
       (SELECT count(*)::int FROM canastra.config_loja)    AS config
   `);
   assert.deepEqual(rows[0], { produtos: 1, opcoes: 1, promocoes: 1, config: 1 });
@@ -393,7 +453,7 @@ test("anon le a vitrine inteira: catalogo, filtros, promocoes e configuracao", a
       "SELECT nome, preco FROM canastra.produtos_publicos ORDER BY nome",
     );
     const filtros = await cliente.query("SELECT valor FROM canastra.produto_opcoes");
-    const promocoes = await cliente.query("SELECT titulo FROM canastra.promocoes");
+    const promocoes = await cliente.query("SELECT titulo FROM canastra.promocoes_legado");
     const config = await cliente.query("SELECT titulo_site FROM canastra.config_loja");
     return {
       catalogo: catalogo.rows.map((r) => r.nome),
@@ -522,6 +582,74 @@ test("Ana le e escreve o que e dela", async () => {
   assert.equal(rows[0].n, 1);
 });
 
+test("o cliente corrige nome e telefone, e NAO escreve o proprio CPF", async () => {
+  // O BURACO QUE 0031 FECHA, e ele nao e sobre o CPF da Ana, e sobre o de todo
+  // mundo. `clientes_dono_atualiza` (0006:367) autoriza a LINHA inteira, e
+  // `clientes.cpf` e UNIQUE (0002): gravar um numero alheio devolve 23505 e
+  // gravar um numero livre devolve sucesso. Sao duas respostas distinguiveis
+  // para "este CPF tem conta nesta loja?", uma por tentativa, sem limite — um
+  // oraculo de enumeracao operado com a propria linha.
+  //
+  // Politica de RLS nao restringe COLUNA (0006:282), entao a trava desce um
+  // andar: REVOKE de UPDATE de tabela e GRANT so de (nome, telefone).
+  const perfil = await comoPapel(bd.pool, SESSAO_ANA, async (cliente) => {
+    const r = await cliente.query(
+      "UPDATE canastra.clientes SET nome = 'Ana Souza', telefone = '31999990000' WHERE user_id = $1",
+      [ANA],
+    );
+    return r.rowCount;
+  });
+  assert.equal(perfil, 1, "corrigir o proprio cadastro continua sendo do cliente");
+
+  await exigeRecusa(
+    SESSAO_ANA,
+    "UPDATE canastra.clientes SET cpf = $2 WHERE user_id = $1",
+    [ANA, "52998224725"],
+    "o dono gravando o proprio cpf",
+  );
+
+  // A FORMA QUE IMPORTA, e a asercao e no CODIGO justamente por isto: com um CPF
+  // que ja existe na loja, a recusa tem de ser 42501 (privilegio, antes do
+  // indice) e nunca 23505 (unicidade, DEPOIS de o indice ter respondido). A
+  // diferenca entre os dois codigos e a diferenca entre uma porta fechada e uma
+  // porta que conta quem esta do outro lado.
+  await bd.pool.query("UPDATE canastra.clientes SET cpf = $2 WHERE user_id = $1", [
+    BRUNO,
+    "11122233344",
+  ]);
+  try {
+    await exigeRecusa(
+      SESSAO_ANA,
+      "UPDATE canastra.clientes SET cpf = $2 WHERE user_id = $1",
+      [ANA, "11122233344"],
+      "sondagem do CPF de terceiro",
+    );
+  } finally {
+    await bd.pool.query("UPDATE canastra.clientes SET cpf = NULL WHERE user_id = $1", [
+      BRUNO,
+    ]);
+  }
+
+  // E O CADASTRO CONTINUA GRAVANDO CPF, que e a metade sem a qual o conserto
+  // seria uma regressao: `canastra.garantir_cliente` (0008) e SECURITY DEFINER,
+  // roda como o dono e por isso passa por cima do REVOKE. E o unico caminho que
+  // sobra ate a coluna pelo navegador — e ele normaliza o numero e traduz o
+  // 23505 numa frase, em vez de devolver o nome da constraint.
+  const linha = await comoPapel(bd.pool, SESSAO_NOVA, async (cliente) => {
+    await cliente.query("SELECT canastra.garantir_cliente($1, $2, $3)", [
+      "Nova Cliente",
+      null,
+      "52998224725",
+    ]);
+    const { rows: r } = await cliente.query(
+      "SELECT nome, cpf FROM canastra.clientes WHERE user_id = $1",
+      [NOVA],
+    );
+    return r[0];
+  });
+  assert.deepEqual(linha, { nome: "Nova Cliente", cpf: "52998224725" });
+});
+
 /* --------------------------------------------------------------------------
  * 10 a 13: a administradora e os pedidos
  * -------------------------------------------------------------------------- */
@@ -540,7 +668,7 @@ test("DORA administra: cadastra produto, le todos os pedidos e todos os clientes
       "INSERT INTO canastra.produto_opcoes (tipo, valor) VALUES ('categoria', 'Especial')",
     );
     const promo = await cliente.query(
-      "INSERT INTO canastra.promocoes (titulo) VALUES ('Semana do cafe')",
+      "INSERT INTO canastra.promocoes_legado (titulo) VALUES ('Semana do cafe')",
     );
     const config = await cliente.query(
       "UPDATE canastra.config_loja SET barra_de_aviso = 'Entrega em 2 dias', atualizado_em = now()",
@@ -637,6 +765,59 @@ test("DORA NAO reescreve o valor da venda — a trava e de COLUNA, nao de linha"
   for (const [coluna, sql] of PROIBIDOS) {
     await exigeRecusa(SESSAO_DORA, sql, [PED_ANA], `admin escrevendo ${coluna}`);
   }
+});
+
+test("NEM A ADMIN apaga a linha unica de `config_loja` — mas continua editando", async () => {
+  // O QUE UM DELETE AQUI LEVA JUNTO, e nao esta no nome do comando: 0012 guardou
+  // o `bling_refresh_token` NESTA linha e o protegeu com privilegio de COLUNA —
+  // nem a admin le, nem a admin escreve o token pelo PostgREST. So que aquele
+  // recorte cobriu SELECT, INSERT e UPDATE; o DELETE de tabela que 0006:271
+  // concedeu ficou de pe. E o DELETE e a unica operacao que leva a coluna sem
+  // nunca a ter lido: apagar a linha apaga o token, que e rotativo e so volta
+  // refazendo o OAuth do Bling a mao.
+  //
+  // E ninguem precisa dele. `config_loja` e tabela de UMA linha (o CHECK de
+  // 0005), o caminho legitimo de mudar configuracao e UPDATE, e o servico Node
+  // (`configRepository`, `blingClient`) so faz INSERT ... ON CONFLICT DO NOTHING
+  // e UPDATE. Um DELETE aqui e sempre acidente — e o pior tipo, o que responde
+  // "sucesso".
+  for (const [quem, sessao] of [
+    ["administradora", SESSAO_DORA],
+    ["cliente", SESSAO_ANA],
+    ["intrusa", SESSAO_ESTRANHA],
+  ]) {
+    await exigeRecusa(
+      sessao,
+      "DELETE FROM canastra.config_loja WHERE id = 1",
+      [],
+      `${quem} apagando a configuracao`,
+    );
+    // A variante sem WHERE, que e a que um cliente PostgREST distraido manda.
+    await exigeRecusa(
+      sessao,
+      "DELETE FROM canastra.config_loja",
+      [],
+      `${quem} apagando a configuracao sem WHERE`,
+    );
+  }
+
+  // E o que o painel realmente faz continua funcionando — senao o conserto
+  // teria trocado um acidente raro por uma tela morta todo dia.
+  const editado = await comoPapel(bd.pool, SESSAO_DORA, async (cliente) => {
+    const r = await cliente.query(
+      "UPDATE canastra.config_loja SET titulo_site = 'Cafe Canastra', atualizado_em = now() WHERE id = 1",
+    );
+    return r.rowCount;
+  });
+  assert.equal(editado, 1);
+
+  // A linha continua la depois de tudo (o ROLLBACK do harness devolveria uma
+  // linha apagada, entao esta contagem so vale por causa dos REVOKEs acima —
+  // ela e a rede que pega um DELETE que passasse FORA de `comoPapel`).
+  const { rows: sobrou } = await bd.pool.query(
+    "SELECT count(*)::int AS n FROM canastra.config_loja",
+  );
+  assert.equal(sobrou[0].n, 1);
 });
 
 test("NINGUEM insere pedido pelo PostgREST — so o service_role", async () => {

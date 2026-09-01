@@ -12,7 +12,6 @@ const compat = new FlatCompat({
 const eslintConfig = [
   {
     ignores: [
-      "legacy/**",
       ".next/**",
       "node_modules/**",
       "out/**",

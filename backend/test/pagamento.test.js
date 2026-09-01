@@ -54,7 +54,14 @@ test("frete: aceita valor que corresponde a uma opção cotada", async () => {
     shippingCost: 24.9,
     shippingMethod: "Correios PAC",
   });
-  assert.deepEqual(conferido, { valor: 24.9, metodo: "Correios PAC" });
+  // `ehMaisBarata` entrou no contrato na Onda 4: e o insumo de
+  // `promocao_frete.apenas_modalidade_mais_barata` (0032), e so `conferirFrete`
+  // tem as opcoes cotadas em maos para responder. Aqui o PAC E a mais barata.
+  assert.deepEqual(conferido, {
+    valor: 24.9,
+    metodo: "Correios PAC",
+    ehMaisBarata: true,
+  });
 });
 
 test("frete: o preço de uma opção com o nome de outra é recusado", async () => {
@@ -134,7 +141,10 @@ test("frete: retirada na loja custa zero e não consulta cotação", async () =>
   });
   // "Retirada" e o nome CANONICO: a retirada nao sai de cotacao nenhuma, entao
   // e este atalho quem nomeia o metodo — nao a variacao que o cliente digitou.
-  assert.deepEqual(conferido, { valor: 0, metodo: "Retirada" });
+  // Retirada e o frete mais barato que existe (zero) — responder `false` faria
+  // uma regra de "so na modalidade mais barata" parecer nao ter casado por
+  // outro motivo.
+  assert.deepEqual(conferido, { valor: 0, metodo: "Retirada", ehMaisBarata: true });
   cotacaoFalha = false;
 });
 

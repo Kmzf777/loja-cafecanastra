@@ -1,4 +1,20 @@
 const { REMETENTE, EMAIL_ADMIN, NOME_LOJA, URL_LOJA } = require("../config/remetente");
+
+/**
+ * A TELA DE PEDIDOS DO PAINEL — um lugar so, porque dois e-mails apontam para
+ * ela e ela ja mudou de endereco uma vez.
+ *
+ * Era `/dashboard/orders`. Na Onda 1 do painel novo, o catch-all que servia o
+ * SPA legado saiu da raiz de `/dashboard` (la ele engolia toda rota que o
+ * painel novo fosse criar) e desceu para `/dashboard/legado`. `/dashboard/orders`
+ * deixou de existir: o gestor clicava no botao do e-mail de "novo pedido" e
+ * caia num 404, com o pedido esperando do outro lado.
+ *
+ * QUANDO A TELA NOVA DE PEDIDOS NASCER (`/dashboard/pedidos`), E ESTA LINHA QUE
+ * MUDA. Ela esta escrita como constante nomeada exatamente para que a troca
+ * seja uma linha e nao uma cacada por template string.
+ */
+const URL_PAINEL_DE_PEDIDOS = `${URL_LOJA}/dashboard/legado/orders`;
 const pool = require("../pgPool");
 const resend = require("../config/mailer");
 const { escaparHtml } = require("./escaparHtml");
@@ -150,7 +166,7 @@ async function sendStatusEmail(order, newStatus, trackingCode) {
 async function sendAdminNewOrderEmail(order) {
   try {
     const adminEmail = EMAIL_ADMIN;
-    const dashboardUrl = `${URL_LOJA}/dashboard/orders`;
+    const dashboardUrl = URL_PAINEL_DE_PEDIDOS;
 
     const subject = `🎉 Novo Pedido Recebido! #${order.order_id.slice(0, 8)}`;
 
@@ -222,7 +238,7 @@ async function sendAdminClubeSemEstoqueEmail({ pedido, sku, quantidade, motivo }
             estoque no painel, ou <strong>estornar a cobrança</strong> no painel
             do Mercado Pago (o pedido então volta a 'reembolsado' pelo webhook).
           </p>
-          <a href="${URL_LOJA}/dashboard/orders" style="background-color: #000; color: #fff; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
+          <a href="${URL_PAINEL_DE_PEDIDOS}" style="background-color: #000; color: #fff; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
             Abrir o painel de pedidos
           </a>
         </div>

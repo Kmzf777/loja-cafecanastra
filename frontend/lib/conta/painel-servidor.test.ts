@@ -28,7 +28,7 @@ vi.mock("../supabase/servidor", () => ({
   criarClienteServidor: vi.fn(),
 }));
 
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -368,18 +368,99 @@ describe("estrutura de rotas de /dashboard", () => {
   });
 
   /**
-   * ROUTE HANDLER NÃO PASSA POR LAYOUT. Um `(protegido)/exportar/route.ts`
-   * nasceria ABERTO apesar do nome do grupo — layouts envolvem páginas, não
-   * handlers. Como o nome `(protegido)` promete mais do que o mecanismo
-   * entrega, a promessa é sustentada aqui: nenhum `route.ts` sob /dashboard.
-   * Quem precisar de um tem de chamar a checagem dentro da própria função, e
-   * este teste é onde essa conversa começa.
+   * ROUTE HANDLER E SERVER ACTION NÃO PASSAM POR LAYOUT.
+   *
+   * O caso do handler já era conhecido. O da Server Action é pior porque é
+   * INVISÍVEL: a ação POSTa para a própria rota, EXECUTA, e só então a página
+   * re-renderiza — momento em que o layout finalmente chama
+   * `exigirAdminNoPainel`. Ou seja, a checagem roda DEPOIS de a ação ter
+   * gravado no banco. O painel novo é feito de Server Actions.
+   *
+   * A regra deixou de ser "não existe" e passou a ser "todo mundo chama a
+   * checagem", porque proibir era proibir o painel de funcionar.
+   *
+   * `arquivosRecursivos` é a mesma varredura que o teste antigo usava — ela
+   * devolve o caminho relativo à RAIZ, e é esse caminho que entra na mensagem
+   * de falha. Quem quebrar isto precisa ler o NOME DO ARQUIVO na saída
+   * vermelha, senão a trava obriga a caçar o culpado.
    */
-  it("não há Route Handler sob /dashboard — layout não protegeria um", () => {
+  /**
+   * A VARREDURA IGNORA COMENTÁRIO, e isso foi descoberto pelo furo acontecendo.
+   *
+   * A primeira versão casava a regex contra o arquivo cru. Comentar a chamada
+   * em `acoes.ts` — deixando lá só a linha de comentário que EXPLICA a regra —
+   * mantinha o teste VERDE: a menção em prosa satisfazia o casamento. Ou seja,
+   * a trava pegava a omissão total e não pegava a chamada desativada, que é
+   * justamente o que acontece quando alguém "só quer testar uma coisa rápido".
+   *
+   * E o arquivo mais provável de conter a palavra num comentário é exatamente
+   * o que documenta a regra — isto é, o mais importante de proteger.
+   *
+   * A técnica é a mesma de `components/painel/ui/proibicoes.test.ts`, que já
+   * tinha topado com a versão irmã deste problema: um guarda que confunde
+   * "usa" com "fala sobre" ensina a apagar a explicação para calar o teste.
+   */
+  function semComentarios(fonte: string): string {
+    return fonte
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(?<!:)\/\/[^\n]*/g, "");
+  }
+
+  const CHAMA_A_CHECAGEM = /exigirAdminEmAcao\s*\(/;
+
+  it("todo Route Handler sob /dashboard chama a checagem na própria função", () => {
     const handlers = arquivosRecursivos(RAIZ).filter((a) =>
       /(^|\/)route\.(ts|tsx|js|jsx)$/.test(a),
     );
-    expect(handlers).toEqual([]);
+    for (const h of handlers) {
+      const fonte = semComentarios(readFileSync(join(RAIZ, h), "utf8"));
+      expect(fonte, `${h} não chama exigirAdminEmAcao`).toMatch(
+        CHAMA_A_CHECAGEM,
+      );
+    }
+  });
+
+  /**
+   * A diretiva vale no topo do ARQUIVO (todas as exportações viram ações) e no
+   * topo de uma FUNÇÃO (só ela vira). Por isso a regex é `/m` e ancorada em
+   * início de linha, não em início de arquivo — e aceita as duas aspas, porque
+   * `'use server'` e `"use server"` são a mesma diretiva para o compilador e
+   * seria absurdo a trava depender de qual delas a pessoa digitou.
+   */
+  /**
+   * DUAS RAÍZES, e a segunda foi acrescentada porque a primeira sozinha deixava
+   * a porta dos fundos aberta: uma ação em `lib/painel/acoes.ts`, importada por
+   * uma página do painel, roda com exatamente os mesmos privilégios de uma que
+   * mora sob `app/dashboard/` — e passava despercebida por morar fora da árvore
+   * varrida. `lib/painel/` é, por definição, código de painel; se um arquivo de
+   * lá declara `"use server"`, ele é uma ação administrativa.
+   */
+  const RAIZES_DE_ACAO = [
+    { rotulo: "app/dashboard", caminho: RAIZ },
+    { rotulo: "lib/painel", caminho: join(__dirname, "..", "painel") },
+  ];
+
+  it('todo arquivo com "use server" no painel chama a checagem', () => {
+    for (const { rotulo, caminho } of RAIZES_DE_ACAO) {
+      if (!existsSync(caminho)) continue;
+      const suspeitos = arquivosRecursivos(caminho).filter((a) =>
+        /\.(ts|tsx)$/.test(a),
+      );
+      for (const arquivo of suspeitos) {
+        // As DUAS perguntas olham o arquivo sem comentário, pela mesma razão em
+        // direções opostas: uma diretiva escrita dentro de um comentário de
+        // bloco não vira ação nenhuma (e exigir a checagem dela seria falso
+        // positivo), e uma chamada comentada não protege nada (e aceitá-la
+        // seria falso negativo). A âncora `^\s*` continua valendo depois da
+        // limpeza: tirar o comentário deixa linha em branco, não junta linhas.
+        const fonte = semComentarios(readFileSync(join(caminho, arquivo), "utf8"));
+        if (!/^\s*["']use server["']/m.test(fonte)) continue;
+        expect(
+          fonte,
+          `${rotulo}/${arquivo} declara "use server" e não chama exigirAdminEmAcao`,
+        ).toMatch(CHAMA_A_CHECAGEM);
+      }
+    }
   });
 });
 

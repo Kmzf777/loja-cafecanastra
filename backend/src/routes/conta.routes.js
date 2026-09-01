@@ -4,6 +4,7 @@ const pool = require("../pgPool");
 const isAuthenticated = require("../middleware/isAuthenticated");
 const isAdmin = require("../middleware/isAdmin");
 const { ehUuid } = require("../utils/formatoUuid");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * O que sobrou da conta no Express: SO o que o GoTrue nao faz.
@@ -418,10 +419,39 @@ async function listarClientes(req, res, { conexao = pool } = {}) {
   const limit = Math.min(100, Math.max(1, limitBruto));
   const offset = (page - 1) * limit;
 
+  /**
+   * A BUSCA, E ELA E O QUE FAZ ESTA TELA PARAR DE MENTIR (Onda 4).
+   *
+   * Ate aqui a rota aceitava so `page` e `limit`, e a tela filtrava o que tinha
+   * carregado: uma caixa de busca sobre uma pagina de 100 linhas esconde o
+   * cliente que casa e esta na pagina 3, e mostra um `total` que e o total
+   * geral. O filtro tem de acontecer onde estao todas as linhas.
+   *
+   * Os quatro campos sao o que o gestor tem na mao quando alguem liga: o nome
+   * que a pessoa disse, o e-mail com que ela comprou, o telefone do WhatsApp e
+   * o CPF da nota. O `ILIKE` cobre o comeco, o meio e a caixa trocada.
+   */
+  const q = String(req.query.q || "").trim();
+  const filtro = q
+    ? `WHERE (c.nome ILIKE $1 OR u.email ILIKE $1 OR c.telefone ILIKE $1
+              OR c.cpf ILIKE $1)`
+    : "";
+  const valores = q ? [`%${q}%`] : [];
+
   try {
+    // A CONTAGEM USA O MESMO WHERE E O MESMO JOIN da listagem — contar em
+    // `clientes` cru daria um total maior que a lista sempre que a busca
+    // casasse por e-mail, e a paginacao ofereceria paginas vazias.
     const total = Number(
-      (await conexao.query("SELECT count(*) FROM canastra.clientes")).rows[0]
-        .count,
+      (
+        await conexao.query(
+          `SELECT count(*)
+             FROM canastra.clientes c
+             LEFT JOIN auth.users u ON u.id = c.user_id
+             ${filtro}`,
+          valores,
+        )
+      ).rows[0].count,
     );
     const totalPages = Math.ceil(total / limit);
 
@@ -436,9 +466,10 @@ async function listarClientes(req, res, { conexao = pool } = {}) {
            WHERE p.user_id = c.user_id) AS purchases
        FROM canastra.clientes c
        LEFT JOIN auth.users u ON u.id = c.user_id
+       ${filtro}
        ORDER BY c.criado_em DESC
-       LIMIT $1 OFFSET $2`,
-      [limit, offset],
+       LIMIT $${valores.length + 1} OFFSET $${valores.length + 2}`,
+      [...valores, limit, offset],
     );
 
     return res.json({ users: rows, total, totalPages, page });
@@ -489,7 +520,12 @@ async function excluirClientePeloAdmin(
       `SELECT
          EXISTS (SELECT 1 FROM canastra.clientes WHERE user_id = $1) AS eh_cliente,
          EXISTS (SELECT 1 FROM canastra.admins   WHERE user_id = $1) AS eh_admin,
-         (SELECT count(*) FROM canastra.admins) AS total_admins`,
+         (SELECT count(*) FROM canastra.admins) AS total_admins,
+         -- Para a linha de auditoria: depois do DELETE, o nome não existe mais
+         -- em lugar nenhum, e "quem apagou quem?" sem o "quem" não responde
+         -- nada. O CPF e o telefone NÃO entram — o registro da exclusão não
+         -- pode ser a cópia que sobrou do dado que se apagou.
+         (SELECT nome FROM canastra.clientes WHERE user_id = $1) AS nome`,
       [id],
     );
 
@@ -551,6 +587,24 @@ async function excluirClientePeloAdmin(
     // 404 = a conta ja nao existe no GoTrue; a cascata ja levou clientes e
     // admins junto. O efeito pedido ja aconteceu.
     if (resposta.ok || resposta.status === 404) {
+      /**
+       * O REGISTRO VEM DEPOIS DA EXCLUSAO, e nao antes: registrar antes deixaria
+       * no log uma exclusao que o GoTrue pode ter recusado. O `antes` foi lido
+       * la em cima, quando a linha ainda existia — depois da cascata nao ha de
+       * onde tira-lo.
+       *
+       * Fora de transacao porque a exclusao acontece em OUTRO sistema (a Admin
+       * API do GoTrue): nao ha transacao a compartilhar. Uma falha aqui vira
+       * 500 com a conta ja apagada — o troco conhecido, e o lado seguro do erro
+       * (a exclusao e o efeito pedido; o log e a prestacao de contas dela).
+       */
+      await registrar(conexao, {
+        adminUserId: req.user?.userId ?? null,
+        acao: ACOES.CLIENTE_EXCLUIDO,
+        entidade: ENTIDADES.CLIENTE,
+        entidadeId: id,
+        antes: { nome: rows[0].nome ?? null, era_admin: rows[0].eh_admin },
+      });
       return res.status(200).json({ message: "Cliente excluído com sucesso." });
     }
 

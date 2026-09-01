@@ -38,7 +38,15 @@ class CuponsRepository {
     return rows;
   }
 
-  /** Cria e devolve a linha. Código repetido estoura 23505 — o controller traduz. */
+  /**
+   * Cria e devolve a linha. Código repetido estoura 23505 — o controller traduz.
+   *
+   * `client` OPCIONAL pelo mesmo motivo de `reservarUso` logo abaixo, e desde a
+   * Onda 4 por mais um: o controller abre uma transação para gravar o cupom e a
+   * linha de `admin_log` juntos. Sem o parâmetro, o INSERT sairia commitado
+   * sozinho e o registro de quem criou a campanha ficaria numa transação
+   * separada — que é a que pode falhar.
+   */
   async criar({
     codigo,
     tipo,
@@ -48,8 +56,9 @@ class CuponsRepository {
     limiteUsos = null,
     inicioEm = null,
     fimEm = null,
+    client = pool,
   }) {
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `INSERT INTO canastra.cupons
          (codigo, tipo, valor, descricao, minimo_centavos, limite_usos, inicio_em, fim_em)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -68,7 +77,7 @@ class CuponsRepository {
    * checkout (reservarUso/devolverUso); um painel que o reescrevesse zeraria
    * a trava de esgotamento sem querer.
    */
-  async atualizar(id, campos) {
+  async atualizar(id, campos, client = pool) {
     const EDITAVEIS = {
       codigo: "codigo",
       tipo: "tipo",
@@ -95,7 +104,7 @@ class CuponsRepository {
     sets.push("atualizado_em = now()");
     valores.push(id);
 
-    const { rows } = await pool.query(
+    const { rows } = await client.query(
       `UPDATE canastra.cupons SET ${sets.join(", ")}
         WHERE id = $${valores.length}::uuid
         RETURNING ${COLUNAS}`,

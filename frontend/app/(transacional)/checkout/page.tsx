@@ -27,13 +27,15 @@ import {
   cotarFrete,
   pagarComPix,
   pagarComCartao,
-  subtotalDosItensCentavos,
+  subtotalPromocionalCentavos,
   CODIGO_PRECO_MUDOU,
   ErroDoPagamento,
   type Endereco,
   type OpcaoDeFrete,
+  type PrecoRelido,
   type RespostaDoPagamento,
 } from "@/lib/sacola/checkout";
+import { lerAtribuicao } from "@/lib/atribuicao/armazenamento";
 import type { ItemDaSacola } from "@/lib/sacola/sacola";
 import { eventoPurchase } from "@/lib/analytics";
 
@@ -139,20 +141,41 @@ export default function PaginaCheckout() {
    */
   const [precosFrescos, setPrecosFrescos] = useState<Record<
     string,
-    number
+    PrecoRelido
   > | null>(null);
 
   /** A sacola com os preços corrigidos, quando houver. Tudo na tela lê daqui. */
   const itens = useMemo<ItemDaSacola[]>(() => {
     if (!precosFrescos) return itensDaSacola;
-    return itensDaSacola.map((i) =>
-      precosFrescos[i.product_id] === undefined
-        ? i
-        : { ...i, price: precosFrescos[i.product_id] },
-    );
+    return itensDaSacola.map((i) => {
+      const fresco = precosFrescos[i.product_id];
+      if (fresco === undefined) return i;
+      /**
+       * A PROMOÇÃO TAMBÉM É SUBSTITUÍDA, INCLUSIVE PARA SUMIR. O `delete` não
+       * é higiene: uma campanha que expirou entre montar a sacola e pagar
+       * deixaria o campo velho colado no item, e a declaração
+       * `subtotalPromocionalCentavos` sairia com um desconto que o servidor
+       * não pratica mais — 409 de novo, pelo outro campo, e o mesmo laço
+       * infinito que a releitura existe para quebrar.
+       */
+      const corrigido: ItemDaSacola = { ...i, price: fresco.precoReais };
+      delete corrigido.precoPromocionalCentavos;
+      if (fresco.precoPromocionalCentavos !== undefined) {
+        corrigido.precoPromocionalCentavos = fresco.precoPromocionalCentavos;
+      }
+      return corrigido;
+    });
   }, [itensDaSacola, precosFrescos]);
 
-  const totalCentavos = subtotalDosItensCentavos(itens);
+  /**
+   * O SUBTOTAL DA TELA É O PROMOCIONAL — o que a pessoa vai pagar pelos itens.
+   *
+   * É ele que aparece no resumo, que limita o desconto do cupom, que soma no
+   * total e que monta o CardForm do Mercado Pago. O subtotal de CATÁLOGO
+   * continua existindo, mas só dentro de `corpoComum` (checkout.ts), como
+   * declaração para `conferirSubtotal` — nenhuma superfície de tela o imprime.
+   */
+  const totalCentavos = subtotalPromocionalCentavos(itens);
 
   // Cartão: só existe com a chave pública no build.
   const temCartao = chavePublicaMp() !== null;
@@ -420,7 +443,7 @@ export default function PaginaCheckout() {
       return;
     }
 
-    let precos: Map<string, number>;
+    let precos: Map<string, PrecoRelido>;
     try {
       precos = await buscarPrecosAtuais(itensDaSacola);
     } catch {
@@ -430,12 +453,17 @@ export default function PaginaCheckout() {
       return;
     }
 
-    const mapa: Record<string, number> = {};
+    const mapa: Record<string, PrecoRelido> = {};
     const corrigidos = itensDaSacola.map((i) => {
       const preco = precos.get(i.product_id);
       if (preco === undefined) return i;
       mapa[i.product_id] = preco;
-      return { ...i, price: preco };
+      const corrigido: ItemDaSacola = { ...i, price: preco.precoReais };
+      delete corrigido.precoPromocionalCentavos;
+      if (preco.precoPromocionalCentavos !== undefined) {
+        corrigido.precoPromocionalCentavos = preco.precoPromocionalCentavos;
+      }
+      return corrigido;
     });
     setPrecosFrescos(mapa);
 
@@ -461,7 +489,10 @@ export default function PaginaCheckout() {
 
     const aviso =
       `${frase} Atualizamos o resumo: o subtotal agora é ` +
-      `${formatarPreco(subtotalDosItensCentavos(corrigidos))}.`;
+      // O MESMO número que o resumo ao lado passa a imprimir — o promocional.
+      // Anunciar aqui a soma de catálogo mandaria a pessoa conferir um valor
+      // que a tela não mostra em lugar nenhum.
+      `${formatarPreco(subtotalPromocionalCentavos(corrigidos))}.`;
     setErro(
       falhaNaCotacao
         ? `${aviso} ${falhaNaCotacao}`
@@ -482,6 +513,7 @@ export default function PaginaCheckout() {
         endereco,
         frete: freteEscolhido,
         cupom: cupom?.codigo,
+        atribuicao: lerAtribuicao(),
       });
       await concluir(resposta);
     } catch (e) {
@@ -513,6 +545,13 @@ export default function PaginaCheckout() {
         endereco,
         frete: freteEscolhido,
         cupom: cupom?.codigo,
+        /**
+         * LIDA NA HORA DE PAGAR, não guardada em estado: o `localStorage` é a
+         * verdade, e um valor capturado na montagem ficaria velho se a pessoa
+         * abrisse a loja de novo por um anúncio noutra aba. Ela também NÃO
+         * entra na chave de idempotência — ver `chaveDestePedido`.
+         */
+        atribuicao: lerAtribuicao(),
         cartao: dadosCartao,
       });
       await concluir(resposta);

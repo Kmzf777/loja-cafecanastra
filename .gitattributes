@@ -1,0 +1,16 @@
+# Fim de linha normalizado no repositório, LF sempre.
+#
+# POR QUE ISTO EXISTE: `backend/test/instalacao.test.js` compara o SQL gerado
+# por `gerar-instalacao.js` com o arquivo versionado. No Windows, o checkout
+# com `core.autocrlf=true` reescreve o arquivo com CRLF, o gerador produz LF, e
+# o teste falha dizendo que a instalação está desatualizada — quando o que está
+# diferente é invisível. Já custou uma investigação inteira na direção errada.
+* text=auto eol=lf
+
+# Binários: nunca tocar.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.avif binary
+*.ico binary

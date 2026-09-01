@@ -146,6 +146,21 @@ const pt = {
     limparTudo: "Limpar tudo",
     limparFiltros: "Limpar filtros",
     aPartirDe: "a partir de",
+    /**
+     * AS TRÊS PALAVRAS DO PREÇO "DE/POR" — e elas existem só para o leitor de
+     * tela.
+     *
+     * Na tela, o riscado e o número em destaque já dizem tudo, e escrever "de"
+     * ao lado de um preço riscado seria repetir com palavra o que a forma já
+     * comunica. Mas `<s>` não é anunciado de forma confiável por leitor de
+     * tela nenhum, e "R$ 60,00 R$ 54,00" sem preposição é a leitura de um
+     * preço de cento e catorze reais. Por isso `<Preco>` esconde os números e
+     * põe a frase inteira num `sr-only` montado com estas chaves.
+     */
+    precoDe: "de",
+    precoPor: "por",
+    /** Vem depois do número: "10% de desconto". */
+    desconto: "de desconto",
     esgotado: "Esgotado",
     /**
      * Linha SEM NENHUM preço na loja — não é o mesmo que esgotado, e a
@@ -811,6 +826,11 @@ const en: Dicionario = {
     limparTudo: "Clear all",
     limparFiltros: "Clear filters",
     aPartirDe: "from",
+    /** Ver o comentário em `pt` — as três só existem para o leitor de tela. */
+    precoDe: "was",
+    precoPor: "now",
+    /** Vem depois do número: "10% off". */
+    desconto: "off",
     esgotado: "Sold out",
     indisponivel: "Unavailable",
     /** Sem preposição: em inglês a data segue direto — "Updated August 2026". */
@@ -1173,6 +1193,11 @@ const es: Dicionario = {
     limparTudo: "Borrar todo",
     limparFiltros: "Borrar filtros",
     aPartirDe: "desde",
+    /** Ver o comentário em `pt` — as três só existem para o leitor de tela. */
+    precoDe: "antes",
+    precoPor: "ahora",
+    /** Vem depois do número: "10% de descuento". */
+    desconto: "de descuento",
     esgotado: "Agotado",
     indisponivel: "No disponible",
     atualizadoEm: "Actualizado en",

@@ -157,14 +157,19 @@ antes de ela ser commitada.
 sem contas de teste roda a metade anônima. Leia `docs/producao.md` §8.1 antes,
 porque ele **escreve** no banco para o qual você apontá-lo.
 
-`npm run verifica` é fumaça ponta a ponta contra a loja de verdade: guard do
-painel, login pelo GoTrue, as rotas do painel, os 29 SKUs, PLP, PDP, sacola e
-checkout. Exige backend, Next e banco no ar ao mesmo tempo, e o caminho do
-Chromium está fixo no script (`frontend/scripts/verifica-fluxo.mjs`) — ajuste-o
-para a sua máquina. Ele **não** cobre as superfícies mais novas: cupom, cartão,
-Clube, avaliações e `/pedido/[id]` só têm cobertura nas suítes acima. **E ele
-não abre uma única URL em `/en` ou `/es`** — o i18n é verificado por tipo (o
-dicionário quebrando o build) e pelo vitest, não por este script.
+`npm run verifica` **não existe mais.** Era um script de fumaça num Chromium
+real (`frontend/scripts/verifica-fluxo.mjs`), e a Onda 7 o apagou porque ele já
+não rodava havia meses: o `executablePath` apontava para um caminho Linux que
+não existe nesta máquina, esperava o redirecionamento do painel em
+`/account/login` quando o guard manda para `/dashboard/entrar`, e visitava as
+oito rotas do painel legado — que a mesma onda apagou. Não há E2E hoje; a
+cobertura é a das duas suítes acima.
+
+**Ressuscitá-lo é uma tarefa aberta**, e a decisão de fazê-lo está registrada em
+`docs/pesquisa/2026-08-26-riscos-da-reescrita.md` §4 ("E2E NO CI"): instalar
+`@playwright/test` com config próprio e um job no workflow, contra as rotas
+novas. `playwright` continua em `devDependencies` justamente para isso — hoje
+sem nenhum consumidor.
 
 ---
 

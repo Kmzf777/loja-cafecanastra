@@ -101,4 +101,19 @@ describe("CardKit", () => {
   it("continua em português quando ninguém passa idioma", () => {
     expect(html(<CardKit kit={KIT} />)).toContain("Adicionar à sacola");
   });
+
+  it("o kit em campanha também mostra 'de/por' — kits passam pelo mesmo motor", () => {
+    // `sobreporAoVivo` casa kit, variante e SKU avulso pelo MESMO caminho; um
+    // card de kit sem tratamento seria a única superfície de venda a esconder
+    // a promoção que a cobrança aplica.
+    const emPromocao: Kit = {
+      ...KIT,
+      preco: 10000,
+      precoPromocional: 8000,
+      estoque: 5,
+    };
+    const saida = html(<CardKit kit={emPromocao} locale="pt" />);
+    expect(saida).toContain("<s ");
+    expect(saida).toContain("−20%");
+  });
 });

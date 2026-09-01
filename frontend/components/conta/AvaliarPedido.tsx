@@ -12,10 +12,20 @@ import {
  * "Avalie seus cafés" — aparece na página do pedido quando ele está ENTREGUE.
  *
  * O pedido guarda `itens` com `product_id` e SEM sku (formato do checkout);
- * a avaliação é gravada por SKU. A ponte é `produtos_publicos` (leitura
- * pública via PostgREST): `product_id -> sku`. Item cujo produto saiu do
- * catálogo não resolve SKU e não ganha formulário — a mesma regra do
+ * a avaliação é gravada por SKU. A ponte é `produtos_sku` (leitura via
+ * PostgREST, só para quem tem conta): `product_id -> sku`. Item cujo produto
+ * saiu do catálogo não resolve SKU e não ganha formulário — a mesma regra do
  * `pode_avaliar` no banco, que também deixa de casar o join.
+ *
+ * A PONTE ERA `produtos_publicos` E DEIXOU DE SER, na migração 0037: aquela
+ * view passou a filtrar `estado <> 'arquivado'` para o rascunho e o café
+ * aposentado sumirem da vitrine, e ela tinha DOIS leitores — a loja e este
+ * componente. Continuar lendo a view filtrada apagaria, em silêncio e sem erro
+ * nenhum na tela, o formulário de avaliação de quem comprou um café que a loja
+ * arquivou depois. `produtos_sku` mostra todos os estados, tem só
+ * `produto_id` e `sku`, e não é alcançável por `anon`. Quem decide se a pessoa
+ * PODE avaliar continua sendo `canastra.pode_avaliar(sku)`, que confere pedido
+ * `entregue` do próprio `auth.uid()` e não olha estado: quem recebeu, avalia.
  *
  * Já avaliados somem da lista (`minhasAvaliacoes`); se ela falhar, o
  * formulário aparece mesmo assim e o banco recusa duplicata com 23505
@@ -184,7 +194,7 @@ export function AvaliarPedido({ itens }: Props) {
         const supabase = clienteNavegador();
         const [produtos, minhas] = await Promise.all([
           supabase
-            .from("produtos_publicos")
+            .from("produtos_sku")
             .select("produto_id, sku")
             .in(
               "produto_id",

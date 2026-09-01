@@ -1,8 +1,14 @@
 const pool = require("../pgPool");
 const cuponsRepository = require("../repositories/cuponsRepository");
 const PromotionsRepository = require("../repositories/promotionsRepository");
-const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
+const { avaliarCupom, normalizarCodigo, reaisPorExtenso } = require("../utils/cupom");
 const { precoComPromocao, somarCentavos } = require("../utils/preco");
+// O motor (0032 + Onda 4). `motor.js` é PURO — a conta; o repositório é quem
+// sabe ler as sete tabelas. Os dois são os MESMOS que o checkout usa, e é essa
+// identidade que faz a tela e a cobrança não discordarem sobre um código.
+const { calcularDescontos } = require("../utils/motor");
+const motorRepository = require("../repositories/motorRepository");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 const promotionsRepo = new PromotionsRepository();
 
@@ -25,18 +31,25 @@ const FORMATO_CODIGO = /^[A-Z0-9]{3,30}$/;
 const TAMANHO_MINIMO_DE_CODIGO_NOVO = 6;
 
 /**
- * Subtotal EM CENTAVOS calculado no servidor: preço do banco, promoção ativa
+ * O carrinho precificado PELO SERVIDOR: preço do banco, promoção legada ativa
  * aplicada (o cupom desconta sobre o preço já promocional — mesma função
  * `precoComPromocao` do checkout, então validação e cobrança nunca divergem).
  *
  * O corpo pode até mandar `price`; ele é ignorado de propósito — número que
  * vira dinheiro nunca vem do navegador (regra da F4).
+ *
+ * DEVOLVE TAMBÉM AS LINHAS NO VOCABULÁRIO DO MOTOR e os ids das promoções
+ * legadas vigentes. As duas coisas existem pela mesma razão: desde a 0032 um
+ * código de desconto pode morar em `canastra.cupons` (legado) OU em
+ * `promocao_codigos` (motor), e esta rota precisa perguntar aos dois — sem
+ * deixar que uma campanha que existe nas duas tabelas seja contada duas vezes.
  */
-async function subtotalDoServidorCentavos(itens) {
+async function precificarCarrinho(itens) {
   const { rows } = await pool.query(
     `SELECT produto_id AS product_id,
             preco      AS price,
-            categoria  AS category
+            categoria  AS category,
+            sku
        FROM canastra.produtos
       WHERE produto_id = ANY($1::uuid[])`,
     [itens.map((i) => i.productId)],
@@ -45,8 +58,6 @@ async function subtotalDoServidorCentavos(itens) {
 
   const activePromotions = await promotionsRepo.findActivePromotionsForCheckout();
 
-  // A soma em si é a `somarCentavos` de utils/preco — a MESMA do frete e do
-  // checkout, para os três nunca discordarem sobre o mesmo carrinho.
   const precificados = itens.map((item) => {
     const produto = porId.get(item.productId);
     if (!produto) {
@@ -55,12 +66,73 @@ async function subtotalDoServidorCentavos(itens) {
       throw erro;
     }
     return {
+      produto,
       price: precoComPromocao(produto, activePromotions),
       quantity: item.quantity,
     };
   });
-  return somarCentavos(precificados);
+
+  return {
+    // A soma em si é a `somarCentavos` de utils/preco — a MESMA do frete e do
+    // checkout, para os três nunca discordarem sobre o mesmo carrinho.
+    subtotalCentavos: somarCentavos(precificados),
+    linhas: precificados.map((p) => ({
+      produtoId: p.produto.product_id,
+      sku: p.produto.sku ?? null,
+      categoria: p.produto.category ?? null,
+      // `precoCentavos` é o UNITÁRIO já promocional: a promoção legada é etapa
+      // zero e o motor começa do que ela deixou. Idêntico ao
+      // `carrinhoParaOMotor` do PaymentController.
+      precoCentavos: Math.round(Number(p.price) * 100),
+      quantidade: Number(p.quantity),
+    })),
+    idsLegados: new Set(activePromotions.map((p) => String(p.id)).filter(Boolean)),
+  };
 }
+
+/**
+ * A MESMA ponte de transição do `PaymentController.semSobreposicaoComOLegado`,
+ * e ela precisa ser a mesma: a 0032 INSERIU cada linha de `promocoes_legado` e
+ * de `cupons` na tabela `promocoes` nova REAPROVEITANDO o `id`. Enquanto os dois
+ * caminhos convivem, uma campanha migrada seria aplicada DUAS VEZES sobre o
+ * mesmo carrinho — e aqui o efeito seria a tela prometer um desconto que o
+ * checkout não vai dar, que é o defeito que esta rota existe para não ter.
+ *
+ * O corte é pelo `id` justamente porque a migração o reaproveitou: igualdade
+ * exata, não heurística. E o código digitado tem dono único — se a busca em
+ * `canastra.cupons` achou o código, a regra de método `codigo` do motor é a
+ * MESMA campanha, e quem aplica é o caminho legado.
+ */
+function semSobreposicaoComOLegado(regras, { idsLegados, cupomLegadoAplicado }) {
+  return regras.filter((regra) => {
+    if (idsLegados.has(String(regra.id))) return false;
+    if (cupomLegadoAplicado && regra.metodo === "codigo") return false;
+    return true;
+  });
+}
+
+/** Soma os ajustes de um alvo. Em centavos, como tudo que vem do motor. */
+function somaDosAjustes(ajustes, alvo) {
+  return ajustes
+    .filter((a) => a.alvo === alvo)
+    .reduce((total, a) => total + a.valorCentavos, 0);
+}
+
+/**
+ * `mecanica` do motor → o `tipo` do contrato desta rota.
+ *
+ * O contrato ({ valido, codigo, tipo, valor, descontoCentavos, descricao }) é
+ * anterior ao motor e fala 'percent'/'fixed'. As mecânicas que NÃO têm tradução
+ * — preço fixo, leve 3 pague 2, progressivo, frete grátis — saem com `tipo:
+ * null` em vez de um rótulo aproximado: quem consome esta resposta usa
+ * `descontoCentavos` e `descricao` (ver `frontend/lib/sacola/cupom.ts`), e
+ * chamar um "leve 3 pague 2" de 'percent' seria escrever um número errado num
+ * campo que ninguém confere.
+ */
+const TIPO_POR_MECANICA = Object.freeze({
+  percentual: "percent",
+  valor_fixo: "fixed",
+});
 
 /** Recusa em cima o que o CHECK do banco recusaria embaixo — com frase. */
 function validarCampos({
@@ -155,21 +227,138 @@ class CuponsController {
         return res.status(400).json({ error: "Informe o código do cupom." });
       }
 
-      const subtotalCentavos = await subtotalDoServidorCentavos(itens);
+      const { subtotalCentavos, linhas, idsLegados } = await precificarCarrinho(itens);
       const cupom = await cuponsRepository.buscarPorCodigo(codigoNormalizado);
-      const avaliacao = avaliarCupom(cupom, subtotalCentavos);
 
-      if (!avaliacao.valido) {
-        return res.status(200).json(avaliacao);
+      /**
+       * O CÓDIGO TEM DOIS DONOS POSSÍVEIS enquanto a transição dura, e até a
+       * Onda 4 esta rota só conhecia um: um código de `promocao_codigos`
+       * respondia `valido: false` aqui e era ACEITO no checkout. Não cobrava a
+       * mais — o `process_payment` já fala com o motor —, mas a tela MENTIA
+       * para o cliente, mandando-o procurar erro de digitação num código que
+       * ele copiou certo do anúncio.
+       *
+       * `meioPagamento: null` e `assinante: false` NÃO são preguiça: esta rota é
+       * PÚBLICA (não há sessão para perguntar se a pessoa é do Clube) e roda
+       * antes de o meio de pagamento existir. O motor já trata os dois — sem
+       * meio conhecido, uma regra condicionada a Pix não vale, "porque um
+       * desconto de Pix aplicado a um pagamento cujo método ainda não se sabe é
+       * um desconto que a cobrança não consegue justificar depois". Prometer o
+       * desconto de Pix aqui produziria exatamente a divergência que este
+       * arquivo existe para evitar; o troco é uma promessa a MENOS, que é o
+       * lado seguro do erro.
+       */
+      const regras = semSobreposicaoComOLegado(
+        await motorRepository.carregarRegrasVigentes({ codigo: codigoNormalizado }),
+        { idsLegados, cupomLegadoAplicado: Boolean(cupom) },
+      );
+      const regrasDoCodigo = regras.filter(
+        (regra) => regra.codigo && regra.codigo.codigo === codigoNormalizado,
+      );
+
+      // "Não encontrado" só é verdade quando NENHUM dos dois reconhece o
+      // código. `diagnosticarCodigo` custa uma consulta e devolve a frase certa
+      // ("inativo", "expirado", "esgotado") do vocabulário fechado de
+      // `utils/cupom.js` — as mesmas cinco que o checkout usa.
+      if (!cupom && regrasDoCodigo.length === 0) {
+        return res.status(200).json({
+          valido: false,
+          motivo: await motorRepository.diagnosticarCodigo(codigoNormalizado),
+        });
+      }
+
+      const motorPrevio = calcularDescontos(
+        { itens: linhas, meioPagamento: null, assinante: false, frete: null },
+        regras,
+      );
+
+      /**
+       * A BASE DO CUPOM LEGADO DESCONTA A ETAPA 1 DO MOTOR — a mesma regra que
+       * o motor aplica às suas próprias regras de pedido, e a mesma que o
+       * `PaymentController` usa: desconto sobre o subtotal incide sobre o
+       * subtotal JÁ REDUZIDO pelos descontos de linha. Sem regra nova
+       * cadastrada o subtraendo é zero e a conta é, ao centavo, a de sempre.
+       */
+      const baseCentavos = subtotalCentavos - somaDosAjustes(motorPrevio.ajustes, "item");
+
+      if (cupom) {
+        const avaliacao = avaliarCupom(cupom, baseCentavos);
+        if (!avaliacao.valido) return res.status(200).json(avaliacao);
+
+        return res.status(200).json({
+          valido: true,
+          codigo: cupom.codigo,
+          tipo: cupom.tipo,
+          valor: Number(cupom.valor),
+          descontoCentavos: Math.max(
+            0,
+            Math.min(
+              avaliacao.descontoCentavos,
+              baseCentavos - somaDosAjustes(motorPrevio.ajustes, "pedido"),
+            ),
+          ),
+          descricao: cupom.descricao,
+        });
+      }
+
+      // Daqui para baixo, o código é do MOTOR.
+      const regra = regrasDoCodigo[0];
+      const descontoCentavos = motorPrevio.ajustes
+        .filter((ajuste) => ajuste.codigo === codigoNormalizado)
+        .reduce((total, ajuste) => total + ajuste.valorCentavos, 0);
+
+      if (descontoCentavos === 0) {
+        /**
+         * O código existe e está vigente, e mesmo assim não virou desconto. As
+         * três saídas abaixo são situações DIFERENTES, e responder a mesma coisa
+         * para as três seria mentir de um jeito ou de outro.
+         */
+
+        // 1. É um código de FRETE, e o frete ainda não foi cotado (a classe
+        //    `frete` do motor depende da modalidade escolhida). Recusar diria
+        //    "inválido" para um código que o checkout vai honrar; anunciar um
+        //    número seria inventá-lo. Vale, com zero — e a descrição explica.
+        if (regrasDoCodigo.every((r) => r.classe === "frete")) {
+          return res.status(200).json({
+            valido: true,
+            codigo: codigoNormalizado,
+            tipo: TIPO_POR_MECANICA[regra.mecanica] ?? null,
+            valor: Number.isFinite(Number(regra.valor)) ? Number(regra.valor) : null,
+            descontoCentavos: 0,
+            descricao: regra.nome,
+          });
+        }
+
+        // 2. O carrinho não atingiu o mínimo — a MESMA frase do cupom legado,
+        //    com o valor em reais, porque para quem digitou é o mesmo problema
+        //    e a mesma solução ("falta pouco, coloque mais um café").
+        const porMinimo = regrasDoCodigo.find(
+          (r) => r.minimoTipo === "subtotal" && baseCentavos < Number(r.minimoValor),
+        );
+        if (porMinimo) {
+          return res.status(200).json({
+            valido: false,
+            motivo: `Pedido mínimo de R$ ${reaisPorExtenso(Number(porMinimo.minimoValor))}`,
+          });
+        }
+
+        // 3. Escopo, quantidade mínima, exclusividade: o código é bom e não
+        //    alcança NADA do que está na sacola. Nenhuma das cinco frases do
+        //    contrato descreve isso — "esgotado" ou "inativo" mandariam procurar
+        //    o problema no cupom, e ele está no carrinho.
+        return res.status(200).json({
+          valido: false,
+          motivo: "Este cupom não vale para os itens deste carrinho",
+        });
       }
 
       return res.status(200).json({
         valido: true,
-        codigo: cupom.codigo,
-        tipo: cupom.tipo,
-        valor: Number(cupom.valor),
-        descontoCentavos: avaliacao.descontoCentavos,
-        descricao: cupom.descricao,
+        codigo: codigoNormalizado,
+        tipo: TIPO_POR_MECANICA[regra.mecanica] ?? null,
+        valor: Number.isFinite(Number(regra.valor)) ? Number(regra.valor) : null,
+        descontoCentavos,
+        descricao: regra.nome,
       });
     } catch (erro) {
       if (erro.status === 400) {
@@ -229,16 +418,43 @@ class CuponsController {
       });
       if (problema) return res.status(400).json({ error: problema });
 
-      const cupom = await cuponsRepository.criar({
-        codigo,
-        tipo: corpo.tipo,
-        valor: Number(corpo.valor),
-        descricao: corpo.descricao || null,
-        minimoCentavos,
-        limiteUsos,
-        inicioEm: dataOuNull(corpo.inicio_em),
-        fimEm: dataOuNull(corpo.fim_em),
-      });
+      // O cupom e o registro de quem o criou nascem na MESMA transação: um
+      // código de desconto é dinheiro, e "quem criou o CAFE50?" não pode
+      // depender de um segundo INSERT que a rede derruba no meio.
+      const client = await pool.connect();
+      let cupom;
+      try {
+        await client.query("BEGIN");
+        cupom = await cuponsRepository.criar({
+          codigo,
+          tipo: corpo.tipo,
+          valor: Number(corpo.valor),
+          descricao: corpo.descricao || null,
+          minimoCentavos,
+          limiteUsos,
+          inicioEm: dataOuNull(corpo.inicio_em),
+          fimEm: dataOuNull(corpo.fim_em),
+          client,
+        });
+        await registrar(client, {
+          adminUserId: req.user?.userId ?? null,
+          acao: ACOES.CUPOM_CRIADO,
+          entidade: ENTIDADES.CUPOM,
+          entidadeId: cupom.id,
+          depois: {
+            codigo: cupom.codigo,
+            tipo: cupom.tipo,
+            valor: cupom.valor,
+            limite_usos: cupom.limite_usos,
+          },
+        });
+        await client.query("COMMIT");
+      } catch (erro) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw erro;
+      } finally {
+        client.release();
+      }
       return res.status(201).json(cupom);
     } catch (erro) {
       if (erro.code === "23505") {
@@ -314,7 +530,32 @@ class CuponsController {
       });
       if (problema) return res.status(400).json({ error: problema });
 
-      const atualizado = await cuponsRepository.atualizar(id, campos);
+      const client = await pool.connect();
+      let atualizado;
+      try {
+        await client.query("BEGIN");
+        atualizado = await cuponsRepository.atualizar(id, campos, client);
+        await registrar(client, {
+          adminUserId: req.user?.userId ?? null,
+          acao: ACOES.CUPOM_ALTERADO,
+          entidade: ENTIDADES.CUPOM,
+          entidadeId: id,
+          // Os dois lados guardam SÓ os campos tocados: um PUT parcial que
+          // desliga o cupom não deve produzir um diff de linha inteira.
+          antes: Object.fromEntries(
+            Object.keys(campos).map((chave) => [chave, existente[chave] ?? null]),
+          ),
+          depois: Object.fromEntries(
+            Object.keys(campos).map((chave) => [chave, atualizado[chave] ?? null]),
+          ),
+        });
+        await client.query("COMMIT");
+      } catch (erro) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw erro;
+      } finally {
+        client.release();
+      }
       return res.status(200).json(atualizado);
     } catch (erro) {
       if (erro.code === "23505") {

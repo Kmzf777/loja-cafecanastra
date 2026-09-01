@@ -29,6 +29,11 @@ const { precoComPromocao, somarCentavos } = require("../utils/preco");
 const { garantirCpfENome } = require("../utils/cpf");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const cuponsRepository = require("../repositories/cuponsRepository");
+// O motor de promoção (0032 + Onda 4). `motor.js` é PURO — a conta; o
+// repositório é quem lê as sete tabelas e quem escreve as duas de registro.
+const { calcularDescontos, meioDePagamentoDaLoja } = require("../utils/motor");
+const motorRepository = require("../repositories/motorRepository");
+const { hashDeDocumento } = motorRepository;
 const promotionsRepo = new PromotionsRepository();
 const {
   sendStatusEmail,
@@ -106,7 +111,10 @@ async function conferirFrete({
       erro.status = 400;
       throw erro;
     }
-    return { valor: 0, metodo: "Retirada" };
+    // Retirada é o frete mais barato que existe (zero). O campo não muda nada
+    // aqui — não há o que descontar —, mas responder `false` faria uma regra de
+    // "só na modalidade mais barata" parecer não ter casado por outro motivo.
+    return { valor: 0, metodo: "Retirada", ehMaisBarata: true };
   }
 
   const cep = address?.zip_code || address?.zipCode || address?.cep;
@@ -154,7 +162,23 @@ async function conferirFrete({
     throw erro;
   }
 
-  return { valor: Number(escolhida.price), metodo: String(escolhida.name) };
+  /**
+   * "É A MAIS BARATA?" SÓ DÁ PARA RESPONDER AQUI, e a resposta é insumo do
+   * motor: `promocao_frete.apenas_modalidade_mais_barata` (0032) existe para a
+   * loja bancar o PAC sem bancar o SEDEX, e sem este campo a diferença é entre
+   * subsidiar R$ 25 e subsidiar R$ 90 na mesma venda.
+   *
+   * A comparação é contra a MENOR das opções COTADAS, e não contra um limite
+   * fixo. Empate conta como mais barata: duas transportadoras pelo mesmo preço
+   * são a mesma escolha para o bolso da loja.
+   */
+  const menorPreco = Math.min(...opcoes.map((o) => Number(o.price)));
+
+  return {
+    valor: Number(escolhida.price),
+    metodo: String(escolhida.name),
+    ehMaisBarata: Number(escolhida.price) <= menorPreco,
+  };
 }
 
 /**
@@ -343,6 +367,87 @@ async function devolverEstoque(conexao, itens) {
   }
 }
 
+/**
+ * O carrinho no vocabulário do motor. `precoCentavos` é o preço UNITÁRIO já
+ * promocional (o que `precoComPromocao` devolveu), porque é sobre ele que as
+ * regras novas incidem: a promoção legada é etapa zero e o motor começa do que
+ * ela deixou.
+ */
+function carrinhoParaOMotor(itens, { meioPagamento, assinante, frete }) {
+  return {
+    itens: itens.map((i) => ({
+      produtoId: i.product_id,
+      sku: i.sku ?? null,
+      categoria: i.category ?? null,
+      precoCentavos: Math.round(Number(i.price) * 100),
+      quantidade: Number(i.quantity),
+    })),
+    meioPagamento,
+    assinante,
+    frete,
+  };
+}
+
+/**
+ * A PONTE DA TRANSIÇÃO, e ela existe porque a 0032 COPIOU o legado.
+ *
+ * Aquela migração inseriu cada linha de `promocoes_legado` e de `cupons` na
+ * tabela `promocoes` nova — REAPROVEITANDO o `id`. Enquanto os dois caminhos
+ * convivem (o legado por `precoComPromocao`/`avaliarCupom`, o novo pelo motor),
+ * uma campanha migrada seria aplicada DUAS VEZES sobre o mesmo carrinho, e o
+ * cliente pagaria menos do que a loja aprovou — em silêncio, porque nada no
+ * total revela que o desconto veio dobrado.
+ *
+ * O corte é pelo `id` justamente porque a migração o reaproveitou: é uma
+ * igualdade exata, não uma heurística. E o código digitado tem dono único: se a
+ * busca em `canastra.cupons` achou o código, a regra de método `codigo` do
+ * motor é a MESMA campanha, e quem aplica é o caminho legado.
+ *
+ * QUEM REMOVE ISTO é a `0036_aposentar_promocoes_e_cupons.sql`, junto com o
+ * caminho legado inteiro — a ponte cai com as duas margens que ela liga.
+ */
+function semSobreposicaoComOLegado(regras, { idsLegados, cupomLegadoAplicado }) {
+  return regras.filter((regra) => {
+    if (idsLegados.has(String(regra.id))) return false;
+    if (cupomLegadoAplicado && regra.metodo === "codigo") return false;
+    return true;
+  });
+}
+
+/**
+ * O carrinho é de assinante do Clube (0015)?
+ *
+ * A CONSULTA SÓ SAI QUANDO ALGUMA REGRA PERGUNTA. Nenhuma campanha com escopo
+ * `assinante` cadastrada significa zero round-trip a mais no caminho mais
+ * quente da loja; com uma cadastrada, a pergunta é feita uma vez e a resposta
+ * atravessa as duas passadas.
+ *
+ * Responder `false` cegamente seria pior que a consulta: a regra ficaria salva
+ * e INERTE para sempre, que é exatamente o modo de falha da promoção legada sem
+ * datas — o que a 0032 existe para não repetir.
+ */
+async function carrinhoDeAssinante(userId, regras) {
+  if (!userId) return false;
+  const alguemPergunta = regras.some((regra) =>
+    (regra.escopo || []).some((e) => e.tipo === "assinante"),
+  );
+  if (!alguemPergunta) return false;
+
+  const { rows } = await pool.query(
+    `SELECT 1 FROM canastra.assinaturas
+      WHERE user_id = $1::uuid AND status = 'ativa' LIMIT 1`,
+    [userId],
+  );
+  return rows.length > 0;
+}
+
+/** Soma os ajustes de um alvo. Em centavos, como tudo que vem do motor. */
+function somaDosAjustes(ajustes, alvo) {
+  return ajustes
+    .filter((a) => a.alvo === alvo)
+    .reduce((total, a) => total + a.valorCentavos, 0);
+}
+
 class PaymentController {
   async createPayment(req, res) {
     // Fora do try: o bloco de erro precisa saber em que ponto do fluxo parou.
@@ -361,6 +466,16 @@ class PaymentController {
     // compensa (devolve o uso junto com o estoque) e precisa alcancar os dois.
     let cupomAplicado = null;
     let usoDeCupomReservado = false;
+    /**
+     * Os códigos do MOTOR cujo contador foi somado na transação da reserva.
+     * A lista só é preenchida DEPOIS do COMMIT, pelo mesmo motivo de
+     * `usoDeCupomReservado`: antes disso o ROLLBACK devolve o uso de graça, e
+     * compensar na mão seria devolver duas vezes.
+     */
+    let codigosDoMotorReservados = [];
+    // SHA-256 do CPF, calculado no servidor a partir do que `canastra.clientes`
+    // guarda. Nunca recebido do navegador — ver `motorRepository`.
+    let documentoHash = null;
 
     /**
      * A compensacao COMPLETA de uma reserva ja commitada: estoque de volta e,
@@ -378,6 +493,34 @@ class PaymentController {
       if (usoDeCupomReservado && cupomAplicado) {
         await cuponsRepository.devolverUso(cupomAplicado.id, pool);
         usoDeCupomReservado = false;
+      }
+      for (const codigoId of codigosDoMotorReservados) {
+        await motorRepository.devolverCodigo(codigoId, pool);
+      }
+      codigosDoMotorReservados = [];
+      /**
+       * O RESGATE SÓ EXISTE SE O PEDIDO EXISTE — `promocao_resgates.pedido_id`
+       * é NOT NULL com FK, e as duas linhas nascem na mesma transação. Então
+       * este ramo só tem trabalho no caminho do pagamento NASCIDO RECUSADO, que
+       * é o único em que se compensa com o pedido já gravado.
+       *
+       * `estornado_em`, e não DELETE: apagar apagaria junto o registro de que a
+       * campanha foi tentada, que é metade do relatório. E o UPDATE é
+       * idempotente (`estornado_em IS NULL`), então uma segunda passagem — pelo
+       * webhook, por exemplo — não estorna de novo.
+       */
+      if (pedidoCriado) {
+        try {
+          await motorRepository.estornarResgatesDoPedido(
+            pedidoCriado.order_id,
+            pool,
+          );
+        } catch (err) {
+          console.error(
+            `MOTOR: falha ao estornar os resgates do pedido ${pedidoCriado.order_id}:`,
+            err.message,
+          );
+        }
       }
     };
     try {
@@ -466,6 +609,10 @@ class PaymentController {
           });
         }
         nomeDoCliente = String(nome || "").trim();
+        // O limite por cliente é por CPF e não por e-mail (e-mail é infinito e
+        // gratuito: cupom de primeira compra por e-mail é cupom permanente). O
+        // que viaja daqui para baixo é o HASH, nunca o número.
+        documentoHash = hashDeDocumento(cpf);
       }
 
       if (!Array.isArray(items) || items.length === 0) {
@@ -491,6 +638,24 @@ class PaymentController {
             .json({ error: "Identificador de produto inválido." });
         }
       }
+
+      /**
+       * O MEIO DE PAGAMENTO SOBE PARA CÁ porque o motor precisa dele ANTES da
+       * cotação (uma regra de Pix muda o subtotal, e o subtotal decide o frete
+       * grátis). A expressão é a mesma de sempre, palavra por palavra; só o
+       * lugar mudou, e as interrogações protegem o caso de `formData` ausente
+       * exatamente como antes — quem manda corpo sem `formData` continua
+       * falhando lá embaixo, em `formData.payer.email`, e não aqui.
+       */
+      const paymentMethodIdRaw =
+        formData?.paymentMethodId ||
+        formData?.payment_method_id ||
+        paymentMethodType;
+      const finalPaymentMethodId =
+        paymentMethodIdRaw === "bank_transfer" ? "pix" : paymentMethodIdRaw;
+      // Do vocabulário ABERTO do Mercado Pago para o FECHADO da loja, num lugar
+      // só e testável — ver `utils/motor.js`.
+      const meioDaLoja = meioDePagamentoDaLoja(finalPaymentMethodId);
 
       const activePromotions =
         await promotionsRepo.findActivePromotionsForCheckout();
@@ -520,6 +685,10 @@ class PaymentController {
         `SELECT produto_id  AS product_id,
                 preco       AS price,
                 categoria   AS category,
+                -- O SKU entra na leitura porque promocao_escopo sabe apontar
+                -- para ele (0032): "10% no CLAS-250" e uma frase que o escopo
+                -- legado, de tres colunas, nao conseguia escrever.
+                sku,
                 nome        AS name,
                 peso        AS weight,
                 largura     AS width,
@@ -548,6 +717,10 @@ class PaymentController {
           product_id: previa.product_id,
           quantity: Number(item.quantity),
           price: precoComPromocao(previa, activePromotions),
+          // Categoria e SKU viajam junto só para o motor decidir escopo; a
+          // cotação de frete ignora os dois.
+          category: previa.category,
+          sku: previa.sku,
           // Peso e dimensoes reais, para o frete ser reconferido com o pacote
           // de verdade e nao com o que o cliente disser que e.
           weight: previa.weight,
@@ -586,10 +759,97 @@ class PaymentController {
        * reservar nem cobrar nada.
        */
       const codigoDeCupom = normalizarCodigo(cupom);
-      let descontoPrevioCentavos = 0;
       if (codigoDeCupom) {
         cupomAplicado = await cuponsRepository.buscarPorCodigo(codigoDeCupom);
-        const subtotalPrevioCentavos = somarCentavos(itensParaCotacao);
+      }
+
+      /**
+       * O MOTOR, PRIMEIRA PASSADA — SEM FRETE, e a ausência é a resolução de um
+       * ovo-e-galinha real: a classe `frete` depende da modalidade cotada, e a
+       * cotação depende do subtotal já descontado (o piso do frete grátis de
+       * 0009). Aqui rodam só as classes `produto` e `pedido`; a classe `frete`
+       * roda na passada travada, quando a modalidade já é conhecida.
+       *
+       * ESTE DESCONTO **NÃO** ENTRA NO `descontoCentavos` DA RECOTAÇÃO, e a
+       * decisão é o oposto do que a intuição pede — vale escrever o porquê.
+       * Quem coloca o número na tela é `POST /shipping/calculate`, e aquela
+       * rota conhece o cupom e mais nada: o motor é da Onda 4 e a cotação
+       * pública só passa a falar com ele na Onda 6, junto com a exibição.
+       * Enquanto isso, subtrair aqui um desconto que o navegador não subtraiu
+       * cria a divergência EXATA que produz 409 falso: um carrinho acima do
+       * piso do frete grátis recebe "R$ 0,00" na tela, chega aqui com o
+       * subtotal reduzido pela promoção nova, cai abaixo do piso, é recotado
+       * com preço — e o zero do cliente não casa com nada. Toda venda de
+       * campanha na fronteira do piso morreria em "o frete mudou".
+       *
+       * Os dois lados usando a MESMA base é o que importa, e é a invariante que
+       * `utils/preco.js` existe para manter. O troco — o piso do frete grátis
+       * medido sobre um subtotal maior que o cobrado — é frete de graça um
+       * pouco mais generoso, que é o lado seguro do erro.
+       *
+       * O `ehAssinante` é resolvido AQUI, fora da transação: a resposta serve
+       * para as duas passadas e não vale segurar `FOR UPDATE` durante ela.
+       */
+      const idsDeLegadas = new Set(
+        activePromotions.map((p) => String(p.id)).filter(Boolean),
+      );
+      const regrasPrevias = semSobreposicaoComOLegado(
+        await motorRepository.carregarRegrasVigentes({
+          codigo: codigoDeCupom,
+          documentoHash,
+        }),
+        { idsLegados: idsDeLegadas, cupomLegadoAplicado: Boolean(cupomAplicado) },
+      );
+      const assinante = await carrinhoDeAssinante(userId, regrasPrevias);
+      const motorPrevio = calcularDescontos(
+        carrinhoParaOMotor(itensParaCotacao, {
+          meioPagamento: meioDaLoja,
+          assinante,
+          frete: null,
+        }),
+        regrasPrevias,
+      );
+
+      /**
+       * O CÓDIGO TEM DOIS DONOS POSSÍVEIS enquanto a transição dura: a tabela
+       * `cupons` (0010) e `promocao_codigos` (0032). "Não encontrado" só é
+       * verdade quando NENHUM dos dois o reconhece — recusar aqui só porque a
+       * busca legada voltou vazia mataria toda campanha cadastrada na tela
+       * nova, com a frase errada.
+       */
+      const codigoAchadoPeloMotor = regrasPrevias.some((r) => r.codigo);
+      if (codigoDeCupom && !cupomAplicado && !codigoAchadoPeloMotor) {
+        // A FRASE CERTA IMPORTA: "não encontrado" manda a pessoa procurar erro
+        // de digitação num código que ela copiou certo do anúncio. O
+        // diagnóstico custa UMA consulta e só roda neste caminho de recusa.
+        const erro = new Error(
+          await motorRepository.diagnosticarCodigo(codigoDeCupom),
+        );
+        erro.status = 400;
+        erro.codigoPublico = "CUPOM_INVALIDO";
+        throw erro;
+      }
+
+      /**
+       * CUPOM LEGADO, PRIMEIRA PASSADA (F6). O navegador manda so o CODIGO; o
+       * desconto que ele exibiu nunca e aceito.
+       *
+       * `descontoPrevioCentavos` carrega SÓ O CUPOM, pelo motivo escrito na
+       * primeira passada do motor: é o único desconto que a cotação do
+       * navegador também enxergou, e os dois lados têm de medir o piso do
+       * frete grátis sobre a MESMA base.
+       *
+       * A BASE DO CUPOM, essa sim, desconta a etapa 1 do motor — a mesma regra
+       * que o motor aplica às suas próprias regras de pedido: desconto sobre o
+       * subtotal incide sobre o subtotal JÁ REDUZIDO pelos descontos de linha,
+       * e dois descontos de pedido dividem essa base sem se compor. Sem regra
+       * nova cadastrada o subtraendo é zero e a conta é, ao centavo, a de
+       * sempre — que é o que mantém `f6_cupons` verde.
+       */
+      let descontoPrevioCentavos = 0;
+      if (cupomAplicado) {
+        const subtotalPrevioCentavos =
+          somarCentavos(itensParaCotacao) - somaDosAjustes(motorPrevio.ajustes, "item");
         const avaliacao = avaliarCupom(cupomAplicado, subtotalPrevioCentavos);
         if (!avaliacao.valido) {
           const erro = new Error(avaliacao.motivo);
@@ -597,7 +857,13 @@ class PaymentController {
           erro.codigoPublico = "CUPOM_INVALIDO";
           throw erro;
         }
-        descontoPrevioCentavos = avaliacao.descontoCentavos;
+        descontoPrevioCentavos += Math.max(
+          0,
+          Math.min(
+            avaliacao.descontoCentavos,
+            subtotalPrevioCentavos - somaDosAjustes(motorPrevio.ajustes, "pedido"),
+          ),
+        );
       }
 
       const freteConferido = await conferirFrete({
@@ -625,6 +891,11 @@ class PaymentController {
        */
       let subtotalDeVitrineCentavos = 0;
 
+      /** O carrinho no vocabulário do motor, montado das linhas TRAVADAS. */
+      const itensParaOMotor = [];
+      /** O que a promoção de vitrine legada já abateu, linha a linha. */
+      const descontosLegadosPorItem = [];
+
       /**
        * Agora sim a transacao — enxuta: so leitura travada e reserva, nenhuma
        * chamada de rede dentro dela.
@@ -647,6 +918,7 @@ class PaymentController {
                   produto_id  AS product_id,
                   imagem      AS image,
                   tamanho     AS size,
+                  sku,
                   peso        AS weight,
                   largura     AS width,
                   altura      AS height,
@@ -681,6 +953,36 @@ class PaymentController {
         validatedSubtotalCentavos += Math.round(bestPrice * 100) * qtdSolicitada;
         subtotalDeVitrineCentavos +=
           Math.round(Number(productDb.price) * 100) * qtdSolicitada;
+
+        /**
+         * O QUE A PROMOÇÃO LEGADA JÁ TIROU DESTA LINHA — para virar linha de
+         * `pedido_ajustes_desconto` mais abaixo.
+         *
+         * `promocao_id` sai NULO nessas linhas, e a ausência é honesta e não
+         * preguiça: `precoComPromocao` devolve UM preço, escolhido por um
+         * `Math.min` entre todas as promoções que casam. Qual delas venceu é
+         * uma pergunta que o modelo legado não consegue responder — e é
+         * exatamente por isso que ele está sendo substituído. A `0036` aposenta
+         * este ramo, e a partir dela toda linha aponta para a campanha.
+         */
+        const descontoLegadoCentavos =
+          (Math.round(Number(productDb.price) * 100) -
+            Math.round(bestPrice * 100)) *
+          qtdSolicitada;
+        if (descontoLegadoCentavos > 0) {
+          descontosLegadosPorItem.push({
+            produtoId: productDb.product_id,
+            valorCentavos: descontoLegadoCentavos,
+          });
+        }
+
+        itensParaOMotor.push({
+          product_id: productDb.product_id,
+          quantity: qtdSolicitada,
+          price: bestPrice,
+          category: productDb.category,
+          sku: productDb.sku,
+        });
 
         validatedItems.push({
           product_id: productDb.product_id,
@@ -748,19 +1050,92 @@ class PaymentController {
        * AQUI, dentro da transacao de reserva, ANTES de cobrar: o throw abaixo
        * vira ROLLBACK e devolve estoque e uso juntos, de graca.
        */
+      /**
+       * O MOTOR, SEGUNDA PASSADA — A QUE VALE DINHEIRO.
+       *
+       * Sobre as linhas TRAVADAS e DENTRO da transação: as regras são relidas
+       * com o mesmo `client`, então o limite de uso e o limite por CPF são
+       * avaliados no mesmo instante em que o estoque é reservado, e não num
+       * retrato de milissegundos atrás.
+       *
+       * Agora com o frete, que a primeira passada não tinha: a modalidade já
+       * foi conferida, então `promocao_frete` tem contra o que decidir (teto,
+       * UF, faixa de CEP e "só na mais barata").
+       */
+      const regrasTravadas = semSobreposicaoComOLegado(
+        await motorRepository.carregarRegrasVigentes({
+          codigo: codigoDeCupom,
+          documentoHash,
+          client,
+        }),
+        { idsLegados: idsDeLegadas, cupomLegadoAplicado: Boolean(cupomAplicado) },
+      );
+      const freteCentavos = Math.round(Number(freteConferido.valor) * 100);
+      const descontosDoMotor = calcularDescontos(
+        carrinhoParaOMotor(itensParaOMotor, {
+          meioPagamento: meioDaLoja,
+          assinante,
+          frete: {
+            valorCentavos: freteCentavos,
+            metodo: freteConferido.metodo,
+            ehMaisBarata: freteConferido.ehMaisBarata,
+            uf: address?.state || address?.uf || address?.estado || null,
+            cep: address?.zip_code || address?.zipCode || address?.cep || null,
+          },
+        }),
+        regrasTravadas,
+      );
+
+      /**
+       * A TRAVA DO ESGOTAMENTO DO MOTOR, mesmo desenho do cupom logo abaixo e
+       * mesmo lugar: o incremento atômico roda DENTRO desta transação, então
+       * dois checkouts simultâneos no último uso serializam na linha do código
+       * e o segundo recebe `false` — o throw vira ROLLBACK e devolve estoque e
+       * uso juntos, de graça, antes de o gateway entrar em cena.
+       */
+      const codigosDoMotor = [
+        ...new Set(
+          descontosDoMotor.ajustes.map((a) => a.codigoId).filter(Boolean),
+        ),
+      ];
+      const codigosSomados = [];
+      for (const codigoId of codigosDoMotor) {
+        const reservou = await motorRepository.reservarCodigo(codigoId, client);
+        if (!reservou) {
+          const erro = new Error("Cupom esgotado");
+          erro.status = 400;
+          erro.codigoPublico = "CUPOM_INVALIDO";
+          throw erro;
+        }
+        codigosSomados.push(codigoId);
+      }
+
       let descontoCentavos = 0;
       if (cupomAplicado) {
-        const reavaliacao = avaliarCupom(
-          cupomAplicado,
-          validatedSubtotalCentavos,
-        );
+        // A base é a mesma da primeira passada: subtotal travado MENOS o que as
+        // regras de linha do motor já tiraram. Sem regra nova cadastrada o
+        // subtraendo é zero, e a conta é a de sempre ao centavo.
+        const baseDoCupomCentavos =
+          validatedSubtotalCentavos -
+          somaDosAjustes(descontosDoMotor.ajustes, "item");
+        const reavaliacao = avaliarCupom(cupomAplicado, baseDoCupomCentavos);
         if (!reavaliacao.valido) {
           const erro = new Error(reavaliacao.motivo);
           erro.status = 400;
           erro.codigoPublico = "CUPOM_INVALIDO";
           throw erro;
         }
-        descontoCentavos = reavaliacao.descontoCentavos;
+        // O cupom é o ÚLTIMO desconto de pedido, e a soma dos descontos de
+        // pedido nunca passa da base — a mesma regra que o motor aplica às
+        // suas próprias regras de classe `pedido`.
+        descontoCentavos = Math.max(
+          0,
+          Math.min(
+            reavaliacao.descontoCentavos,
+            baseDoCupomCentavos -
+              somaDosAjustes(descontosDoMotor.ajustes, "pedido"),
+          ),
+        );
 
         const reservou = await cuponsRepository.reservarUso(
           cupomAplicado.id,
@@ -774,10 +1149,22 @@ class PaymentController {
         }
       }
 
+      /**
+       * A CONTA, INTEIRA EM CENTAVOS ATÉ O ÚLTIMO PASSO.
+       *
+       * Antes o frete entrava em reais no meio da soma; agora ele vira centavo
+       * antes, pelo motivo de sempre — e porque o desconto de frete do motor
+       * abate exatamente dele. `pedidos.frete` continua gravando o valor BRUTO
+       * cotado: o abatimento tem linha própria em `pedido_ajustes_desconto`, e
+       * é assim que a nota fiscal consegue dizer o que foi cobrado e o que foi
+       * bancado pela loja.
+       */
+      const descontoTotalCentavos =
+        descontoCentavos + descontosDoMotor.totalCentavos;
       const finalAmountToCharge = Number(
         (
-          (validatedSubtotalCentavos - descontoCentavos) / 100 +
-          freteConferido.valor
+          (validatedSubtotalCentavos + freteCentavos - descontoTotalCentavos) /
+          100
         ).toFixed(2),
       );
 
@@ -788,13 +1175,74 @@ class PaymentController {
         // que nao cometeu. O MP nao cobra R$ 0, e pedido gratis nao e um
         // fluxo que esta loja vende.
         const erro = new Error(
-          cupomAplicado && descontoCentavos >= validatedSubtotalCentavos
+          descontoTotalCentavos >= validatedSubtotalCentavos
             ? "O cupom cobre o valor inteiro do pedido; ajuste os itens ou fale com a gente."
             : "Valor total do pedido inválido.",
         );
         erro.status = 400;
         throw erro;
       }
+
+      /**
+       * A DECOMPOSIÇÃO COMPLETA DO DESCONTO, na ordem em que ele aconteceu — e
+       * "completa" é a palavra que importa: a soma destas linhas tem de ser,
+       * ao centavo, a diferença entre o subtotal de CATÁLOGO e o que o cliente
+       * paga pelos itens. Uma linha faltando aqui é uma pergunta sem resposta
+       * na tela de detalhe, um rateio errado na NF-e e um estorno parcial que
+       * não fecha.
+       *
+       * Por isso a promoção de vitrine LEGADA também entra, mesmo sem saber
+       * qual campanha venceu o `Math.min` (ver o comentário na leitura travada):
+       * a alternativa seria uma tabela que só explica parte do preço.
+       */
+      const ajustesDoPedido = [
+        ...descontosLegadosPorItem.map((linha) => ({
+          promocaoId: null,
+          codigo: null,
+          alvo: "item",
+          alvoRef: String(linha.produtoId),
+          valorCentavos: linha.valorCentavos,
+          rotulo: "Promoção de vitrine",
+        })),
+        ...descontosDoMotor.ajustes,
+        ...(descontoCentavos > 0
+          ? [
+              {
+                promocaoId: null,
+                codigo: cupomAplicado.codigo,
+                alvo: "pedido",
+                alvoRef: null,
+                valorCentavos: descontoCentavos,
+                rotulo: `Cupom ${cupomAplicado.codigo}`,
+              },
+            ]
+          : []),
+        // `sequencia` é reatribuída aqui e não herdada do motor: a lista final
+        // tem lados que o motor não viu, e o UNIQUE (pedido_id, sequencia) de
+        // 0032 recusa qualquer repetição.
+      ].map((ajuste, indice) => ({ ...ajuste, sequencia: indice + 1 }));
+
+      /**
+       * Os resgates: UM por promoção aplicada, com o valor que ela custou. É
+       * daqui que saem o relatório de campanha e os dois limites (global e por
+       * CPF) — `promocao_codigos.usos` é a cópia denormalizada que existe só
+       * para o incremento atômico, e a própria 0032 diz isso.
+       */
+      const resgatesDoPedido = [
+        ...descontosDoMotor.ajustes
+          .reduce((mapa, ajuste) => {
+            if (!ajuste.promocaoId) return mapa;
+            const atual = mapa.get(ajuste.promocaoId) || {
+              promocaoId: ajuste.promocaoId,
+              codigoId: ajuste.codigoId || null,
+              valorCentavos: 0,
+            };
+            atual.valorCentavos += ajuste.valorCentavos;
+            mapa.set(ajuste.promocaoId, atual);
+            return mapa;
+          }, new Map())
+          .values(),
+      ];
 
       /**
        * Fecha a transacao com o estoque JA reservado, e devolve a conexao ao
@@ -805,17 +1253,13 @@ class PaymentController {
       await client.query("COMMIT");
       estoqueReservado = true;
       // O uso do cupom commitou JUNTO com a reserva: a partir daqui, toda
-      // compensacao de estoque devolve o uso tambem.
+      // compensacao de estoque devolve o uso tambem. O mesmo vale para os
+      // contadores dos códigos do motor.
       usoDeCupomReservado = Boolean(cupomAplicado);
+      codigosDoMotorReservados = codigosSomados;
       client.release();
       client = null;
 
-      const paymentMethodIdRaw =
-        formData.paymentMethodId ||
-        formData.payment_method_id ||
-        paymentMethodType;
-      const finalPaymentMethodId =
-        paymentMethodIdRaw === "bank_transfer" ? "pix" : paymentMethodIdRaw;
       const identification = formData.payer?.identification;
 
       const webhookUrl = process.env.WEBHOOK_URL;
@@ -998,7 +1442,26 @@ class PaymentController {
       const mpId = mpResponse.id;
 
       let newOrder;
+      /**
+       * O PEDIDO, O RESGATE E A DECOMPOSIÇÃO NASCEM NA MESMA TRANSAÇÃO — e não
+       * por gosto de transação, por RESTRIÇÃO DE SCHEMA: `promocao_resgates` e
+       * `pedido_ajustes_desconto` têm `pedido_id` NOT NULL com FK para
+       * `pedidos`, então a linha do resgate não pode existir antes do pedido, e
+       * o pedido nesta loja nasce DEPOIS da cobrança (a chave de idempotência é
+       * o fio da conciliação justamente porque o id ainda não existe na hora de
+       * cobrar). Aqui os três commitam juntos ou nenhum: um pedido cobrado sem
+       * a linha que explica o preço seria uma venda que ninguém consegue
+       * auditar.
+       *
+       * A TRAVA DE CONCORRÊNCIA NÃO MORA AQUI, e vale ser explícito: quem faz
+       * dois checkouts simultâneos no último uso serializarem é o incremento
+       * atômico de `promocao_codigos.usos`, lá na transação de reserva de
+       * estoque — o mesmo desenho de `cuponsRepository.reservarUso`. Esta
+       * transação é a do REGISTRO.
+       */
+      const clienteDoPedido = await pool.connect();
       try {
+        await clienteDoPedido.query("BEGIN");
         // Nasce 'pendente' — o status inicial fixado — e ja recebe o status
         // real do MP logo abaixo, quando houver.
         newOrder = await OrderRepository.createOrder({
@@ -1017,10 +1480,30 @@ class PaymentController {
           status: "pendente",
           // A fotografia do cupom (0010): o codigo usado e o desconto em
           // reais, ambos os RECALCULADOS — nunca o que o navegador exibiu.
+          // `desconto` passa a ser o desconto TOTAL do pedido (cupom legado
+          // mais motor): a coluna sempre significou "quanto saiu do preço", e
+          // guardar só a parte do cupom faria `total + desconto` deixar de
+          // fechar com o subtotal no dia em que a primeira campanha nova rodar.
           cupomCodigo: cupomAplicado ? cupomAplicado.codigo : null,
-          desconto: descontoCentavos / 100,
+          desconto: descontoTotalCentavos / 100,
+          client: clienteDoPedido,
         });
+
+        await motorRepository.gravarAjustes(
+          clienteDoPedido,
+          newOrder.order_id,
+          ajustesDoPedido,
+        );
+        await motorRepository.gravarResgates(clienteDoPedido, {
+          pedidoId: newOrder.order_id,
+          userId: userId || null,
+          documentoHash,
+          resgates: resgatesDoPedido,
+        });
+
+        await clienteDoPedido.query("COMMIT");
       } catch (erroDeInsert) {
+        await clienteDoPedido.query("ROLLBACK").catch(() => {});
         if (erroDeInsert.code === "23505") {
           /**
            * Corrida real de duplo clique: as DUAS requisicoes passaram pela
@@ -1061,6 +1544,8 @@ class PaymentController {
           );
         }
         throw erroDeInsert;
+      } finally {
+        clienteDoPedido.release();
       }
 
       pedidoCriado = newOrder;
@@ -1350,6 +1835,40 @@ class PaymentController {
                   "Confira o contador manualmente.",
               );
             }
+          }
+
+          /**
+           * OS RESGATES DO MOTOR VOLTAM PELO MESMO CAMINHO E NA MESMA
+           * TRANSAÇÃO. É este ramo que faz o PIX EXPIRADO devolver o uso — o
+           * MP notifica `cancelled`, que traduz para 'cancelado', que é
+           * GRUPO_CANCELADO. Sem ele, carrinho abandonado queima campanha: um
+           * limite de 50 gasto em pedidos que ninguém pagou esgota a promoção
+           * sem vender nada.
+           *
+           * `estornado_em`, e não DELETE, e o UPDATE filtra `IS NULL` — então o
+           * reenvio de notificação do MP (que é por desenho) não estorna duas
+           * vezes nem desce o contador duas vezes.
+           *
+           * O `engolirErro: false` é deliberado, e é o mesmo raciocínio de
+           * `devolverUsoPorCodigo`: aqui a devolução vive DENTRO da transação
+           * do webhook, e erro engolido dentro de transação envenena tudo que
+           * vier depois (25P02) além de commitar meia-verdade. O erro sobe,
+           * vira ROLLBACK + 500, e o MP reenvia.
+           */
+          const estornados = await motorRepository.estornarResgatesDoPedido(
+            pedido.order_id,
+            client,
+          );
+          for (const resgate of estornados) {
+            if (!resgate.codigo_id) continue;
+            await motorRepository.devolverCodigo(resgate.codigo_id, client, {
+              engolirErro: false,
+            });
+          }
+          if (estornados.length) {
+            console.log(
+              `🔄 ${estornados.length} resgate(s) estornado(s) no pedido ${pedido.order_id}.`,
+            );
           }
         } else if (movimento === REBAIXOU) {
           // O caminho de volta (um rejeitado que o MP reprocessa e aprova): o

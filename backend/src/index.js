@@ -9,6 +9,8 @@ const helmet = require("helmet");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const pool = require("./pgPool");
+const { opcoesDeCors } = require("./config/cors");
+const { erroDeUpload } = require("./middleware/erroDeUpload");
 
 const productsRoutes = require("./routes/products.routes");
 const { contaRoutes } = require("./routes/conta.routes");
@@ -21,6 +23,10 @@ const { newsletterRoutes } = require("./routes/newsletter.routes");
 const { lgpdRoutes } = require("./routes/lgpd.routes");
 const blingRoutes = require("./routes/bling.routes");
 const clubeRoutes = require("./routes/clube.routes");
+const vitrineRoutes = require("./routes/vitrine.routes");
+const painelRoutes = require("./routes/painel.routes");
+const marketingRoutes = require("./routes/marketing.routes");
+const descontosRoutes = require("./routes/descontos.routes");
 const PaymentController = require("./controllers/PaymentController");
 const ShippingController = require("./controllers/ShippingController");
 
@@ -38,56 +44,11 @@ app.use(
   }),
 );
 
-const isProd = process.env.NODE_ENV === "production";
-
-/**
- * Origens liberadas.
- *
- * Antes a lista misturava dominios de outra loja com localhost,
- * e valia igual em producao. Manter localhost liberado em producao significa
- * que uma pagina rodando na maquina de um atacante (ou um app local malicioso)
- * fala com esta API a partir do navegador de quem esta logado.
- *
- * `credentials: true` FICA, apesar de nao existir mais cookie de sessao. Nao e
- * sobra: a vitrine e o painel chamam esta API com `credentials: "include"`, e
- * sem o `Access-Control-Allow-Credentials` na resposta o navegador BLOQUEIA a
- * resposta inteira — checkout, endereco e frete parariam com erro de CORS, nao
- * com erro de autenticacao. Enquanto quem chama mandar `include`, isto fica.
- *
- * Em producao vale so o que vier de CORS_ORIGIN (aceita lista separada por
- * virgula, para www e apex). Em desenvolvimento, as portas locais entram.
- */
-const origensDeDesenvolvimento = [
-  "http://localhost:5173",
-  // A vitrine migrou de Vite (5173) para Next (3000) e o painel passou a ser
-  // servido pelo Next junto com ela.
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-];
-
-const allowedOrigins = [
-  ...(process.env.CORS_ORIGIN || "").split(",").map((o) => o.trim()),
-  ...(isProd ? [] : origensDeDesenvolvimento),
-].filter(Boolean);
-
-// Liberação de origem controlada
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    // `X-CSRF-Token` saiu da lista junto com o csurf: um cabecalho liberado no
-    // preflight que ninguem valida so confunde quem le. Ver o bloco do CSRF,
-    // logo abaixo do healthcheck.
-    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
-    credentials: true,
-  }),
-);
+// Liberação de origem controlada. As origens e a lista de cabecalhos liberados
+// moram em `config/cors.js` — `index.js` nao e carregavel num teste (abre porta
+// e fala com o GoTrue no require), e a lista de cabecalhos precisa de teste que
+// exercite o preflight de verdade.
+app.use(cors(opcoesDeCors));
 
 app.options("*", (req, res) => res.sendStatus(200));
 
@@ -181,6 +142,30 @@ app.use("/bling", blingRoutes);
 // Clube: /clube/* (cliente), /admin/assinaturas (admin) e o webhook proprio de
 // assinaturas (/webhook/mercadopago/assinaturas, rate limit dentro do router).
 app.use(clubeRoutes);
+// Vitrine: GET /vitrine e PUBLICO (a home o le antes de qualquer login), PUT e
+// so de admin — os guardas estao no proprio router. ACRESCENTADO NO FIM DE
+// PROPOSITO: ordem de registro e load-bearing aqui (tres pares ja quebram se
+// invertidos: /dashboard/summary antes de /dashboard/:id, /admin/orders/export
+// antes de /admin/orders/:id, /users/me antes de /users/:id). `/vitrine` nao
+// tem `:id` e nao forma par com nada, entao entra sem mexer em nada acima.
+app.use("/vitrine", vitrineRoutes);
+// Painel (Onda 4): custo do produto, moderacao de avaliacoes e administradores.
+// Caminhos absolutos `/admin/...` no proprio router, como orders.routes.js.
+// TAMBEM NO FIM, e pelo mesmo motivo do `/vitrine` acima: nada aqui forma par
+// com uma rota de `:id` ja registrada, entao acrescentar no fim nao desloca
+// nenhum dos tres pares load-bearing.
+app.use(painelRoutes);
+// Marketing (0033): campanhas, consentimentos e envios. Tudo so de admin —
+// `consentimentos` e `envios` carregam e-mail e telefone de gente.
+app.use(marketingRoutes);
+// Descontos (0032): o CRUD do motor de promocao e a rota de simulacao, tudo em
+// `/admin/descontos`. NAO substitui `/promotions`, que continua servindo a
+// tabela LEGADA (`promocoes_legado`) enquanto o checkout nao termina a troca —
+// sao duas tabelas diferentes, e as duas rotas convivem de proposito.
+// TAMBEM NO FIM, pelo mesmo motivo dos dois routers acima: nada aqui forma par
+// com uma rota de `:id` ja registrada. Dentro do proprio router, `/simular`
+// vem antes de `/:id` — la esta escrito o porque.
+app.use(descontosRoutes);
 
 /**
  * Carrinho abandonado: cron de hora em hora, DESLIGADO por padrao (decisao 5
@@ -196,6 +181,12 @@ if (process.env.ABANDONO_ATIVO === "true") {
 if (process.env.BLING_ATIVO === "true" && process.env.BLING_RASTREIO_CRON === "true") {
   require("./services/blingPedidos").iniciarCronBling();
 }
+
+// Erro de upload ANTES do handler geral, e a ordem e o conserto: o Express casa
+// error handler na ordem de registro e o primeiro que responder encerra. Com o
+// geral na frente, arquivo grande demais e mimetype recusado viravam
+// "Erro interno no servidor." e a frase util nunca chegava ao navegador.
+app.use(erroDeUpload);
 
 // Tratamento de erros gerais
 app.use((err, req, res, next) => {

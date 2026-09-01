@@ -18,9 +18,11 @@
  * recebe fatos e devolve um veredito. A parte impura (`lerAcessoDoPainel`,
  * `exigirAdminNoPainel`) só colhe os fatos e obedece.
  *
- * ISTO É O PRIMEIRO ANEL, NÃO O ÚNICO. `legacy/routes/AdminRoutes.jsx` continua
- * conferindo no cliente, porque a sessão pode morrer com o painel já aberto —
- * nesse instante nenhum Server Component vai rodar de novo.
+ * ISTO É O PRIMEIRO ANEL, NÃO O ÚNICO. `components/painel/casca/AnelDeSessao.tsx`
+ * confere no cliente, porque a sessão pode morrer com o painel já aberto — nesse
+ * instante nenhum Server Component vai rodar de novo. (O segundo anel era
+ * `legacy/routes/AdminRoutes.jsx`, que só rodava dentro da ilha do painel
+ * legado; as telas novas ficaram sem ele até o anel próprio nascer.)
  *
  * O QUE ESTE MÓDULO NÃO É. Não é `middleware.ts`. O middleware segue sem guardar
  * rota pelo motivo documentado lá: `/account/verify-email` e
@@ -31,12 +33,22 @@
  */
 import { redirect } from "next/navigation";
 import { criarClienteServidor } from "../supabase/servidor";
+import {
+  RAIZ_DO_PAINEL,
+  ROTA_DE_CONTA_NEGADA,
+  ROTA_DE_ENTRADA,
+  destinoDeEntrada,
+} from "./painel-rotas";
 
-/** Onde o painel começa. Uma constante porque três funções aqui dependem dela. */
-const RAIZ_DO_PAINEL = "/dashboard";
-
-/** A porta de entrada do painel — a única rota sob /dashboard fora da cerca. */
-export const ROTA_DE_ENTRADA = "/dashboard/entrar";
+/**
+ * Os endereços moram em `painel-rotas.ts`, e não aqui, porque o ANEL DE CLIENTE
+ * precisa dos mesmos três — e ele não pode importar este arquivo, que arrasta
+ * `next/headers` para o bundle do navegador. O porquê inteiro está lá.
+ *
+ * A reexportação existe para quem já importava `ROTA_DE_ENTRADA` daqui não
+ * precisar mudar de porta por causa de uma mudança de arrumação.
+ */
+export { ROTA_DE_ENTRADA };
 
 /**
  * Por que a pessoa foi recusada. Não é enfeite: a tela de entrada diz coisas
@@ -86,14 +98,14 @@ export type FatosDoAcesso = {
  *    senha que já funcionou.
  */
 export function decidirAcessoAoPainel(fatos: FatosDoAcesso): DecisaoDeAcesso {
-  const de = `de=${encodeURIComponent(fatos.rotaPedida)}`;
+  const entrada = destinoDeEntrada(fatos.rotaPedida);
 
   if (fatos.falhouConsulta) {
     return {
       tipo: "redireciona",
       // O aviso viaja na URL porque `motivo` sozinho morre dentro do processo,
       // e quem precisa da informação é o gestor na frente da tela.
-      destino: `${ROTA_DE_ENTRADA}?${de}&aviso=falha`,
+      destino: `${entrada}&aviso=falha`,
       motivo: "falha-de-consulta",
     };
   }
@@ -101,7 +113,7 @@ export function decidirAcessoAoPainel(fatos: FatosDoAcesso): DecisaoDeAcesso {
   if (!fatos.temSessao) {
     return {
       tipo: "redireciona",
-      destino: `${ROTA_DE_ENTRADA}?${de}`,
+      destino: entrada,
       motivo: "sem-sessao",
     };
   }
@@ -109,7 +121,7 @@ export function decidirAcessoAoPainel(fatos: FatosDoAcesso): DecisaoDeAcesso {
   if (!fatos.ehAdmin) {
     return {
       tipo: "redireciona",
-      destino: "/account?painel=negado",
+      destino: ROTA_DE_CONTA_NEGADA,
       motivo: "nao-e-admin",
     };
   }
@@ -239,6 +251,17 @@ export type AcessoDoPainel = {
   falhouConsulta: boolean;
   /** Para a tela de entrada dizer QUAL conta está logada quando ela não serve. */
   email: string | null;
+  /**
+   * O `auth.users.id` de quem está logado, `null` quando não há ninguém.
+   *
+   * Não serve à decisão de acesso — quem decide é `decidirAcessoAoPainel`, e
+   * ela não olha para cá. Serve à AUDITORIA: toda Server Action do painel
+   * escreve em nome de alguém, e `admin_log` precisa saber de quem. Sai daqui
+   * porque este já é o único lugar do módulo que fala com o GoTrue; pedir o
+   * usuário de novo lá na ação seria uma segunda leitura que pode discordar
+   * desta.
+   */
+  userId: string | null;
 };
 
 /**
@@ -285,6 +308,7 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
         ehAdmin: false,
         falhouConsulta: falhou,
         email: null,
+        userId: null,
       };
     }
 
@@ -300,7 +324,13 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
         "[painel] Não foi possível conferir canastra.admins; fechando o " +
           `acesso. ${consulta.error.code ?? ""} ${consulta.error.message ?? ""}`.trim(),
       );
-      return { temSessao: true, ehAdmin: false, falhouConsulta: true, email };
+      return {
+        temSessao: true,
+        ehAdmin: false,
+        falhouConsulta: true,
+        email,
+        userId: data.user.id,
+      };
     }
 
     return {
@@ -308,6 +338,7 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
       ehAdmin: Boolean(consulta.data),
       falhouConsulta: false,
       email,
+      userId: data.user.id,
     };
   } catch (erro) {
     /**
@@ -331,6 +362,7 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
       ehAdmin: false,
       falhouConsulta: true,
       email: null,
+      userId: null,
     };
   }
 }
@@ -342,8 +374,18 @@ export async function lerAcessoDoPainel(): Promise<AcessoDoPainel> {
  * e `notFound()` também usam o mesmo mecanismo (`NEXT_REDIRECT`, `NEXT_HTTP_ERROR_FALLBACK`) —
  * nenhum dos dois é lançado dentro do `try` desta função, mas a checagem é
  * escrita por prefixo de família para continuar valendo se um dia for.
+ *
+ * EXPORTADA DESDE A ONDA 2 DO PAINEL, e não por generalidade: toda tela do
+ * painel que busca dado no servidor tem um `catch` largo em volta do `fetch`
+ * (falha de rede vira "não consegui ler", e não página quebrada), e todo `catch`
+ * largo dentro de um Server Component é uma armadilha para o mesmo sinal.
+ * `app/dashboard/(protegido)/vitrine/page.tsx` foi a primeira a pagar: o
+ * `next build` tenta prerenderizar a rota, o `no-store` lança
+ * `DYNAMIC_SERVER_USAGE`, e o `catch` o engolia — transformando um recado
+ * interno do framework em "a API não respondeu". Duas cópias da checagem
+ * divergiriam no dia em que o Next acrescentasse uma família de digest.
  */
-function ehSinalDoNext(erro: unknown): boolean {
+export function ehSinalDoNext(erro: unknown): boolean {
   const digest = (erro as { digest?: unknown } | null)?.digest;
   if (typeof digest !== "string") return false;
   return (
@@ -357,13 +399,75 @@ function ehSinalDoNext(erro: unknown): boolean {
  * O guard. Chamado no topo do Server Component do painel, ANTES de qualquer
  * byte da ilha ser emitido.
  *
- * Não devolve nada porque só há dois desfechos: ou volta (e quem chamou pode
- * renderizar), ou `redirect()` lança e a renderização nem acontece.
+ * Há só dois desfechos: ou volta (e quem chamou pode renderizar), ou
+ * `redirect()` lança e a renderização nem acontece.
+ *
+ * O QUE ELE DEVOLVE É A ENTREGA PARA O SEGUNDO ANEL. Voltava `void`, e passou a
+ * voltar `userId` quando o anel de cliente nasceu: é por quem este anel
+ * respondeu ao servir esta tela. Com ele na mão, o anel de cliente sabe
+ * distinguir "a sessão continua sendo a mesma que o servidor aprovou" (o caso
+ * comum, que não custa nada) de "agora há OUTRA pessoa logada nesta aba" — que
+ * é o único momento em que vale a pena voltar a perguntar quem é admin. Sem
+ * essa entrega, o anel de cliente perguntaria de novo a cada montagem de tela.
+ *
+ * `string | null` e não `string`: o tipo diz a verdade sobre `AcessoDoPainel`,
+ * onde `userId` é nulo sem sessão. Depois do `redirect` o valor é sempre uma
+ * string, mas afirmar isso com um `!` seria o compilador calado no lugar de uma
+ * garantia — e quem consome (o anel) trata o nulo sozinho, perguntando.
  */
-export async function exigirAdminNoPainel(rotaPedida: string): Promise<void> {
+export async function exigirAdminNoPainel(
+  rotaPedida: string,
+): Promise<{ userId: string | null }> {
   const acesso = await lerAcessoDoPainel();
   const decisao = decidirAcessoAoPainel({ ...acesso, rotaPedida });
   if (decisao.tipo === "redireciona") redirect(decisao.destino);
+  return { userId: acesso.userId };
+}
+
+/**
+ * A checagem que Server Action e Route Handler precisam chamar SOZINHOS.
+ *
+ * `exigirAdminNoPainel` existe para PÁGINA e faz `redirect()`, que é o certo
+ * quando há uma tela para onde mandar a pessoa. Aqui não há: uma Server Action
+ * que falha precisa PARAR, não navegar — e `redirect()` dentro de action tem
+ * semântica diferente e some do `try/catch` de quem chamou.
+ *
+ * O layout de `(protegido)` NÃO cobre nenhum dos dois. Handler não passa por
+ * layout, e Server Action executa ANTES de a página re-renderizar — ou seja, a
+ * checagem do layout roda depois de a ação já ter gravado. Por isso a regra é
+ * chamar isto na PRIMEIRA linha, antes de ler o corpo e antes de tocar no banco.
+ *
+ * `painel-servidor.test.ts` lê o diretório e falha se algum arquivo com
+ * `"use server"` ou algum `route.ts` sob /dashboard não chamar esta função.
+ *
+ * A CONDIÇÃO É ESCRITA PELO LADO DO "PODE", NEGADA — a mesma disciplina de
+ * `decidirAcessoAoPainel`: só passa quem tem sessão, é admin, teve a consulta
+ * respondida E tem identidade conhecida. Qualquer coisa fora dessa lista lança.
+ * `falhouConsulta` entra explicitamente porque `ehAdmin` pode vir `false` por
+ * falta de linha em `admins` OU por queda do PostgREST, e as duas devem fechar.
+ * `userId` entra porque quem grava precisa assinar: uma ação que não sabe em
+ * nome de quem age não tem o que escrever em `admin_log`, e o tipo de retorno
+ * promete `string`, não `string | null` — a promessa é cumprida aqui e não com
+ * um `!` no chamador.
+ *
+ * NÃO REUSA `decidirAcessoAoPainel` de propósito: aquela função responde "para
+ * onde mando essa pessoa", e destino é o que aqui não existe. Duplicar o
+ * veredito é menos frágil que traduzir um redirecionamento em exceção.
+ *
+ * A mensagem é um CÓDIGO e não uma frase: quem chama pode mostrá-la, e o que o
+ * navegador de um não-admin recebe deve dizer o mínimo sobre a cerca.
+ */
+export async function exigirAdminEmAcao(): Promise<{ userId: string }> {
+  const acesso = await lerAcessoDoPainel();
+  if (
+    !acesso.temSessao ||
+    !acesso.ehAdmin ||
+    acesso.falhouConsulta ||
+    !acesso.userId
+  ) {
+    throw new Error("SEM_PERMISSAO_NO_PAINEL");
+  }
+  return { userId: acesso.userId };
 }
 
 /**
@@ -391,9 +495,16 @@ export async function exigirAdminNoPainel(rotaPedida: string): Promise<void> {
  * guarda rota porque `/account/verify-email` e `/account/reset-password` recebem
  * o `?code=` do GoTrue ainda sem sessão).
  *
- * A ROTA EXATA SOBREVIVE POR OUTRO CAMINHO: `legacy/routes/AdminRoutes.jsx`, no
- * cliente, enxerga `location.pathname + location.search` e manda o `?de=`
- * completo. É o caso da sessão que morre com o painel já aberto — justamente o
- * caso em que a pessoa estava no meio de alguma coisa e voltar ao lugar certo
- * importa. Quem chega por favorito frio volta para `/dashboard` e navega dali.
+ * A ROTA EXATA SOBREVIVE POR OUTRO CAMINHO: o segundo anel,
+ * `components/painel/casca/AnelDeSessao.tsx`, roda no navegador e enxerga
+ * `location.pathname + location.search` — de onde sai um `?de=` completo, com a
+ * tela e os filtros que estavam abertos. É o caso da sessão que morre com o
+ * painel já aberto, justamente aquele em que a pessoa estava no meio de alguma
+ * coisa e voltar ao lugar certo importa. Quem chega por favorito frio volta para
+ * `/dashboard` e navega dali.
+ *
+ * (Este parágrafo já dizia `legacy/routes/AdminRoutes.jsx`, e era meia verdade:
+ * aquele anel só era montado dentro da ilha `/dashboard/legado/*`, então as telas
+ * novas nunca chegaram a tê-lo. O anel próprio fechou a lacuna — e sobreviveu à
+ * Onda 7, que apagou `frontend/legacy/`. É por isso que ele nasceu separado.)
  */

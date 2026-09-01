@@ -1,5 +1,6 @@
 const pool = require("../pgPool");
 const { v4 } = require("uuid");
+const { registrar, ACOES, ENTIDADES } = require("../services/adminLog");
 
 /**
  * Valores de filtro do painel, contra `canastra.produto_opcoes`.
@@ -64,13 +65,28 @@ class OptionsRepository {
       });
     }
 
+    const id = v4();
+    const client = await pool.connect();
     try {
-      await pool.query(
+      await client.query("BEGIN");
+      await client.query(
         "INSERT INTO canastra.produto_opcoes (id, tipo, valor) VALUES ($1, $2, $3)",
-        [v4(), tipo, valor],
+        [id, tipo, valor],
       );
+      // O valor de filtro é a costura entre catálogo e vitrine: criar
+      // "Especial" e "especial" parte a mesma prateleira em duas, e sem log não
+      // há como saber quem criou qual.
+      await registrar(client, {
+        adminUserId: req.user?.userId ?? null,
+        acao: ACOES.OPCAO_CRIADA,
+        entidade: ENTIDADES.OPCAO,
+        entidadeId: id,
+        depois: { tipo, valor },
+      });
+      await client.query("COMMIT");
       res.status(201).json({ message: "Opção adicionada com sucesso!" });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
       // O UNIQUE (tipo, valor) de 0003 pegando a duplicata é pedido repetido,
       // não erro do servidor.
       if (err.code === "23505") {
@@ -78,6 +94,8 @@ class OptionsRepository {
       }
       console.error("addOption:", err);
       res.status(500).json({ error: "Erro ao adicionar opção" });
+    } finally {
+      client.release();
     }
   }
 
@@ -111,7 +129,26 @@ class OptionsRepository {
         }
       }
 
-      await pool.query("DELETE FROM canastra.produto_opcoes WHERE id = $1", [id]);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("DELETE FROM canastra.produto_opcoes WHERE id = $1", [id]);
+        await registrar(client, {
+          adminUserId: req.user?.userId ?? null,
+          acao: ACOES.OPCAO_REMOVIDA,
+          entidade: ENTIDADES.OPCAO,
+          entidadeId: id,
+          // Remoção tem só `antes`, e aqui ele é o único lugar onde o valor
+          // apagado sobrevive: a linha some do banco no COMMIT.
+          antes: { tipo, valor },
+        });
+        await client.query("COMMIT");
+      } catch (erro) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw erro;
+      } finally {
+        client.release();
+      }
       res.status(204).send();
     } catch (err) {
       console.error("deleteOption:", err);

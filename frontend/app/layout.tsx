@@ -78,7 +78,7 @@ export const metadata: Metadata = {
 
 /**
  * Layout raiz — envolve TUDO: a vitrine traduzida em `app/[locale]/`, o caminho
- * de compra em `app/(transacional)/` e o painel legado em `/dashboard`.
+ * de compra em `app/(transacional)/` e o painel de gestão em `/dashboard`.
  * Nada de estilo visual entra aqui: as classes de fonte apenas expoem
  * --fonte-ui / --fonte-dado no <html>; quem as aplica e `.vitrine`, em
  * app/globals.css. Ver o comentario no topo daquele arquivo.

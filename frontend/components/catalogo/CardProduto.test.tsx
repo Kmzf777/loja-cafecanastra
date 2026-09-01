@@ -95,4 +95,28 @@ describe("CardProduto", () => {
     const saida = html(<CardProduto produto={CLASSICO_250} locale="en" />);
     expect(saida).toContain('href="/en/cafes/classico"');
   });
+
+  /**
+   * O card de SKU é um dos DOIS vocabulários vivos, e nenhum dos dois pode
+   * ficar sem "de/por": a promoção já descontava na cobrança e não aparecia em
+   * lugar nenhum — o cliente via R$ 60, pagava R$ 54 e descobria no fim.
+   */
+  it("mostra 'de/por' quando o SKU está em campanha", () => {
+    const saida = html(
+      <CardProduto
+        produto={{ ...CLASSICO_250, precoPromocional: 3573 }}
+        locale="pt"
+      />,
+    );
+    expect(saida).toContain("<s ");
+    expect(saida).toContain(`R$${NBSP}35,73`);
+    expect(saida).toContain("−10%");
+    expect(saida).toContain("de 39 reais e 70 centavos, por 35 reais e 73 centavos");
+  });
+
+  it("sem campanha o card fica exatamente como sempre esteve", () => {
+    const saida = html(<CardProduto produto={CLASSICO_250} locale="pt" />);
+    expect(saida).not.toContain("<s ");
+    expect(saida).toContain(`R$${NBSP}39,70`);
+  });
 });

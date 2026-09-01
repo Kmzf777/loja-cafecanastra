@@ -1,5 +1,18 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { defineConfig, defaultExclude } from "vitest/config";
+
+const alias = { "@": fileURLToPath(new URL(".", import.meta.url)) };
+const jsx = { runtime: "automatic" as const, importSource: "react" };
+
+/** Os arquivos do painel, que precisam de DOM de verdade — ver o comentário
+ *  grande dentro de `test.projects` logo abaixo. */
+const GLOBS_DO_PAINEL = [
+  "app/dashboard/**/*.test.ts",
+  "app/dashboard/**/*.test.tsx",
+  "components/painel/**/*.test.ts",
+  "components/painel/**/*.test.tsx",
+  "lib/teste/renderizar.test.tsx",
+];
 
 /**
  * A suíte da vitrine.
@@ -21,16 +34,71 @@ import { defineConfig } from "vitest/config";
  *    used" e ignora o primeiro.
  */
 export default defineConfig({
-  resolve: {
-    alias: {
-      "@": fileURLToPath(new URL(".", import.meta.url)),
-    },
-  },
-  oxc: {
-    jsx: { runtime: "automatic", importSource: "react" },
-  },
+  /**
+   * O DOM entra AQUI E SÓ AQUI.
+   *
+   * A suíte da vitrine roda em `environment: "node"` e assim continua: são
+   * 779 casos escritos contra `renderToStaticMarkup`, e trocar o ambiente de
+   * todos eles é mudar a filosofia de teste do repositório inteiro por causa
+   * de uma área nova.
+   *
+   * Mas painel administrativo é interativo por definição — barra de salvar
+   * que aparece quando o formulário suja, seleção em massa que distingue "os
+   * 50 da página" dos "1.284 do filtro", devolução de foco ao fechar o painel
+   * lateral. `renderToStaticMarkup` NÃO EXECUTA EFEITO: uma ilha de cliente
+   * renderiza vazio e o teste passa provando nada.
+   *
+   * A regra de divisão continua sendo a da spec §2.8: a DECISÃO vive num
+   * módulo puro `*.logica.ts` e é testada em `node`; o DOM cobre só o que a
+   * função pura não alcança.
+   *
+   * NOTA DE IMPLEMENTAÇÃO — `environmentMatchGlobs` NÃO EXISTE no Vitest
+   * instalado (4.1.10). Era o mecanismo desta doutrina em versões antigas do
+   * Vitest, mas foi REMOVIDO na 4.0 (conferido em node_modules/vitest: zero
+   * ocorrências em todo o pacote; e na documentação oficial de migração,
+   * https://vitest.dev/guide/migration.html, que diz textualmente
+   * "environmentMatchGlobs config option. Use projects instead."). O
+   * substituto é `projects` — mas ele não é um "adicional" ao `test` de cima:
+   * ASSIM QUE `test.projects` EXISTE, o `test` de nível raiz PARA DE RODAR
+   * SOZINHO (medido: sem o projeto "vitrine" abaixo, `npm test` caía de 891
+   * para 1 caso — só o do painel — em silêncio, sem erro). Por isso a raiz
+   * também vira um projeto explícito, e os dois somados são o total.
+   *
+   * Nenhum projeto usa `extends: true` de propósito. Um projeto que estende
+   * outra config tem seus arrays de `include`/`exclude` CONCATENADOS com os
+   * da config estendida (é o `mergeConfig` do Vite por trás — arrays somam,
+   * não substituem): o projeto "painel-dom" estendendo a raiz herdaria o
+   * `include` amplo da vitrine e voltaria a rodar tudo em jsdom também. Por
+   * isso os dois projetos abaixo são AUTOSSUFICIENTES: cada um repete só o
+   * `alias` e o `jsx` (as duas linhas que precisa) e declara seu próprio
+   * `include`/`exclude`, sem depender de herança nenhuma.
+   */
   test: {
-    environment: "node",
-    include: ["**/*.test.ts", "**/*.test.tsx"],
+    projects: [
+      {
+        resolve: { alias },
+        oxc: { jsx },
+        test: {
+          name: "vitrine",
+          environment: "node",
+          include: ["**/*.test.ts", "**/*.test.tsx"],
+          // Os arquivos do painel saem daqui — eles rodam no projeto
+          // "painel-dom" logo abaixo, em jsdom. Sem este exclude os dois
+          // projetos rodariam o MESMO arquivo duas vezes (uma em node, outra
+          // em jsdom): `projects` no Vitest 4 não tem noção de "primeiro
+          // match vence" entre projetos, cada projeto colige por si.
+          exclude: [...defaultExclude, ...GLOBS_DO_PAINEL],
+        },
+      },
+      {
+        resolve: { alias },
+        oxc: { jsx },
+        test: {
+          name: "painel-dom",
+          environment: "jsdom",
+          include: GLOBS_DO_PAINEL,
+        },
+      },
+    ],
   },
 });

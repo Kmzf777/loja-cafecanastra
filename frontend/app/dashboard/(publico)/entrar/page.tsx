@@ -23,10 +23,12 @@ import { FormularioDeEntrada } from "./FormularioDeEntrada";
  * pasta com nome, que aparece no diff de quem a criar.
  *
  * E FICA FORA DO GRUPO `(vitrine)`, então não herda cabeçalho, rodapé, banner de
- * cookies nem o provedor da sacola. O que ela precisa herdar é só o RESET: em
- * `app/globals.css` ele é escopado em `.vitrine` (o preflight do Tailwind não é
- * global por causa do painel legado em styled-components). Daí a classe no
- * contêiner abaixo — é o reset e a tipografia da casa, não a moldura da loja.
+ * cookies nem o provedor da sacola. A classe `.vitrine` no contêiner abaixo é o
+ * que traz de volta a TIPOGRAFIA da casa — a fonte, a entrelinha, a tinta e a
+ * superfície Cal. Não é mais o reset: desde a Onda 7 o preflight do Tailwind é
+ * global e alcança esta página sozinho. (Até lá ele era escopado, porque um
+ * preflight global desfazia o painel legado em styled-components, e esta classe
+ * carregava as duas coisas de uma vez.)
  */
 export const metadata: Metadata = {
   title: "Entrar no painel",

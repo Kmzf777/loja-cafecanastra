@@ -323,7 +323,13 @@ test("método e preço casados passam e devolvem os dois", async () => {
     shippingMethod: "Entrega Local",
   });
 
-  assert.deepEqual(conferido, { valor: 5, metodo: "Entrega Local" });
+  // `ehMaisBarata` entrou no contrato na Onda 4 (ver `conferirFrete`): aqui a
+  // Entrega Local e a unica opcao cotada, portanto e a mais barata.
+  assert.deepEqual(conferido, {
+    valor: 5,
+    metodo: "Entrega Local",
+    ehMaisBarata: true,
+  });
 });
 
 test("nome que não está na cotação é recusado, mesmo com preço real", async () => {
@@ -389,5 +395,9 @@ test("com frete grátis, o casamento por nome ainda identifica a opção", async
     shippingMethod: "Entrega Local",
   });
 
-  assert.deepEqual(conferido, { valor: 0, metodo: "Entrega Local" });
+  assert.deepEqual(conferido, {
+    valor: 0,
+    metodo: "Entrega Local",
+    ehMaisBarata: true,
+  });
 });

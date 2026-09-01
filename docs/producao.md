@@ -48,8 +48,10 @@ Vale a pena ler antes de abrir um chamado — nada abaixo é bug novo:
   desde a F4 e ganhou as telas que faltavam (cupons, avaliações, assinaturas,
   rastreio, SKU, exportação CSV), mas continua fora do App Router. Duas
   consequências operacionais seguem de pé, e as duas são a F6:
-  - o **CSP tem `unsafe-inline` e `unsafe-eval`** no `script-src`, que existem só
-    por causa do styled-components do painel;
+  - o **CSP tem `unsafe-inline`** no `script-src`. Esta linha já dizia
+    "`unsafe-inline` e `unsafe-eval`, que existem só por causa do
+    styled-components do painel", e **estava errada nas duas metades** — ver a
+    entrada correspondente na lista de pendências, mais abaixo;
   - o **bundle do painel é servido a qualquer visitante** e o guard é de
     cliente. Não vaza dado — a API está protegida rota a rota e a RLS não
     depende do navegador —, vaza só código.
@@ -731,22 +733,33 @@ Depois de aplicar na VPS, confira à mão:
 O checklist completo de pós-deploy (nginx, TLS, healthcheck, webhook) está em
 `docs/deploy.md` §11.
 
-### 8.2 `npm run verifica` — fumaça num Chromium real
+### 8.2 `npm run verifica` — apagado na Onda 7, e não substituído
 
-São **37 checagens** (`frontend/scripts/verifica-fluxo.mjs`) e elas exercem a
-arquitetura **atual**, não a antiga: guard do `/dashboard` sem sessão, login pela
-página do GoTrue, as rotas do painel legado, os 29 SKUs pela API, a busca
-full-text, PLP, PDP, sacola e checkout. Exige backend (3333), Next (3000) e banco
-no ar ao mesmo tempo.
+Havia aqui um script de fumaça num Chromium real
+(`frontend/scripts/verifica-fluxo.mjs`, 37 checagens). **Ele foi apagado, e não
+porque a reescrita o quebrou: ele já não rodava.** Três defeitos, e cada um
+sozinho já o impedia de passar:
 
-Duas ressalvas antes de rodar:
+- o `executablePath` estava cravado em `/opt/pw-browsers/...`, um caminho Linux
+  que não existe na máquina de desenvolvimento;
+- a primeira checagem exigia que `/dashboard` sem sessão redirecionasse para
+  `/account/login`, e o guard manda para `/dashboard/entrar` desde a reescrita
+  do acesso;
+- oito das checagens visitavam rotas do painel legado
+  (`/dashboard/products/addedProducts`, `/dashboard/orders`,
+  `/dashboard/settings/*`), que a Onda 7 apagou.
 
-- **O caminho do Chromium está fixo no script** (`executablePath` apontando para
-  um Linux), e as credenciais de login também. É script de máquina de
-  desenvolvimento; ajuste os dois antes.
-- **Ele não cobre as superfícies mais novas**: cupom, cartão, Clube, avaliações e
-  `/pedido/[id]` só têm cobertura nas suítes de `npm test` e
-  `npm --prefix backend test`. Passar aqui não é passar em tudo.
+Consertá-lo exigiria reescrevê-lo inteiro contra as rotas novas **e** ter loja,
+API e banco no ar para provar a reescrita — e um script de fumaça que ninguém
+conseguiu rodar é pior que nenhum, porque a linha `npm run verifica` no README
+faz parecer que existe uma prova que não existe.
+
+**Não há E2E hoje.** A cobertura é a de `npm test` (frontend) e
+`npm --prefix backend test`. Reconstruí-lo é decisão registrada em
+`docs/pesquisa/2026-08-26-riscos-da-reescrita.md` §4 ("E2E NO CI"), e é a única
+forma de cobrir sessão real, cookie, redirect e RLS chegando via PostgREST.
+`playwright` continua em `devDependencies` do `frontend` para quando isso for
+feito — hoje sem nenhum consumidor.
 
 ---
 
@@ -869,9 +882,24 @@ acesso à VPS, decisão comercial, conversa com o contador — saiu daqui e mora
 - **Conexão com o Postgres sem validar o certificado TLS**
   (`rejectUnauthorized: false` em `pgPool.js`). Com Postgres e serviço Node na
   mesma VPS a exposição muda de natureza, mas a linha continua lá. **F5.**
-- **CSP com `unsafe-inline` e `unsafe-eval` no `script-src`** — existem só por
-  causa do styled-components do painel legado. O caminho é nonce via middleware.
-  **F6.**
+- **CSP com `unsafe-inline` no `script-src`** — e a atribuição que este
+  documento fazia estava errada. Dizia "existem só por causa do
+  styled-components do painel legado", o que sugeria que apagar o painel legado
+  destravaria as duas diretivas. A Onda 7 apagou o legado e mediu:
+
+  - **`unsafe-eval` saiu de produção.** Zero `eval(` e zero `new Function(` nos
+    33 chunks de um build de produção. Continua ligado em desenvolvimento, onde
+    o `next dev` gera source map por eval.
+  - **`unsafe-inline` fica, e nunca teve a ver com o painel.** Toda página
+    pré-renderizada carrega de 34 a 44 `<script>` inline do próprio Next (o
+    `self.__next_f.push(...)`, que é o payload RSC da hidratação) e **zero**
+    `nonce=` — medido em `.next/server/app/*.html`. Sem `unsafe-inline` o
+    navegador recusa todos eles e a loja para de hidratar.
+
+  O caminho continua sendo nonce via middleware, mas com o preço agora escrito:
+  **nonce obriga render dinâmico**, e `/[locale]` hoje sai como `● (SSG)`. Trocar
+  a estática de 74 páginas por essa diretiva é decisão de arquitetura, não
+  tarefa de limpeza.
 - **O bundle do painel é servido a qualquer visitante** e o guard é de cliente. A
   API está protegida rota a rota e a RLS não depende do navegador, então não há
   vazamento de dado — só de código. O guard vira server-side no App Router. **F6.**

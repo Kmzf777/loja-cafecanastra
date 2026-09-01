@@ -385,9 +385,14 @@ test("id malformado é 404, não 500 de cast (22P02)", async () => {
  * GET /admin/orders/export
  * -------------------------------------------------------------------------- */
 
-test("export sem filtro traz todos os pedidos, com cabeçalhos de download", async () => {
+test("export sem filtro, CONFIRMADO, traz todos os pedidos com cabeçalhos de download", async () => {
+  // `confirmar=true` passou a ser obrigatório sem datas na Onda 4: sem período,
+  // este arquivo carrega CPF e e-mail de TODOS os clientes, e a recusa (com a
+  // frase que ensina o caminho) está em painel_pedidos_e_clientes.test.js. Aqui
+  // o que se mede continua sendo o FORMATO do CSV — BOM, `;`, vírgula decimal e
+  // guarda de fórmula —, e para isso o arquivo precisa sair.
   const res = respostaFalsa();
-  await OrderController.exportOrdersCsv({ query: {} }, res);
+  await OrderController.exportOrdersCsv({ query: { confirmar: "true" } }, res);
 
   assert.equal(res.codigo, 200);
   assert.equal(res.cabecalhos["content-type"], "text/csv; charset=utf-8");

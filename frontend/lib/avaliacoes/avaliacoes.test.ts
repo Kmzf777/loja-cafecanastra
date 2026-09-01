@@ -13,6 +13,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  *   - O ENVIO assina com o uid DA SESSÃO (a política exige
  *     `user_id = auth.uid()`) e traduz SQLSTATE em frase de loja — 42501 é
  *     "depois da entrega", nunca a mensagem crua do Postgres.
+ *   - "AS MINHAS" PASSA PELA RPC `minhas_avaliacoes()` (0031), nunca por
+ *     `.eq("user_id", …)`: `user_id` saiu do GRANT de `authenticated`, filtro
+ *     também é leitura, e o modo de falha deste módulo é `[]` mudo — a
+ *     regressão não apareceria em lugar nenhum, só na página do pedido
+ *     oferecendo formulário para café já avaliado.
  */
 
 type RespostaFalsa = {
@@ -65,6 +70,12 @@ const falso = {
     cenario.consultas.push(consulta);
     return consulta;
   }),
+  // `minhas_avaliacoes()` (0031). Devolve direto, sem builder: uma RPC não
+  // encadeia `.eq()`/`.order()` — e é justamente isso que estes testes fixam.
+  rpc: vi.fn(
+    async (..._args: unknown[]) =>
+      cenario.respostas.shift() ?? { data: null, error: null },
+  ),
 };
 
 vi.mock("../supabase/cliente", () => ({ clienteNavegador: () => falso }));
@@ -93,6 +104,7 @@ beforeEach(() => {
   cenario.consultas = [];
   cenario.sessao = null;
   falso.from.mockClear();
+  falso.rpc.mockClear();
   falso.auth.getSession.mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -256,9 +268,17 @@ describe("minhasAvaliacoes", () => {
     cenario.sessao = null;
     expect(await minhasAvaliacoes()).toEqual([]);
     expect(falso.from).not.toHaveBeenCalled();
+    expect(falso.rpc).not.toHaveBeenCalled();
   });
 
-  it("filtra pelo próprio uid e traduz as colunas", async () => {
+  it("chama a RPC `minhas_avaliacoes`, SEM argumento, e não toca a tabela", async () => {
+    // O QUE ESTE TESTE PROVA E O QUE ELE NÃO PROVA. Ele fixa o CONTRATO DE
+    // CHAMADA — que o módulo pergunta "quais são as minhas" em vez de filtrar
+    // por `user_id` (42501 desde 0031, e o `catch` daqui transformaria isso num
+    // `[]` mudo), e que nenhum uid viaja como argumento. Quem a função devolve
+    // é pergunta de BANCO, e está medida contra o Postgres de verdade em
+    // `backend/test/f7_avaliacoes.test.js` — com um mock, ela passaria igual
+    // com a RPC quebrada.
     cenario.sessao = { user: { id: "uid-ana" } };
     cenario.respostas = [
       {
@@ -278,8 +298,16 @@ describe("minhasAvaliacoes", () => {
     ];
 
     const minhas = await minhasAvaliacoes();
-    const [consulta] = cenario.consultas;
-    expect(consulta.chamadas.eq).toEqual(["user_id", "uid-ana"]);
+
+    expect(falso.rpc).toHaveBeenCalledTimes(1);
+    // Nome exato — é o que o PostgREST resolve para `/rpc/minhas_avaliacoes`.
+    expect(falso.rpc.mock.calls[0][0]).toBe("minhas_avaliacoes");
+    // SEM SEGUNDO ARGUMENTO: a função não tem parâmetro, e mandar um uid aqui
+    // seria pedir uma versão dela que reabriria o vazamento que 0031 fechou.
+    expect(falso.rpc.mock.calls[0].length).toBe(1);
+    // E a tabela não é tocada: `user_id` está fora do GRANT, no filtro também.
+    expect(falso.from).not.toHaveBeenCalled();
+
     expect(minhas).toEqual([
       {
         id: "av-2",
