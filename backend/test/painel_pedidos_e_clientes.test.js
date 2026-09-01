@@ -183,13 +183,26 @@ before(async () => {
     [P1],
   );
 
+  // DATA EXPLÍCITA, e não `now()`. Os testes de período deste arquivo filtram
+  // janelas ABSOLUTAS de setembro de 2026, e um pedido nascido em `now()` entra
+  // sozinho na janela no dia em que o calendário chega lá. Foi exatamente o que
+  // aconteceu: a suíte passou até 31/08/2026 e amanheceu vermelha em 01/09 sem
+  // ninguém tocar no código — a exportação da janela 01/09–30/09 registrou
+  // `linhas: 3` no lugar de `linhas: 1`, porque estes dois pedidos passaram a
+  // ser de setembro. Agosto de 2026 os mantém "recentes" e FORA de toda janela
+  // que este arquivo afirma, inclusive a de 10/09 (que quebraria daqui a nove
+  // dias pelo mesmo motivo). Só `pedidoLimite` é de setembro, e é o ponto.
   pedidoDaAna = await inserirPedido({
     userId: ANA,
     status: "entregue",
-    criadoEm: null,
+    criadoEm: "2026-08-20T15:00:00Z",
     cupom: "CAFE10",
   });
-  pedidoDoBeto = await inserirPedido({ userId: BETO, status: "pendente", criadoEm: null });
+  pedidoDoBeto = await inserirPedido({
+    userId: BETO,
+    status: "pendente",
+    criadoEm: "2026-08-21T15:00:00Z",
+  });
   pedidoAntigo = await inserirPedido({
     userId: ANA,
     status: "aprovado",
