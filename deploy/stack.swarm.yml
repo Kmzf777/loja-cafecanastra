@@ -68,14 +68,15 @@ services:
       # nao entra na rede interna dela.
       - canastrainteligencia
     deploy:
-      # ZERO REPLICAS DE PROPOSITO — nao e defeito.
-      # backend/src/config/ambiente.js RECUSA subir em producao sem
-      # MP_ACCESS_TOKEN e MP_WEBHOOK_SECRET (>= 32 chars). Sem elas o servico
-      # entraria em crash-loop. Quando as credenciais do Mercado Pago
-      # chegarem: preencha backend/src/.env e rode
-      #   docker stack deploy -c deploy/stack.swarm.yml loja
-      #   docker service scale loja_api=1
-      replicas: 0
+      # Ligada em 01/09/2026. Ficou em ZERO ate aqui porque
+      # backend/src/config/ambiente.js recusa subir em producao com as
+      # obrigatorias vazias, e quatro delas estavam — o servico entrava em
+      # crash-loop. Preenchidas em backend/src/.env, `/api/health` responde
+      # {"status":"ok","banco":"ok"}.
+      #
+      # O numero mora AQUI, e nao num `docker service scale`: o stack deploy
+      # reaplica este arquivo a cada deploy e desfaria o scale feito a mao.
+      replicas: 1
       restart_policy:
         condition: on-failure
         delay: 5s
