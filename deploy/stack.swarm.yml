@@ -27,6 +27,22 @@ version: "3.8"
 services:
   web:
     image: loja-web:latest
+    # A ORIGEM DA API PARA O LADO DO SERVIDOR, e o motivo esta em
+    # frontend/lib/api-base.ts. Resumo: o build assa NEXT_PUBLIC_API_URL=/api,
+    # que serve ao NAVEGADOR (mesma origem, o Traefik separa) e e recusado pelo
+    # `fetch` do Node, que exige URL absoluta — toda leitura server-side do
+    # painel virava "A API nao respondeu", com a API de pe e o log dela vazio.
+    #
+    # NAO leva o prefixo NEXT_PUBLIC_ de proposito: variavel publica e inlinada
+    # no bundle em build, esta e lida em RUNTIME. Trocar de destino aqui e
+    # reiniciar o servico, nao reconstruir 465 MB de imagem.
+    #
+    # `api` e o nome do servico neste stack, resolvido pelo DNS da rede
+    # canastrainteligencia. O trafego nao sai do host nem passa pela
+    # Cloudflare: 120 ms contra 419 ms pela URL publica, medido de dentro do
+    # container em 01/09/2026.
+    environment:
+      API_URL_INTERNA: http://api:3333
     networks:
       - canastrainteligencia
     deploy:
