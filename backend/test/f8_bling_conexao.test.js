@@ -23,10 +23,21 @@
  * `fetch` é dublado ali — o Bling é do lado de fora e não há como pedir a ele um
  * `code` de verdade num teste; a gravação continua indo ao Postgres real, que é
  * justamente o que se quer provar.
+ *
+ * A TERCEIRA PARTE são as ROTAS de `/bling/conexao` num Express de verdade, com
+ * a cadeia inteira de middlewares. Não é cerimônia: o 401 de quem não tem
+ * sessão, o 400 do corpo vazio, o 409 de ligar sem conexão e — sobretudo — o
+ * callback PÚBLICO que só age com `state` vivo são decisões que moram NA ROTA.
+ * Chamar o serviço direto (como faz a segunda parte) não passa por nenhuma
+ * delas. O padrão de subir o app e assinar o token de admin é copiado de
+ * `f7_bling.test.js`; um segundo jeito de fazer isso não ajudaria ninguém.
  */
 
 const { test, before, after, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
+const http = require("node:http");
+const express = require("express");
+const jwt = require("jsonwebtoken");
 const { subirPostgres } = require("./ajuda/postgres.js");
 const { aplicarMigracoes } = require("../db/migrar.js");
 
@@ -35,6 +46,29 @@ let bd;
 let pool;
 let blingClient;
 let blingConexao;
+let blingPedidos;
+let servidor;
+let urlDaApi;
+let tokenDeAdmin;
+let blingFalso;
+
+/** A Ana: cliente desta loja E administradora — `isAdmin` lê o BANCO. */
+const ANA = "aaaaaaaa-0000-0000-0000-000000000008";
+
+/**
+ * O "BLING" DESTA SUÍTE É UM SERVIDOR HTTP LOCAL, e não um `fetchImpl` injetado.
+ *
+ * A segunda parte do arquivo injeta o `fetch` porque chama o serviço direto.
+ * Aqui quem chama é a ROTA, e ela não tem (nem deve ter) um parâmetro de teste:
+ * abrir um ponto de injeção na assinatura HTTP só para o teste alcançar seria
+ * código de produção existindo para o teste. `BLING_API_URL` já é
+ * sobrescritível — é a mesma porta que `baseDaApi()` usa —, então apontá-la
+ * para 127.0.0.1 exercita a rota INTEIRA, fetch nativo incluído, sem sair para
+ * a internet.
+ */
+const blingFalsoResponde = { status: 200, json: {} };
+/** O que foi pedido ao "Bling": evidência de que a troca de token aconteceu. */
+const chamadasAoBlingFalso = [];
 
 before(async () => {
   bd = await subirPostgres();
@@ -50,14 +84,102 @@ before(async () => {
   process.env.DATABASE_URL = bd.connectionString;
   process.env.NODE_ENV = "development";
 
+  blingFalso = http.createServer((req, res) => {
+    let corpo = "";
+    req.on("data", (pedaco) => {
+      corpo += pedaco;
+    });
+    req.on("end", () => {
+      chamadasAoBlingFalso.push({ caminho: req.url, corpo });
+      res.writeHead(blingFalsoResponde.status, {
+        "content-type": "application/json",
+      });
+      res.end(JSON.stringify(blingFalsoResponde.json));
+    });
+  });
+  await new Promise((pronto) => blingFalso.listen(0, "127.0.0.1", pronto));
+  process.env.BLING_API_URL = `http://127.0.0.1:${blingFalso.address().port}`;
+
   blingClient = require("../src/services/blingClient.js");
   blingConexao = require("../src/services/blingConexao.js");
+  blingPedidos = require("../src/services/blingPedidos.js");
+
+  // O token é HS256 do `SUPABASE_JWT_SECRET`, o caminho self-hosted que é o
+  // alvo de produção; a Ana entra em `canastra.admins` porque `isAdmin` lê o
+  // BANCO, nunca um claim (e `isAuthenticated` exige a linha em `clientes`).
+  await pool.query("INSERT INTO auth.users (id, email) VALUES ($1, 'ana@ex.com')", [
+    ANA,
+  ]);
+  await pool.query(
+    "INSERT INTO canastra.clientes (user_id, nome, cpf) VALUES ($1, 'Ana', '52998224725') ON CONFLICT (user_id) DO NOTHING",
+    [ANA],
+  );
+  await pool.query("INSERT INTO canastra.admins (user_id) VALUES ($1)", [ANA]);
+  process.env.SUPABASE_JWT_SECRET = "segredo-de-teste-hs256";
+  tokenDeAdmin = jwt.sign(
+    { sub: ANA, role: "authenticated", email: "ana@ex.com" },
+    process.env.SUPABASE_JWT_SECRET,
+    { expiresIn: "1h" },
+  );
+
+  // `express.json()` porque duas das rotas novas recebem corpo — é o mesmo
+  // parser que o `index.js` monta antes de `app.use("/bling", ...)`.
+  const app = express();
+  app.use(express.json());
+  app.use("/bling", require("../src/routes/bling.routes.js"));
+  await new Promise((pronto) => {
+    servidor = app.listen(0, "127.0.0.1", pronto);
+  });
+  urlDaApi = `http://127.0.0.1:${servidor.address().port}`;
 }, { timeout: 120_000 });
 
 after(async () => {
+  if (servidor) await new Promise((pronto) => servidor.close(pronto));
+  if (blingFalso) await new Promise((pronto) => blingFalso.close(pronto));
   await require("../src/pgPool.js").end().catch(() => {});
   await bd?.derrubar();
 });
+
+/**
+ * Uma chamada às rotas `/bling`. `admin: true` manda a credencial; sem ela a
+ * requisição sai anônima, que é o que prova o 401.
+ *
+ * `redirect: "manual"` NÃO É DETALHE: o `fetch` do Node segue 302 por padrão, e
+ * seguir o do callback pediria `/dashboard/bling` a um Express que não serve a
+ * vitrine — a resposta viraria 404 e o `location`, que é justamente o que os
+ * testes do callback examinam, sumiria.
+ */
+async function pedir(metodo, caminho, { admin = false, corpo } = {}) {
+  const resposta = await fetch(`${urlDaApi}${caminho}`, {
+    method: metodo,
+    redirect: "manual",
+    headers: {
+      ...(admin ? { Authorization: `Bearer ${tokenDeAdmin}` } : {}),
+      ...(corpo !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(corpo !== undefined ? { body: JSON.stringify(corpo) } : {}),
+  });
+  const texto = await resposta.text();
+  let json = null;
+  try {
+    json = texto ? JSON.parse(texto) : null;
+  } catch {
+    json = texto;
+  }
+  return {
+    status: resposta.status,
+    corpo: json,
+    cabecalhos: Object.fromEntries(resposta.headers),
+  };
+}
+
+/** O refresh token gravado, que vários testes comparam antes/depois. */
+async function refreshNoBanco() {
+  const { rows } = await pool.query(
+    "SELECT bling_refresh_token FROM canastra.config_loja WHERE id = 1",
+  );
+  return rows[0].bling_refresh_token;
+}
 
 beforeEach(() => {
   if (!bd) {
@@ -247,4 +369,291 @@ test("desconectar apaga o refresh token e desliga", async () => {
   );
   assert.equal(rows[0].bling_refresh_token, null);
   assert.equal(rows[0].bling_ativo, false);
+});
+
+/* ------------------------------------------------------------------------ *
+ * AS ROTAS — `src/routes/bling.routes.js`
+ *
+ * Express de verdade, `isAuthenticated` e `isAdmin` inclusive. O contrato que
+ * o frontend já consome está no topo de
+ * `docs/superpowers/plans/2026-09-16-conexao-bling.md`.
+ * ------------------------------------------------------------------------ */
+
+test("POST /bling/conexao/credenciais grava, e exige admin", async () => {
+  const semSessao = await pedir("POST", "/bling/conexao/credenciais", {
+    corpo: { clientId: "a", clientSecret: "b" },
+  });
+  assert.equal(semSessao.status, 401);
+
+  const r = await pedir("POST", "/bling/conexao/credenciais", {
+    admin: true,
+    corpo: { clientId: "id-do-painel", clientSecret: "segredo-do-painel" },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.salvo, true);
+
+  const { rows } = await pool.query(
+    "SELECT bling_client_id, bling_client_secret FROM canastra.config_loja WHERE id = 1",
+  );
+  assert.equal(rows[0].bling_client_id, "id-do-painel");
+  assert.equal(rows[0].bling_client_secret, "segredo-do-painel");
+
+  // A rota esqueceu o cache ao gravar: sem isso, a tela salvaria a credencial
+  // nova e a integração seguiria autenticando com a antiga por até 30s.
+  assert.equal((await blingClient.carregarConfig()).clientId, "id-do-painel");
+});
+
+test("POST /bling/conexao/credenciais recusa corpo vazio com frase util", async () => {
+  const r = await pedir("POST", "/bling/conexao/credenciais", {
+    admin: true,
+    corpo: { clientId: "", clientSecret: "" },
+  });
+  assert.equal(r.status, 400);
+  assert.equal(r.corpo.error, "CREDENCIAIS_INVALIDAS");
+  assert.match(r.corpo.message, /Client ID/);
+
+  // E a recusa não apagou o que já estava gravado.
+  assert.equal((await blingClient.carregarConfig()).clientId, "id-do-painel");
+});
+
+test("POST /bling/conexao/iniciar devolve a URL do Bling, e nao o state", async () => {
+  await pool.query(
+    `UPDATE canastra.config_loja
+        SET bling_client_id = NULL, bling_client_secret = NULL WHERE id = 1`,
+  );
+  blingClient.zerarCacheParaTeste();
+  const sem = await pedir("POST", "/bling/conexao/iniciar", { admin: true });
+  assert.equal(sem.status, 409);
+  assert.equal(sem.corpo.error, "SEM_CREDENCIAIS");
+
+  // Restaura pelo caminho do gestor: a própria rota de credenciais.
+  await pedir("POST", "/bling/conexao/credenciais", {
+    admin: true,
+    corpo: { clientId: "id-do-painel", clientSecret: "segredo-do-painel" },
+  });
+
+  const r = await pedir("POST", "/bling/conexao/iniciar", { admin: true });
+  assert.equal(r.status, 200);
+  const u = new URL(r.corpo.url);
+  assert.equal(u.hostname, "www.bling.com.br");
+  assert.equal(u.searchParams.get("client_id"), "id-do-painel");
+  assert.ok(u.searchParams.get("state"), "o state viaja DENTRO da URL");
+  assert.equal(
+    r.corpo.state,
+    undefined,
+    "e não repetido no corpo: o cliente não tem o que fazer com ele",
+  );
+});
+
+test("GET /bling/callback SEM state valido nao grava nada", async () => {
+  const antes = await refreshNoBanco();
+  const chamadasAntes = chamadasAoBlingFalso.length;
+
+  const r = await pedir("GET", "/bling/callback?code=qualquer&state=inventado");
+  assert.equal(r.status, 302);
+  assert.match(r.cabecalhos.location, /^\/dashboard\/bling\?erro=/);
+
+  assert.equal(await refreshNoBanco(), antes, "nada foi gravado");
+  assert.equal(
+    chamadasAoBlingFalso.length,
+    chamadasAntes,
+    "e o `code` nem chegou a ser apresentado ao Bling",
+  );
+});
+
+test("GET /bling/callback com state valido conecta e redireciona", async () => {
+  // O state sai da rota autenticada, como em produção: é ela quem o emite, e
+  // provar que o callback público aceita JUSTAMENTE esse é o desenho inteiro.
+  const iniciou = await pedir("POST", "/bling/conexao/iniciar", { admin: true });
+  const state = new URL(iniciou.corpo.url).searchParams.get("state");
+
+  blingFalsoResponde.status = 200;
+  blingFalsoResponde.json = {
+    refresh_token: "refresh-do-callback",
+    access_token: "access-do-callback",
+    expires_in: 21600,
+  };
+
+  const r = await pedir("GET", `/bling/callback?code=bom&state=${state}`);
+  assert.equal(r.status, 302);
+  assert.equal(r.cabecalhos.location, "/dashboard/bling?conectado=1");
+  assert.equal(await refreshNoBanco(), "refresh-do-callback");
+
+  // Uso único: o mesmo state de novo é recusado sem tocar em nada.
+  blingFalsoResponde.json = { refresh_token: "nao-deveria-gravar" };
+  const repetido = await pedir("GET", `/bling/callback?code=bom&state=${state}`);
+  assert.match(repetido.cabecalhos.location, /erro=/);
+  assert.equal(await refreshNoBanco(), "refresh-do-callback");
+});
+
+test("GET /bling/callback nunca poe token na URL de redirecionamento", async () => {
+  blingFalsoResponde.status = 200;
+  blingFalsoResponde.json = {
+    refresh_token: "refresh-ultrassecreto",
+    access_token: "access-ultrassecreto",
+    expires_in: 21600,
+  };
+  const state = blingConexao.gerarState();
+  const ok = await pedir("GET", `/bling/callback?code=bom&state=${state}`);
+  assert.equal(/refresh|token|secret/i.test(ok.cabecalhos.location), false);
+
+  /*
+    E O CAMINHO DE ERRO, que é onde mora a tentação de "ajudar no diagnóstico".
+    A frase do Bling volta inteira para o gestor ler — é o contrato da tela —,
+    então o que este caso cerca são os VALORES: o `code` apresentado, o
+    client_secret e o refresh token não podem aparecer numa URL que vai para o
+    histórico do navegador, para o log do Traefik e para o `Referer` da página
+    seguinte. (A regex do caso feliz não serve aqui: uma frase legítima do Bling
+    pode conter a PALAVRA "token" sem vazar valor nenhum.)
+  */
+  blingFalsoResponde.status = 400;
+  blingFalsoResponde.json = { error: { description: "invalid_grant: expirado" } };
+  const state2 = blingConexao.gerarState();
+  const erro = await pedir(
+    "GET",
+    `/bling/callback?code=code-ultrassecreto&state=${state2}`,
+  );
+  const location = erro.cabecalhos.location;
+  assert.match(location, /erro=/);
+  assert.match(decodeURIComponent(location), /invalid_grant/);
+  assert.equal(location.includes("code-ultrassecreto"), false);
+  assert.equal(location.includes("segredo-do-painel"), false);
+  assert.equal(location.includes("refresh-ultrassecreto"), false);
+});
+
+test("POST /bling/conexao/ativo recusa ligar sem conexao", async () => {
+  await pool.query(
+    "UPDATE canastra.config_loja SET bling_refresh_token = NULL WHERE id = 1",
+  );
+  blingClient.zerarCacheParaTeste();
+
+  const r = await pedir("POST", "/bling/conexao/ativo", {
+    admin: true,
+    corpo: { ativo: true },
+  });
+  assert.equal(r.status, 409);
+  assert.equal(r.corpo.error, "SEM_CONEXAO");
+  const { rows } = await pool.query(
+    "SELECT bling_ativo FROM canastra.config_loja WHERE id = 1",
+  );
+  assert.notEqual(rows[0].bling_ativo, true, "e a recusa não ligou nada");
+
+  // Com conexão, o interruptor funciona nos dois sentidos.
+  await pool.query(
+    "UPDATE canastra.config_loja SET bling_refresh_token = 'refresh-vivo' WHERE id = 1",
+  );
+  blingClient.zerarCacheParaTeste();
+
+  const ligou = await pedir("POST", "/bling/conexao/ativo", {
+    admin: true,
+    corpo: { ativo: true },
+  });
+  assert.equal(ligou.status, 200);
+  assert.equal(ligou.corpo.ativo, true);
+  assert.equal((await blingClient.carregarConfig()).ativo, true);
+
+  const desligou = await pedir("POST", "/bling/conexao/ativo", {
+    admin: true,
+    corpo: { ativo: false },
+  });
+  assert.equal(desligou.status, 200);
+  assert.equal(desligou.corpo.ativo, false);
+  assert.equal((await blingClient.carregarConfig()).ativo, false);
+});
+
+test("DELETE /bling/conexao desconecta, e so o admin pode", async () => {
+  await pool.query(
+    "UPDATE canastra.config_loja SET bling_refresh_token = 'refresh-vivo', bling_ativo = true WHERE id = 1",
+  );
+  blingClient.zerarCacheParaTeste();
+
+  const semSessao = await pedir("DELETE", "/bling/conexao");
+  assert.equal(semSessao.status, 401);
+  assert.equal(await refreshNoBanco(), "refresh-vivo", "anônimo não desconecta");
+
+  const r = await pedir("DELETE", "/bling/conexao", { admin: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.desconectado, true);
+
+  const { rows } = await pool.query(
+    `SELECT bling_refresh_token, bling_ativo, bling_client_id
+       FROM canastra.config_loja WHERE id = 1`,
+  );
+  assert.equal(rows[0].bling_refresh_token, null);
+  assert.equal(rows[0].bling_ativo, false, "desconectar TAMBÉM desliga");
+  assert.equal(
+    rows[0].bling_client_id,
+    "id-do-painel",
+    "o aplicativo continua cadastrado: desconectar é refazer a autorização",
+  );
+});
+
+test("GET /bling/status conta a verdade e NAO vaza segredo", async () => {
+  await pool.query(
+    `UPDATE canastra.config_loja
+        SET bling_client_id = 'id', bling_client_secret = 'segredo-secretissimo',
+            bling_refresh_token = 'refresh-secretissimo', bling_ativo = true
+      WHERE id = 1`,
+  );
+  blingClient.zerarCacheParaTeste();
+  // A sonda do /status renova o access token: o "Bling" local responde por ele.
+  blingFalsoResponde.status = 200;
+  blingFalsoResponde.json = {
+    access_token: "access-de-teste",
+    refresh_token: "refresh-secretissimo",
+    expires_in: 21600,
+  };
+
+  const semSessao = await pedir("GET", "/bling/status");
+  assert.equal(semSessao.status, 401);
+
+  const r = await pedir("GET", "/bling/status", { admin: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.corpo.temCredenciais, true);
+  assert.equal(r.corpo.conectado, true);
+  assert.equal(r.corpo.ativo, true, "o `ativo` sai do BANCO, não da env");
+  assert.equal(r.corpo.configurado, true);
+  assert.equal(r.corpo.token.ok, true);
+
+  const inteiro = JSON.stringify(r.corpo);
+  assert.equal(inteiro.includes("segredo-secretissimo"), false);
+  assert.equal(inteiro.includes("refresh-secretissimo"), false);
+  assert.equal(inteiro.includes("access-de-teste"), false);
+});
+
+/* ------------------------------------------------------------------------ *
+ * O CRON — `rodadaDeRastreio` consulta o BANCO a cada tique
+ * ------------------------------------------------------------------------ */
+
+test("o cron nao age com a integracao desligada no banco", async () => {
+  // Um pedido que a consulta do cron ENCONTRARIA: tem bling_id, não tem
+  // rastreio, está aprovado e é recente. Sem ele o teste passaria por engano,
+  // afirmando zero sobre uma fila que já era vazia.
+  const { rows } = await pool.query(
+    `INSERT INTO canastra.pedidos
+       (user_id, total, status, metodo_pagamento, itens, endereco_json,
+        frete, metodo_envio, bling_id, codigo_rastreio)
+     VALUES ($1, 50, 'aprovado', 'pix', '[]'::jsonb, '{}'::jsonb, 0,
+             'Retirada', '999', NULL)
+     RETURNING pedido_id`,
+    [ANA],
+  );
+  assert.ok(rows[0].pedido_id);
+
+  // O "Bling" responde um pedido sem volume: a rodada anda inteira e não acha
+  // rastreio — é a fila que interessa aqui, não o código.
+  blingFalsoResponde.status = 200;
+  blingFalsoResponde.json = {
+    data: { id: 999, situacao: { valor: "Em aberto" }, transporte: { volumes: [] } },
+  };
+
+  await pool.query("UPDATE canastra.config_loja SET bling_ativo = true WHERE id = 1");
+  blingClient.zerarCacheParaTeste();
+  const ligado = await blingPedidos.rodadaDeRastreio();
+  assert.ok(ligado.candidatos > 0, "ligado, o cron enxerga a fila");
+
+  await pool.query("UPDATE canastra.config_loja SET bling_ativo = false WHERE id = 1");
+  blingClient.zerarCacheParaTeste();
+  const desligado = await blingPedidos.rodadaDeRastreio();
+  assert.deepEqual(desligado, { candidatos: 0, atualizados: 0 });
 });
