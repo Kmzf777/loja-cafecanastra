@@ -47,8 +47,25 @@ services:
       - canastrainteligencia
     deploy:
       replicas: 1
+      # `any`, e NAO `on-failure`. O healthcheck da imagem (Dockerfile) derruba a
+      # task quando falha 3 vezes seguidas: o Swarm manda SIGTERM, o processo
+      # trata o sinal e encerra LIMPO — exit 0. `on-failure` nao repoe saida
+      # limpa, entao o servico fica em 0/1 PARA SEMPRE. O healthcheck, que
+      # existe para recuperar container doente, virava o carrasco dele.
+      #
+      # Foi o que matou `loja_api` em 15/09/2026 13:20 UTC: tres checks
+      # estouraram o timeout de 5s — levaram 10 a 33 segundos de relogio, com
+      # esta VPS de 3 vCPU em load 5 e sem swap. Ficou 28 horas fora sem
+      # ninguem notar, porque a vitrine responde 200 mesmo com a API morta (le
+      # o catalogo direto do PostgREST).
+      #
+      # `any` nao e mais arriscado que `on-failure`: falha de configuracao ja
+      # sai com codigo != 0, e `on-failure` tambem entraria em loop de restart
+      # nesse caso. `any` cobre esse caso MAIS o exit 0 — estritamente mais
+      # seguro, nunca menos. E o default do Docker, e o que `canastra_api` (o
+      # stack do CRM, nesta mesma VPS) usa desde sempre.
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
       update_config:
         parallelism: 1
@@ -93,8 +110,12 @@ services:
       # O numero mora AQUI, e nao num `docker service scale`: o stack deploy
       # reaplica este arquivo a cada deploy e desfaria o scale feito a mao.
       replicas: 1
+      # `any` pela razao explicada no servico `web` acima — foi ESTA a task que
+      # morreu em 15/09/2026, e aqui o dano e maior: com o Bling ligado, API
+      # morta em silencio e pedido que nao vira pedido de venda no ERP, sem
+      # NF-e e sem baixa de estoque, ate alguem estranhar semanas depois.
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 5s
       update_config:
         parallelism: 1
