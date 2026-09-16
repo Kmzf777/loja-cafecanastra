@@ -839,23 +839,58 @@ async function aguardarDisparos() {
 }
 
 /**
+ * A INTEGRAÇÃO ESTÁ LIGADA? — e o `typeof` não é paranoia, é compatibilidade.
+ *
+ * Desde a tela de conexão (/dashboard/bling) o interruptor mora em
+ * `canastra.config_loja`, e quem sabe a precedência banco → env (com `NULL`
+ * querendo dizer "use a env") é `blingClient.carregarConfig`. Só que este
+ * módulo é dublado NO NÍVEL DO CLIENTE por `f7_bling.test.js` e
+ * `f7_clube.test.js`, e os dublês de lá — escritos antes de `carregarConfig`
+ * existir — não têm a função. Chamá-la direto estouraria
+ * `blingClient.carregarConfig is not a function` nos dois arquivos, e os 22
+ * casos de f7 passando SEM alteração são o critério que prova que esta mudança
+ * não desligou ninguém em silêncio.
+ *
+ * Então: cliente com `carregarConfig` (produção, e f8) responde pelo BANCO;
+ * dublê antigo cai na env, que é exatamente o comportamento que aqueles testes
+ * descrevem. NÃO APAGUE ESTE FALLBACK por parecer defensivo à toa — ele é a
+ * ponte entre dois contratos de dublê, e sem ele duas suítes morrem no require.
+ */
+async function integracaoAtiva() {
+  const config =
+    typeof blingClient.carregarConfig === "function"
+      ? await blingClient.carregarConfig()
+      : { ativo: process.env.BLING_ATIVO === "true" };
+  return config.ativo === true;
+}
+
+/**
  * O GATILHO: chamado pelo PaymentController quando um pedido entra em
  * 'aprovado' (resposta síncrona OU webhook), SEMPRE depois do commit.
  *
  * Não bloqueante por contrato — devolve imediatamente e o trabalho corre em
  * Promise.resolve().then(...) com catch logado (o padrão dos e-mails): um
  * Bling fora do ar não pode atrasar nem derrubar a resposta de um pagamento
- * que já aconteceu. Só age com BLING_ATIVO=true literal (decisão 5 do plano
- * mestre: integração desligada por padrão); com BLING_NFE_AUTO=true a NF-e
- * sai emendada na sincronização.
+ * que já aconteceu. Só age com a integração LIGADA (interruptor de
+ * /dashboard/bling, com BLING_ATIVO de reserva — ver `integracaoAtiva`); com
+ * BLING_NFE_AUTO=true a NF-e sai emendada na sincronização.
+ *
+ * A PERGUNTA "ESTÁ LIGADA?" MUDOU DE LUGAR, e o lugar importa. Ela era síncrona
+ * e ficava ANTES da Promise; agora vai ao banco, e precisa de `await`. Se o
+ * `await` subisse para a assinatura, o registro em `disparosEmVoo` passaria a
+ * acontecer depois de um tique do event loop — e `aguardarDisparos()`, que os
+ * testes chamam logo em seguida, encontraria o conjunto vazio e voltaria antes
+ * de a sincronização ter começado. Registrar SÍNCRONO e decidir DENTRO do
+ * disparo mantém a garantia da qual aquela costura depende.
  */
 function aoAprovarPedido(pedidoId) {
-  if (process.env.BLING_ATIVO !== "true") return null;
-
   const disparo = Promise.resolve()
-    .then(() => sincronizarPedido(pedidoId))
+    .then(async () => {
+      if (!(await integracaoAtiva())) return null;
+      return sincronizarPedido(pedidoId);
+    })
     .then((resultado) => {
-      if (process.env.BLING_NFE_AUTO === "true") {
+      if (resultado !== null && process.env.BLING_NFE_AUTO === "true") {
         return emitirNfe(pedidoId);
       }
       return resultado;
@@ -880,6 +915,19 @@ function aoAprovarPedido(pedidoId) {
  * Falha de UM pedido não derruba a rodada — cada consulta tem catch próprio.
  */
 async function rodadaDeRastreio() {
+  /*
+    O PORTÃO DE BOOT É A ENV `BLING_RASTREIO_CRON`; quem decide A CADA TIQUE se
+    há o que fazer é o banco. Sem isto, desligar a integração pela tela só teria
+    efeito no próximo restart — o interruptor mentiria para o gestor, e o cron
+    seguiria consultando o Bling de hora em hora por uma loja já desconectada.
+
+    O RETORNO PRESERVA A FORMA `{ candidatos, atualizados }`. Um `return` seco
+    devolveria `undefined` e quebraria `f7_bling.test.js`, que afirma
+    `typeof rodada.candidatos === "number"` — e manter os 22 casos daquele
+    arquivo passando SEM alteração é o critério que valida o desenho inteiro.
+  */
+  if (!(await integracaoAtiva())) return { candidatos: 0, atualizados: 0 };
+
   const { rows } = await pool.query(
     `SELECT pedido_id FROM canastra.pedidos
       WHERE bling_id IS NOT NULL
@@ -909,6 +957,16 @@ async function rodadaDeRastreio() {
  * BLING_ATIVO=true e BLING_RASTREIO_CRON=true (padrão do job de abandono —
  * ver iniciarCronDeAbandono). Minuto 30 de propósito: o job de abandono roda
  * no minuto 0, e não há motivo para os dois disputarem o pool juntos.
+ *
+ * ATENÇÃO AO PORTÃO DE BOOT, que ficou meio passo atrás da tela de conexão:
+ * `index.js` ainda exige `BLING_ATIVO=true` NA ENV para sequer agendar o
+ * cron, e quem liga a integração só por /dashboard/bling não tem essa env. A
+ * rodada já consulta o banco a cada tique (ver `rodadaDeRastreio`), então
+ * ligar e desligar pela tela vale na hora PARA QUEM JÁ AGENDOU; para a loja
+ * que nunca teve `BLING_ATIVO` no `.env`, o agendamento só nasce com
+ * `BLING_RASTREIO_CRON=true` mais um restart. Fechar isso é uma linha em
+ * `index.js` (deixar o portão de boot só com `BLING_RASTREIO_CRON`), e ela
+ * não foi tocada aqui porque `index.js` é arquivo compartilhado.
  */
 function iniciarCronBling() {
   const cron = require("node-cron");

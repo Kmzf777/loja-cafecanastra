@@ -55,6 +55,15 @@ export const MENU: GrupoDeMenu[] = [
         configuração, uma vez por mês.
       */
       { rotulo: "Administradores", href: "/dashboard/administradores" },
+      /*
+        BLING AO LADO DE AJUSTES, e não em "Vender". A tela não opera venda: ela
+        LIGA a loja ao ERP, e depois de ligada ninguém volta nela por meses — é
+        configuração, que é o que este grupo guarda. Quem trabalha o Bling no dia
+        a dia faz isso pelo bloco "Bling (ERP e NF-e)" dentro de cada pedido, em
+        Pedidos, que é onde o problema aparece: o gestor abriu o pedido para
+        conferir e viu que a nota não saiu.
+      */
+      { rotulo: "Bling (ERP e NF-e)", href: "/dashboard/bling" },
       { rotulo: "Ajustes", href: "/dashboard/ajustes" },
     ],
   },

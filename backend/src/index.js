@@ -177,8 +177,22 @@ if (process.env.ABANDONO_ATIVO === "true") {
   require("./jobs/carrinhoAbandonado").iniciarCronDeAbandono();
 }
 
-// Bling: cron de rastreio (minuto 30), DESLIGADO por padrao — exige as DUAS.
-if (process.env.BLING_ATIVO === "true" && process.env.BLING_RASTREIO_CRON === "true") {
+/*
+  Bling: cron de rastreio (minuto 30), DESLIGADO por padrao.
+
+  O portao de BOOT e so `BLING_RASTREIO_CRON` — nao mais tambem `BLING_ATIVO`.
+  Desde que a integracao passou a ser ligada pela TELA (`/dashboard/bling`; o
+  liga/desliga mora em `config_loja.bling_ativo`), exigir `BLING_ATIVO=true` na
+  env aqui significaria que quem ligasse pelo painel nunca agendaria o cron: o
+  interruptor mentiria ate o proximo restart, e nada no log explicaria por que o
+  rastreio nao chegava.
+
+  Quem decide se ha o que fazer e a RODADA, a cada tique, consultando o banco
+  (`rodadaDeRastreio` le `carregarConfig()` e volta vazia com a integracao
+  desligada). Cron agendado numa loja desligada nao faz nada: acorda, le a
+  config, e volta a dormir.
+*/
+if (process.env.BLING_RASTREIO_CRON === "true") {
   require("./services/blingPedidos").iniciarCronBling();
 }
 
