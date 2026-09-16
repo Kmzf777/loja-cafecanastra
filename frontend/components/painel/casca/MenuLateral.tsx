@@ -154,6 +154,21 @@ const PICTOGRAMAS: Record<string, ReactNode> = {
     </>
   ),
   // Ajustes — os cursores de régua, não a engrenagem de todo mundo.
+  /*
+    A NOTA FISCAL: folha com o canto dobrado e duas linhas de texto. O Bling e o
+    ERP que emite a NF-e, e o documento e o que o gestor vai procurar aqui — nao
+    o logotipo de um fornecedor, que envelhece quando a loja troca de ERP.
+    Distinto da caixa de Pedidos de proposito: sao vizinhos de assunto e teriam
+    colidido se os dois fossem embalagem.
+  */
+  "/dashboard/bling": (
+    <>
+      <path d="M3.6 1.8h6l2.8 2.8v9.6H3.6z" />
+      <path d="M9.6 1.8v2.8h2.8" />
+      <path d="M6 8h4" />
+      <path d="M6 10.6h4" />
+    </>
+  ),
   "/dashboard/ajustes": (
     <>
       <path d="M1.8 5h12.4" />
