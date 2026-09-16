@@ -45,7 +45,7 @@ vi.mock("@/lib/painel/transporte", () => ({
   BASE_DA_API: "http://api.teste",
 }));
 
-const { default: PaginaDoBling } = await import("./page");
+const { TelaDeConexao: PaginaDoBling } = await import("./TelaDeConexao");
 
 /** Uma resposta HTTP de verdade — `lerCorpo` faz `res.json()` nela. */
 function resposta(status: number, corpo: unknown): Response {
