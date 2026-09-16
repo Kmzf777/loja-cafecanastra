@@ -61,6 +61,11 @@ describe("MENU", () => {
       );
     }
   });
+
+  it("a tela do Bling está no menu, em Gerir", () => {
+    const gerir = MENU.find((g) => g.titulo === "Gerir");
+    expect(gerir?.itens.map((i) => i.href)).toContain("/dashboard/bling");
+  });
 });
 
 describe("itemAtivo", () => {
@@ -79,5 +84,9 @@ describe("itemAtivo", () => {
 
   it("devolve null para rota que não está no menu", () => {
     expect(itemAtivo("/dashboard/inventado")).toBeNull();
+  });
+
+  it("a tela do Bling acende quando se está nela", () => {
+    expect(itemAtivo("/dashboard/bling")).toBe("/dashboard/bling");
   });
 });
