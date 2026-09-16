@@ -17,6 +17,12 @@
  * que só existe contra um SELECT de verdade, e um mock devolveria exatamente o
  * que o teste mandou devolver. Sobe o MESMO Postgres embutido de
  * `test/ajuda/postgres.js` que todas as outras suítes usam.
+ *
+ * A SEGUNDA METADE DO ARQUIVO é o fluxo OAuth (`blingConexao.js`): o `state` de
+ * uso único, a URL de autorização e a troca do `code` pelo par de tokens. Só o
+ * `fetch` é dublado ali — o Bling é do lado de fora e não há como pedir a ele um
+ * `code` de verdade num teste; a gravação continua indo ao Postgres real, que é
+ * justamente o que se quer provar.
  */
 
 const { test, before, after, beforeEach } = require("node:test");
@@ -28,6 +34,7 @@ let bd;
 /** O pool do harness. `blingClient` fala com o MESMO banco, pelo src/pgPool. */
 let pool;
 let blingClient;
+let blingConexao;
 
 before(async () => {
   bd = await subirPostgres();
@@ -44,6 +51,7 @@ before(async () => {
   process.env.NODE_ENV = "development";
 
   blingClient = require("../src/services/blingClient.js");
+  blingConexao = require("../src/services/blingConexao.js");
 }, { timeout: 120_000 });
 
 after(async () => {
@@ -148,4 +156,95 @@ test("configurado() responde pelo que ha no banco", async () => {
     true,
     "carregada a config, a credencial do BANCO é quem responde",
   );
+});
+
+/* ------------------------------------------------------------------------ *
+ * O FLUXO OAUTH — `src/services/blingConexao.js`
+ *
+ * O `state` é a ÚNICA autenticação que o callback tem: ele é um redirect de
+ * navegador vindo do Bling, e redirect não carrega `Authorization`. Por isso os
+ * quatro primeiros casos abaixo cercam o `state` por todos os lados — uso único,
+ * desconhecido, vazio, nulo e vencido —, e não só o caminho feliz.
+ * ------------------------------------------------------------------------ */
+
+test("gerarState devolve states distintos e imprevisiveis", () => {
+  const a = blingConexao.gerarState();
+  const b = blingConexao.gerarState();
+  assert.notEqual(a, b);
+  assert.ok(a.length >= 32);
+});
+
+test("consumirState aceita uma vez e RECUSA a segunda", () => {
+  const s = blingConexao.gerarState();
+  assert.equal(blingConexao.consumirState(s), true);
+  assert.equal(blingConexao.consumirState(s), false);
+});
+
+test("consumirState recusa state desconhecido, vazio e nulo", () => {
+  assert.equal(blingConexao.consumirState("inventado"), false);
+  assert.equal(blingConexao.consumirState(""), false);
+  assert.equal(blingConexao.consumirState(null), false);
+});
+
+test("consumirState recusa state vencido", () => {
+  const s = blingConexao.gerarState();
+  blingConexao.envelhecerStatesParaTeste();
+  assert.equal(blingConexao.consumirState(s), false);
+});
+
+test("urlDeAutorizacao aponta para www.bling.com.br e leva o state", async () => {
+  await pool.query(
+    `UPDATE canastra.config_loja SET bling_client_id = 'meu-id' WHERE id = 1`,
+  );
+  blingClient.zerarCacheParaTeste();
+  const { url, state } = await blingConexao.urlDeAutorizacao();
+  const u = new URL(url);
+  assert.equal(u.hostname, "www.bling.com.br");
+  assert.equal(u.searchParams.get("response_type"), "code");
+  assert.equal(u.searchParams.get("client_id"), "meu-id");
+  assert.equal(u.searchParams.get("state"), state);
+});
+
+test("trocarCodePorTokens grava o refresh token e nao devolve segredo", async () => {
+  const fetchFalso = async () =>
+    new Response(JSON.stringify({ refresh_token: "novo-refresh", access_token: "a", expires_in: 21600 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  const r = await blingConexao.trocarCodePorTokens("um-code", { fetchImpl: fetchFalso });
+  assert.equal(r.conectado, true);
+  assert.equal(JSON.stringify(r).includes("novo-refresh"), false);
+
+  const { rows } = await pool.query(
+    "SELECT bling_refresh_token FROM canastra.config_loja WHERE id = 1",
+  );
+  assert.equal(rows[0].bling_refresh_token, "novo-refresh");
+});
+
+test("trocarCodePorTokens devolve a frase do Bling quando ele recusa", async () => {
+  const fetchFalso = async () =>
+    new Response(JSON.stringify({ error: { description: "invalid_grant: code expirado" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+
+  await assert.rejects(
+    () => blingConexao.trocarCodePorTokens("velho", { fetchImpl: fetchFalso }),
+    (erro) => /code expirado/.test(erro.message),
+  );
+
+  const { rows } = await pool.query(
+    "SELECT bling_refresh_token FROM canastra.config_loja WHERE id = 1",
+  );
+  assert.notEqual(rows[0].bling_refresh_token, "");
+});
+
+test("desconectar apaga o refresh token e desliga", async () => {
+  await blingConexao.desconectar();
+  const { rows } = await pool.query(
+    "SELECT bling_refresh_token, bling_ativo FROM canastra.config_loja WHERE id = 1",
+  );
+  assert.equal(rows[0].bling_refresh_token, null);
+  assert.equal(rows[0].bling_ativo, false);
 });
