@@ -24,6 +24,15 @@
  * log GRITA que um restart antes do próximo sucesso de gravação exige refazer
  * a autorização — é a limitação documentada, não um silêncio.
  *
+ * A CREDENCIAL DO APLICATIVO SEGUIU O MESMO CAMINHO DO TOKEN (migração 0039).
+ * `bling_client_id`, `bling_client_secret` e `bling_ativo` moram em
+ * `canastra.config_loja` ao lado do refresh token, e `carregarConfig()` os lê
+ * na ordem BANCO → ENV. A tela `/dashboard/bling` escreve no banco; as
+ * variáveis `BLING_*` viraram a semente de quem configurou antes de a tela
+ * existir. `bling_ativo` é NULLABLE e o NULL quer dizer "não decidido — use a
+ * env": é o que impediu a 0039 de desligar, no instante da migração, toda
+ * instalação com `BLING_ATIVO=true` no `.env`.
+ *
  * NENHUM TOKEN VAI PARA LOG OU MENSAGEM DE ERRO. Os erros do Bling carregam
  * status e corpo (que não ecoa credencial); os nossos, só frases.
  */
@@ -50,6 +59,16 @@ const MARGEM_DE_EXPIRACAO_MS = 5 * 60 * 1000;
 const TIMEOUT_MS = 15_000;
 
 /**
+ * Validade do cache da config. A invalidação explícita (`zerarCacheParaTeste`,
+ * e o `esquecerConfig` que as rotas de conexão chamam ao gravar) é quem faz o
+ * trabalho; este TTL é só a rede de segurança para uma invalidação esquecida.
+ * Trinta segundos é o atraso máximo entre desligar a integração na tela e o
+ * gatilho de pedido aprovado parar de agir — aceitável, e sem ele um bug de
+ * invalidação viraria "desliguei e continua sincronizando" para sempre.
+ */
+const CACHE_DA_CONFIG_MS = 30_000;
+
+/**
  * Estado em memória do OAuth. Vive no módulo (singleton por processo, como o
  * pool): o access token vale para o processo inteiro e renová-lo por chamador
  * seria estourar o rate limit do Bling de graça.
@@ -64,6 +83,9 @@ const memoria = {
    * de disparar duas renovações — a segunda queimaria o token que a primeira
    * acabou de receber. */
   renovacaoEmVoo: null,
+  /** A config vigente (banco → env), cacheada — ver `carregarConfig`. */
+  config: null,
+  configExpiraEm: 0,
 };
 
 /** Só para os testes recomeçarem do zero entre casos. */
@@ -72,10 +94,97 @@ function zerarCacheParaTeste() {
   memoria.expiraEm = 0;
   memoria.refreshToken = null;
   memoria.renovacaoEmVoo = null;
+  memoria.config = null;
+  memoria.configExpiraEm = 0;
 }
 
-/** Credencial mínima presente? (Sem ela, nada aqui tenta rede.) */
+/**
+ * A configuração vigente do Bling, na ordem BANCO → ENV.
+ *
+ * Mesma ordem que `carregarRefreshToken` já usa, e pelo mesmo motivo: o banco é
+ * onde a tela de conexão (`/dashboard/bling`) escreve, a env é a semente de
+ * quem configurou antes de a tela existir. Banco fora do ar cai na env em vez
+ * de derrubar — recusar aqui só anteciparia a falha, e a env pode bastar.
+ *
+ * `ativo` MERECE ATENÇÃO, E É O CORAÇÃO DA MIGRAÇÃO 0039: `NULL` no banco NÃO é
+ * `false`, e sim "não decidido". Um `bling_ativo IS NULL` cai na env; um `false`
+ * gravado pela tela VENCE uma env ligada. Sem essa distinção, a 0039 desligaria
+ * em silêncio toda instalação que tivesse `BLING_ATIVO=true` no `.env` — o
+ * banco passaria a mandar em todo mundo no instante em que a coluna nasceu, sem
+ * ninguém ter pedido nada. É por isso que o teste dessa diferença ganhou dois
+ * casos em `test/f8_bling_conexao.test.js`.
+ *
+ * O SELECT traz também o `bling_refresh_token`, mas só para responder
+ * `temRefreshToken` (booleano) — o VALOR não sai daqui. Quem precisa dele para
+ * renovar usa `carregarRefreshToken()`, que tem a precedência própria dele
+ * (memória → banco → env, porque a memória guarda o mais recente do rodízio).
+ * Devolver o token junto convidaria alguém a usar esta config, que é cacheada
+ * por 30s, para autenticar — e um token do rodízio com 30s de idade pode já ter
+ * sido invalidado pela renovação seguinte.
+ */
+async function carregarConfig() {
+  if (memoria.config && Date.now() < memoria.configExpiraEm) return memoria.config;
+
+  let linha = {};
+  try {
+    const { rows } = await pool.query(
+      `SELECT bling_client_id, bling_client_secret, bling_ativo, bling_refresh_token
+         FROM canastra.config_loja WHERE id = 1`,
+    );
+    linha = rows[0] || {};
+  } catch (erro) {
+    console.warn(
+      "Bling: não consegui ler a configuração do banco; usando a env.",
+      erro.message,
+    );
+  }
+
+  const config = {
+    clientId: linha.bling_client_id || process.env.BLING_CLIENT_ID || null,
+    clientSecret:
+      linha.bling_client_secret || process.env.BLING_CLIENT_SECRET || null,
+    ativo:
+      linha.bling_ativo === null || linha.bling_ativo === undefined
+        ? process.env.BLING_ATIVO === "true"
+        : linha.bling_ativo === true,
+    temRefreshToken: Boolean(
+      linha.bling_refresh_token || process.env.BLING_REFRESH_TOKEN,
+    ),
+  };
+
+  memoria.config = config;
+  memoria.configExpiraEm = Date.now() + CACHE_DA_CONFIG_MS;
+  return config;
+}
+
+/** Esquece a config cacheada. Chamado por quem ESCREVE (as rotas de conexão). */
+function esquecerConfig() {
+  memoria.config = null;
+  memoria.configExpiraEm = 0;
+}
+
+/**
+ * Credencial mínima presente? (Sem ela, nada aqui tenta rede.)
+ *
+ * CONTINUA SÍNCRONA, E NÃO É DESCUIDO — é a única forma de ela devolver o
+ * primitivo `false` em vez de uma Promise, e `f7_bling.test.js:753` faz
+ * `assert.equal(blingClient.configurado(), false)` SEM `await`, com
+ * `node:assert/strict`, onde `equal` É `strictEqual`. Uma Promise nunca é
+ * `false` em igualdade estrita: torná-la `async` reprovaria aquele caso, e
+ * manter os 22 de f7 passando sem tocar no arquivo é o que prova que esta
+ * mudança não desligou ninguém em silêncio.
+ *
+ * A PORTA ASSÍNCRONA — a que vai ao banco — é `carregarConfig()`, e é ela que
+ * todo caminho de produção usa. Esta função responde pela config JÁ CARREGADA,
+ * caindo na env com o cache frio, e é só isso que um guarda barato precisa
+ * fazer: quem vai AGIR (`sondar`, `renovarAccessToken`, as rotas) carrega a
+ * config de qualquer jeito e decide pelo objeto que recebeu — não por este
+ * atalho. Se um dia alguém precisar de "há credencial no banco?" sem carregar,
+ * o certo é `(await carregarConfig()).clientId`, não mexer aqui.
+ */
 function configurado() {
+  const config = memoria.config;
+  if (config) return Boolean(config.clientId && config.clientSecret);
   return Boolean(process.env.BLING_CLIENT_ID && process.env.BLING_CLIENT_SECRET);
 }
 
@@ -173,9 +282,19 @@ async function persistirRefreshToken(novo) {
  * produção é o fetch nativo do Node 22.
  */
 async function renovarAccessToken({ fetchImpl = fetch } = {}) {
-  if (!configurado()) {
+  // A credencial vem de `carregarConfig` — banco primeiro — e NÃO de
+  // `process.env`: depois da tela de conexão, quem troca o aplicativo do Bling
+  // faz isso pelo painel, e uma env obsoleta continuaria autenticando com o
+  // Client ID antigo até o próximo deploy.
+  const config = await carregarConfig();
+  if (!config.clientId || !config.clientSecret) {
+    // A frase cita as DUAS portas de propósito: quem já rodou a tela procura
+    // /dashboard/bling, e quem ainda vive de `.env` precisa ver o nome exato
+    // das variáveis para saber o que preencher.
     throw new Error(
-      "Bling não configurado: defina BLING_CLIENT_ID e BLING_CLIENT_SECRET.",
+      "Bling não configurado: cadastre o Client ID e o Client Secret em " +
+        "/dashboard/bling — ou defina BLING_CLIENT_ID e BLING_CLIENT_SECRET " +
+        "no .env.",
     );
   }
 
@@ -188,7 +307,7 @@ async function renovarAccessToken({ fetchImpl = fetch } = {}) {
   }
 
   const basic = Buffer.from(
-    `${process.env.BLING_CLIENT_ID}:${process.env.BLING_CLIENT_SECRET}`,
+    `${config.clientId}:${config.clientSecret}`,
   ).toString("base64");
 
   const urlDoToken = new URL(`${baseDaApi()}/oauth/token`);
@@ -381,10 +500,18 @@ async function requisitar(metodo, caminho, { body, query, fetchImpl = fetch } = 
  * é para isso que ele existe.
  */
 async function sondar({ fetchImpl = fetch } = {}) {
-  if (!configurado()) {
+  // `carregarConfig()` e não `configurado()`: a sonda é o endpoint que o painel
+  // consulta para DIAGNOSTICAR, e responder "sem credencial" porque o cache
+  // estava frio seria o diagnóstico errado — justamente no único lugar onde ele
+  // custa caro. Como efeito colateral desejado, esta chamada aquece o cache.
+  const { clientId, clientSecret } = await carregarConfig();
+  if (!clientId || !clientSecret) {
     return {
       configurado: false,
-      token: { ok: false, erro: "BLING_CLIENT_ID/BLING_CLIENT_SECRET ausentes." },
+      token: {
+        ok: false,
+        erro: "Client ID/Client Secret ausentes — cadastre em /dashboard/bling.",
+      },
     };
   }
   try {
@@ -396,6 +523,8 @@ async function sondar({ fetchImpl = fetch } = {}) {
 }
 
 module.exports = {
+  carregarConfig,
+  esquecerConfig,
   configurado,
   requisitar,
   renovarAccessToken,
