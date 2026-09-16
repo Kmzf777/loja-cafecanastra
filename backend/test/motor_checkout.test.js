@@ -47,6 +47,17 @@ const CPF_DA_ANA = "52998224725";
 const HASH_DA_ANA = createHash("sha256").update(CPF_DA_ANA).digest("hex");
 
 const mp = {
+  /**
+   * id NUMERICO -> `external_reference` da order criada com ele.
+   *
+   * O DUBLE PRECISA DISSO PORQUE O GATEWAY REAL FAZ ISSO: a notificacao chega
+   * com o id numerico do pagamento, `GET /v1/payments/{numerico}` responde com
+   * `external_reference`, e e por esse campo que o webhook reencontra o pedido
+   * (a loja grava o id da ORDER em `pagamento_id_mp`, que e outro id). Sem o
+   * mapa aqui, o duble mentiria sobre a unica ligacao que existe entre os dois
+   * lados — e o teste do webhook passaria ou falharia pelo motivo errado.
+   */
+  referencias: {},
   statusDoGet: "approved",
   falhaNoCreate: false,
   criacoes: [],
@@ -100,6 +111,18 @@ async function checkout(extra) {
 
 async function ultimaCobranca() {
   return mp.criacoes[mp.criacoes.length - 1];
+}
+
+/**
+ * O VALOR COBRADO, em reais como numero.
+ *
+ * A Orders manda `total_amount` como STRING de duas casas ("72.00"); a
+ * Payments mandava `transaction_amount` como numero (72). Um helper, e nao
+ * sete `Number(...)` espalhados: os testes deste arquivo falam de aritmetica
+ * de desconto, e o formato do gateway nao e o assunto deles.
+ */
+function valorCobrado(cobranca) {
+  return Number(cobranca.total_amount);
 }
 
 async function ajustesDoPedido(pedidoId) {
@@ -206,17 +229,54 @@ before(async () => {
           get: async ({ id }) => ({
             id,
             status: mp.statusDoGet,
+            external_reference: mp.referencias[id],
             point_of_interaction: { transaction_data: { ticket_url: "https://mp.local/pix" } },
           }),
+        },
+        /**
+         * A CRIACAO MUDOU DE ENDPOINT. `POST /v1/payments` responde 401 nesta
+         * aplicacao (ela e Orders). `payment.get` fica acima porque o webhook
+         * continua relendo pelo endpoint antigo, com o id NUMERICO.
+         */
+        order: {
           create: async ({ body }) => {
             if (mp.falhaNoCreate) throw new Error("gateway caiu");
             mp.criacoes.push(body);
+            mp.referencias[800000 + mp.criacoes.length] = body.external_reference;
             return {
-              id: 800000 + mp.criacoes.length,
-              status: "pending",
-              point_of_interaction: { transaction_data: { ticket_url: "https://mp.local/pix" } },
+              id: `ORDTST0${800000 + mp.criacoes.length}`,
+              status: "action_required",
+              status_detail: "waiting_transfer",
+              external_reference: body.external_reference,
+              transactions: {
+                payments: [
+                  {
+                    id: `PAY0${800000 + mp.criacoes.length}`,
+                    payment_method: {
+                      id: body.transactions.payments[0].payment_method.id,
+                      ticket_url: "https://mp.local/pix",
+                      qr_code: "00020126580014br.gov.bcb.pix",
+                    },
+                  },
+                ],
+              },
             };
           },
+          get: async ({ id }) => ({
+            id,
+            status: "action_required",
+            status_detail: "waiting_transfer",
+            transactions: {
+              payments: [
+                {
+                  payment_method: {
+                    id: "pix",
+                    ticket_url: "https://mp.local/pix",
+                  },
+                },
+              ],
+            },
+          }),
         },
       };
     }
@@ -270,7 +330,7 @@ test("promoção E cupom: a soma dos ajustes bate com a diferença do subtotal, 
   // Etapa 1: 10% sobre 100,00 = 10,00 → subtotal 90,00.
   // Etapa 2: o cupom 20% sobre os 90,00 = 18,00.
   // Cobrado: 100,00 − 28,00 = 72,00, sem frete (retirada).
-  assert.equal((await ultimaCobranca()).transaction_amount, 72);
+  assert.equal(valorCobrado(await ultimaCobranca()), 72);
 
   const { rows } = await bd.pool.query(
     "SELECT total, frete, desconto, cupom_codigo FROM canastra.pedidos WHERE pedido_id = $1",
@@ -396,13 +456,13 @@ test("limite_por_cliente: a segunda compra da mesma pessoa não ganha o desconto
   try {
     const primeira = await checkout({});
     assert.equal(primeira.codigo, 201, JSON.stringify(primeira.corpo));
-    assert.equal((await ultimaCobranca()).transaction_amount, 90, "10% de 100,00");
+    assert.equal(valorCobrado(await ultimaCobranca()), 90, "10% de 100,00");
 
     const segunda = await checkout({});
     assert.equal(segunda.codigo, 201, JSON.stringify(segunda.corpo));
     // O limite é por CPF e não por e-mail — e-mail é infinito e gratuito, e
     // cupom de primeira compra controlado por e-mail é cupom permanente.
-    assert.equal((await ultimaCobranca()).transaction_amount, 100);
+    assert.equal(valorCobrado(await ultimaCobranca()), 100);
     assert.equal((await ajustesDoPedido(segunda.corpo.orderId)).length, 0);
   } finally {
     await bd.pool.query(
@@ -425,7 +485,7 @@ test("frete grátis do motor: o cobrado desce, e `pedidos.frete` guarda o BRUTO"
     // vir da regra do motor.
     const res = await checkout({ shippingCost: 5, shippingMethod: "Entrega Local" });
     assert.equal(res.codigo, 201, JSON.stringify(res.corpo));
-    assert.equal((await ultimaCobranca()).transaction_amount, 100, "100 de itens + 0 de frete");
+    assert.equal(valorCobrado(await ultimaCobranca()), 100, "100 de itens + 0 de frete");
 
     const { rows } = await bd.pool.query(
       "SELECT total, frete FROM canastra.pedidos WHERE pedido_id = $1",
@@ -469,7 +529,7 @@ test("carrinho acima do piso do frete grátis com promoção do motor NÃO vira 
     const res = await checkout({ shippingCost: 0, shippingMethod: "Entrega Local" });
     assert.equal(res.codigo, 201, JSON.stringify(res.corpo));
     // R$ 160 − 10% = R$ 144, com frete grátis pelo piso.
-    assert.equal((await ultimaCobranca()).transaction_amount, 144);
+    assert.equal(valorCobrado(await ultimaCobranca()), 144);
   } finally {
     await bd.pool.query(
       "UPDATE canastra.produtos SET preco = 50.00 WHERE produto_id = $1",
@@ -490,7 +550,7 @@ test("frete acima do teto NÃO fica grátis: a regra não vale, e nada é abatid
     assert.equal(res.codigo, 201, JSON.stringify(res.corpo));
     // R$ 5,00 de frete contra um teto de R$ 1,00: a regra não vale INTEIRA —
     // não abate R$ 1,00. Bancar meio SEDEX para o Acre é o que o teto impede.
-    assert.equal((await ultimaCobranca()).transaction_amount, 105);
+    assert.equal(valorCobrado(await ultimaCobranca()), 105);
     assert.equal((await ajustesDoPedido(res.corpo.orderId)).length, 0);
   } finally {
     await bd.pool.query(
@@ -598,7 +658,7 @@ test("campanha migrada pela 0032 (mesmo id nas duas estruturas) desconta UMA vez
     const res = await checkout({});
     assert.equal(res.codigo, 201, JSON.stringify(res.corpo));
     // 10% UMA vez: 90,00. Dobrado seriam 81,00.
-    assert.equal((await ultimaCobranca()).transaction_amount, 90);
+    assert.equal(valorCobrado(await ultimaCobranca()), 90);
 
     const ajustes = await ajustesDoPedido(res.corpo.orderId);
     assert.equal(ajustes.length, 1);

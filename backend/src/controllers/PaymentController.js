@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 const { v4: uuidv4 } = require("uuid");
-const { payment } = require("../config/mercadopago");
+const { payment, order } = require("../config/mercadopago");
 const OrderRepository = require("../repositories/ordersRepository");
 const pool = require("../pgPool");
 const PromotionsRepository = require("../repositories/promotionsRepository");
@@ -28,6 +28,10 @@ const { precoComPromocao, somarCentavos } = require("../utils/preco");
 // este controller usa, porque tambem precisa do nome para o `payer` do MP.
 const { garantirCpfENome } = require("../utils/cpf");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
+const {
+  montarCorpoDaOrder,
+  leituraDaOrder,
+} = require("../utils/mercadoPagoOrders");
 const cuponsRepository = require("../repositories/cuponsRepository");
 // O motor de promoção (0032 + Onda 4). `motor.js` é PURO — a conta; o
 // repositório é quem lê as sete tabelas e quem escreve as duas de registro.
@@ -332,8 +336,12 @@ function validarAssinaturaWebhook(req) {
 async function ticketUrlDoPagamento(paymentIdMp) {
   if (!paymentIdMp) return undefined;
   try {
-    const pagamento = await payment.get({ id: paymentIdMp });
-    return pagamento?.point_of_interaction?.transaction_data?.ticket_url;
+    // PELA ORDER, e nao mais pelo pagamento: o que a loja grava em
+    // `pagamento_id_mp` e o id da order (`ORDTST01...`), e o QR do Pix mudou
+    // de `point_of_interaction.transaction_data` para
+    // `transactions.payments[].payment_method`.
+    const lido = leituraDaOrder(await order.get({ id: paymentIdMp }));
+    return lido.ticketUrl;
   } catch (erro) {
     console.warn(
       `Replay: não consegui reler o ticket do pagamento ${paymentIdMp}:`,
@@ -987,6 +995,11 @@ class PaymentController {
         validatedItems.push({
           product_id: productDb.product_id,
           name: productDb.name,
+          // O SKU VIAJA JUNTO desde a migracao para a Orders: e ele que vira
+          // `items[].external_code` no corpo da cobranca (o `product_id` nao
+          // cabe — UUID tem 36 caracteres e o campo aceita 30). Guardado no
+          // pedido tambem, que e onde o Bling ja o procurava.
+          sku: productDb.sku ?? null,
           image: productDb.image,
           price: bestPrice,
           quantity: qtdSolicitada,
@@ -1291,126 +1304,87 @@ class PaymentController {
        * do gateway por causa de um campo que só existe para enriquecer o
        * antifraude — o mesmo raciocínio do `last_name` omitido ali em cima.
        */
+      /**
+       * O ENDERECO NO FORMATO DO MERCADO PAGO. O `address` do pedido usa os
+       * nomes da loja (`zip_code`/`cep`, `street`/`rua`), e as duas grafias
+       * circulam porque o corpo vem do navegador. Normaliza aqui, uma vez.
+       *
+       * `street_number` E **STRING** NA ORDERS, e isto e o INVERSO do que a
+       * Payments exigia. O comentario que morava aqui dizia, com razao para
+       * aquela API, que o campo era Integer e que a API validava. Na Orders a
+       * validacao e a oposta: "'$.payer.address.street_number' - expected
+       * string, but got number", HTTP 400 — medido em 16/09/2026. Trocar uma
+       * pela outra sem reler este campo faria TODO pedido com endereco levar
+       * 400 do gateway.
+       *
+       * O que NAO mudou e a regra de omissao: `canastra.enderecos.numero` e
+       * opcional (migracao 0004) e endereco sem numero existe de verdade (zona
+       * rural, "S/N"). Sem numero a CHAVE SOME do payload, em vez de ir vazia
+       * — campo vazio e pior que campo ausente para o motor de risco.
+       */
       const numeroBruto = address?.number ?? address?.numero;
-      const numeroConvertido = Number(numeroBruto);
-      const numeroValido =
-        numeroBruto !== null &&
-        numeroBruto !== undefined &&
-        String(numeroBruto).trim() !== "" &&
-        Number.isFinite(numeroConvertido);
+      const numeroDoEndereco =
+        numeroBruto === null || numeroBruto === undefined
+          ? ""
+          : String(numeroBruto).trim();
       const enderecoParaOMp = {
         zip_code: address?.zip_code || address?.zipCode || address?.cep || "",
         street_name: address?.street || address?.rua || "",
-        ...(numeroValido ? { street_number: numeroConvertido } : {}),
+        ...(numeroDoEndereco ? { street_number: numeroDoEndereco } : {}),
       };
 
-      const paymentData = {
-        transaction_amount: finalAmountToCharge,
+      /**
+       * O CORPO DA COBRANCA, montado por `utils/mercadoPagoOrders`.
+       *
+       * A montagem saiu daqui de proposito: as regras de forma da Orders
+       * (valor em string, soma dos itens fechando com o total, descritor
+       * dentro do payment_method, SKU de 30 caracteres) sao dez linhas de
+       * aritmetica e vinte de porque — e todas testaveis sem banco nenhum. O
+       * que sobra AQUI e o que so este controlador sabe: de onde vem cada
+       * numero.
+       *
+       * `totalCentavos` SAI DE `finalAmountToCharge`, e nao de uma soma
+       * paralela: o valor que a order declara tem de ser, byte a byte, o valor
+       * que a loja decidiu cobrar. A conferencia contra a soma das linhas
+       * acontece dentro de `montarCorpoDaOrder`, e ela LANCA — na nossa borda,
+       * com o nome da causa — em vez de deixar o gateway responder 400
+       * generico com o estoque ja reservado.
+       */
+      const corpoDaOrder = montarCorpoDaOrder({
+        chaveIdempotencia,
+        itens: validatedItems,
+        freteCentavos,
+        descontoCentavos: descontoTotalCentavos,
+        totalCentavos: Math.round(finalAmountToCharge * 100),
+        meioDePagamento: finalPaymentMethodId,
         token: formData?.token,
-        description: `Pedido Café Canastra - ${validatedItems.length} itens`,
-        installments: Number(formData.installments || 1),
-        payment_method_id: finalPaymentMethodId,
-        notification_url: webhookUrl,
-        /**
-         * O FIO DA CONCILIAÇÃO. Sem ele, o painel do Mercado Pago mostra
-         * `payment_id` e mais nada, e casar um pagamento com um pedido da loja
-         * vira garimpo manual.
-         *
-         * POR QUE NÃO O ID DO PEDIDO: nesta loja a cobrança acontece ANTES de
-         * `createOrder` — o id ainda não existe aqui. A chave de idempotência
-         * existe, é única por índice, e é exatamente o que a linha do pedido
-         * grava em `chave_idempotencia`. Um campo, os dois lados.
-         */
-        external_reference: chaveIdempotencia,
-        statement_descriptor: DESCRITOR_NA_FATURA,
-        payer: {
+        parcelas: Number(formData.installments || 1),
+        descritor: DESCRITOR_NA_FATURA,
+        pagador: {
           email: formData.payer.email || userEmail,
-          ...(primeiroNome ? { first_name: primeiroNome } : {}),
-          ...(sobrenome ? { last_name: sobrenome } : {}),
-          ...(enderecoParaOMp.zip_code ? { address: enderecoParaOMp } : {}),
-          ...(identification && identification.number
-            ? {
-                identification: {
-                  type: identification.type || "CPF",
-                  number: identification.number,
-                },
-              }
-            : {}),
+          primeiroNome,
+          sobrenome,
+          identificacao: identification,
+          endereco: enderecoParaOMp.zip_code ? enderecoParaOMp : null,
         },
-        /**
-         * O QUE O ANTIFRAUDE LÊ. Pedido sem `additional_info` é pedido cego
-         * para o motor de risco do Mercado Pago: ele não vê o que foi
-         * comprado, por quem, nem para onde vai. É o principal insumo de
-         * aprovação de cartão, e é item pontuado na Qualidade da integração.
-         *
-         * Tudo aqui já está em mãos — `validatedItems` veio do banco e o
-         * endereço já foi conferido. Nenhuma consulta nova.
-         */
-        additional_info: {
-          items: validatedItems.map((item) => ({
-            id: String(item.product_id),
-            title: item.name,
-            quantity: item.quantity,
-            unit_price: item.price,
-          })),
-          payer: {
-            ...(primeiroNome ? { first_name: primeiroNome } : {}),
-            ...(sobrenome ? { last_name: sobrenome } : {}),
-          },
-          ...(enderecoParaOMp.zip_code
-            ? { shipments: { receiver_address: enderecoParaOMp } }
-            : {}),
-          ...(req.ip ? { ip_address: req.ip } : {}),
-        },
-      };
-
-      if (finalPaymentMethodId === "pix") {
-        const date = new Date();
-        date.setMinutes(date.getMinutes() + 30);
-        paymentData.date_of_expiration = date.toISOString();
-      }
-
-      if (formData.issuerId || formData.issuer_id) {
-        paymentData.issuer_id = formData.issuerId || formData.issuer_id;
-      }
+      });
 
       let mpResponse;
       try {
         /**
-         * A CHAVE VAI JUNTO, e é a mesma que o pedido grava.
+         * A CHAVE VAI JUNTO, e e a mesma que o pedido grava.
          *
-         * A loja já se defendia sozinha (índice único em `chave_idempotencia`),
+         * A loja ja se defendia sozinha (indice unico em `chave_idempotencia`),
          * mas a defesa era TARDIA: no duplo clique que vence a corrida, a
-         * segunda requisição só é barrada DEPOIS de ter cobrado. Com a chave
+         * segunda requisicao so e barrada DEPOIS de ter cobrado. Com a chave
          * no gateway, o Mercado Pago devolve o mesmo pagamento em vez de criar
-         * outro — a cobrança dupla deixa de acontecer, em vez de ser
+         * outro — a cobranca dupla deixa de acontecer, em vez de ser
          * compensada.
          *
-         * Funciona porque a chave é estável entre tentativas: o navegador
-         * manda `Idempotency-Key` (lib/sacola/checkout.ts) e reusa o valor no
-         * retry do mesmo pedido. Quando o cabeçalho não vem, cada requisição
-         * gera um uuid próprio e o gateway não tem como deduplicar — mas
-         * nesse caso a corrida de duplo clique também não existe, porque não
-         * há dois cliques com a mesma identidade.
-         *
-         * O log de PAGAMENTO DUPLICADO mais abaixo FICA: defesa de servidor
-         * não se aposenta porque apareceu uma defesa de gateway.
-         */
-        /**
-         * O fingerprint que o security.js coletou no navegador; o SDK o
-         * envia como `X-meli-session-id`. CONDICIONAL, e é o ponto todo:
-         * bloqueador de script deixa o campo ausente, e nesse caso a
-         * cobrança sai sem o header em vez de não sair.
-         *
-         * O LIMITE DE 128, mesmo raciocínio da `chaveDoCliente` lá em cima
-         * (a chave de idempotência que o navegador manda): não é
-         * vulnerabilidade — um CR/LF no valor já estoura dentro do
-         * node-fetch antes de qualquer I/O, e o express.json tampa o corpo
-         * em 256kb bem antes disso — é endurecimento barato que evita
-         * forçar o retry-e-falha do SDK diante de uma entrada malformada.
-         * Acima do limite a chave SOME, o mesmo comportamento de quando o
-         * deviceId simplesmente não vem: falhar aberto é a regra aqui,
-         * igual a um fingerprint ausente.
+         * O fingerprint do `security.js` (`meliSessionId`) segue CONDICIONAL,
+         * e e o ponto: bloqueador de script deixa o campo ausente, e nesse
+         * caso a cobranca sai sem o header em vez de nao sair. O limite de 128
+         * e endurecimento barato contra entrada malformada.
          */
         const requestOptions = {
           idempotencyKey: chaveIdempotencia,
@@ -1421,25 +1395,66 @@ class PaymentController {
             : {}),
         };
 
-        mpResponse = await payment.create({
-          body: paymentData,
+        mpResponse = await order.create({
+          body: corpoDaOrder,
           requestOptions,
         });
       } catch (falhaNoGateway) {
-        // Cobranca nao saiu: devolve o que foi reservado, senao o produto some
-        // do estoque sem ninguem ter comprado. O uso do cupom volta junto —
-        // ele foi reservado na mesma transacao e um cupom "gasto" numa compra
-        // que nao existiu esgotaria o limite sem vender nada.
-        await compensarReserva();
-        throw falhaNoGateway;
+        /**
+         * RECUSA DE CARTAO NAO E FALHA DE GATEWAY, e na Orders as duas chegam
+         * pela mesma porta — o `catch`.
+         *
+         * Na Payments, cartao recusado voltava 201 com `status: "rejected"`, e
+         * o fluxo seguia reto: o pedido nascia `rejeitado` e o estoque voltava
+         * pela transicao normal. Na Orders a recusa e **HTTP 402** com
+         * `errors[].code = "failed"` — o SDK lanca. Mas a resposta carrega a
+         * ORDER INTEIRA em `data`, com `status: "failed"` e o motivo real em
+         * `transactions.payments[0].status_detail` (`insufficient_amount`,
+         * `cc_rejected_bad_filled_security_code`...). Medido em 16/09/2026.
+         *
+         * Desembrulhar isso e o que mantem o comportamento da loja igual ao de
+         * antes: a pessoa recebe um pedido de verdade marcado `rejeitado`, com
+         * numero para conversar sobre ele, em vez de um erro sem rastro. Sem
+         * este ramo, TODA recusa de cartao viraria "o gateway caiu" — e o
+         * estoque voltaria, mas o pedido nao existiria para ninguem explicar.
+         *
+         * Falha SEM order embrulhada (rede fora, 500 do MP, token invalido) cai
+         * no caminho de sempre: compensa a reserva e propaga.
+         */
+        const orderRecusada =
+          falhaNoGateway?.data ??
+          falhaNoGateway?.response?.data ??
+          falhaNoGateway?.cause?.data;
+
+        if (orderRecusada?.status && orderRecusada?.id) {
+          mpResponse = orderRecusada;
+          console.warn(
+            `Mercado Pago recusou a cobranca ${orderRecusada.id}: ` +
+              `${orderRecusada.status}/${orderRecusada.status_detail} ` +
+              `(${orderRecusada?.transactions?.payments?.[0]?.status_detail ?? "sem detalhe"}).`,
+          );
+        } else {
+          // Cobranca nao saiu: devolve o que foi reservado, senao o produto
+          // some do estoque sem ninguem ter comprado. O uso do cupom volta
+          // junto — ele foi reservado na mesma transacao e um cupom "gasto"
+          // numa compra que nao existiu esgotaria o limite sem vender nada.
+          await compensarReserva();
+          throw falhaNoGateway;
+        }
       }
 
-      // A partir daqui a API fala portugues: o status do MP e traduzido UMA
-      // vez e e o vocabulario da loja que vai para o banco, para o e-mail e
-      // para a resposta (decisao 1 do plano mestre).
-      const mpStatus = mpResponse.status;
-      const statusPt = traduzirStatusMp(mpStatus);
-      const mpId = mpResponse.id;
+      /**
+       * A partir daqui a API fala portugues: o status da Orders e traduzido UMA
+       * vez e e o vocabulario da loja que vai para o banco, para o e-mail e
+       * para a resposta (decisao 1 do plano mestre).
+       *
+       * `leituraDaOrder` devolve tambem o QR do Pix nos tres formatos (URL do
+       * ticket, copia-e-cola e PNG base64) — na Payments so havia a URL.
+       */
+      const lido = leituraDaOrder(mpResponse);
+      const mpStatus = lido.statusDoGateway;
+      const statusPt = lido.status;
+      const mpId = lido.pagamentoId;
 
       let newOrder;
       /**
@@ -1655,8 +1670,21 @@ class PaymentController {
         message: "Pagamento processado!",
         status: statusPt || mpStatus,
         orderId: newOrder.order_id,
-        ticketUrl:
-          mpResponse.point_of_interaction?.transaction_data?.ticket_url,
+        /**
+         * O PIX GANHOU O COPIA-E-COLA NESTA MIGRACAO, e de graca: o QR mudou
+         * de `point_of_interaction.transaction_data` para
+         * `transactions.payments[].payment_method`, e la ele vem em TRES
+         * formas — a URL do ticket (a unica que a Payments dava), o codigo
+         * copiavel e o PNG em base64.
+         *
+         * Os tres saem daqui porque os tres existem; quem escolhe o que
+         * mostrar e a tela. Campo ausente continua sendo ausente: no cartao
+         * nao ha QR nenhum, e mandar `null` faria a tela ter de distinguir
+         * "sem QR" de "QR vazio".
+         */
+        ...(lido.ticketUrl ? { ticketUrl: lido.ticketUrl } : {}),
+        ...(lido.qrCode ? { qrCode: lido.qrCode } : {}),
+        ...(lido.qrCodeBase64 ? { qrCodeBase64: lido.qrCodeBase64 } : {}),
       });
     } catch (error) {
       // Se a transacao ainda estiver aberta, desfaz. Se ja tinha commitado a
@@ -1725,10 +1753,24 @@ class PaymentController {
     // resposta. Falhou? 500, e o MP reenvia.
     let statusPt;
     let mpStatus;
+    let referenciaExterna;
     try {
+      /**
+       * A RELEITURA CONTINUA PELO ENDPOINT ANTIGO, e isso NAO e sobra da
+       * migracao — e o que o Mercado Pago manda. Mesmo numa aplicacao de
+       * Orders, a notificacao chega como `type: "payment"` com o id NUMERICO,
+       * e `GET /v1/payments/{id numerico}` responde 200 com o vocabulario
+       * legado (`approved`/`pending`/`rejected`). Medido em 16/09/2026. Por
+       * isso quem traduz aqui e `traduzirStatusMp`, e nao o tradutor da Orders.
+       *
+       * `external_reference` E O QUE MUDOU DE PESO: ele sempre veio na
+       * resposta, mas agora e por ele que o pedido e reencontrado — o id que a
+       * notificacao traz nao e mais o que a loja gravou.
+       */
       const mpPayment = await payment.get({ id: paymentId });
       mpStatus = mpPayment.status;
       statusPt = traduzirStatusMp(mpStatus);
+      referenciaExterna = mpPayment.external_reference;
     } catch (erro) {
       console.error(`Webhook: falha ao reler o pagamento ${paymentId} no MP:`, erro);
       return res.sendStatus(500);
@@ -1766,7 +1808,27 @@ class PaymentController {
     try {
       await client.query("BEGIN");
 
-      pedido = await OrderRepository.lockOrderByPaymentId(paymentId, client);
+      /**
+       * DOIS CAMINHOS PARA O MESMO PEDIDO, e a ordem importa.
+       *
+       * `external_reference` PRIMEIRO porque e o unico que funciona para tudo
+       * que esta migracao criou: a loja grava o id da ORDER em
+       * `pagamento_id_mp`, e a notificacao traz o id NUMERICO do pagamento —
+       * um nunca casa com o outro. O `external_reference` e a chave de
+       * idempotencia, que os dois lados conhecem.
+       *
+       * `pagamento_id_mp` DEPOIS, e ele fica: os pedidos gravados ANTES desta
+       * migracao guardam o id numerico do Payments, e uma notificacao atrasada
+       * de um deles ainda precisa achar o pedido. Apagar este caminho
+       * transformaria pedido velho em 404 permanente — e o MP reenviando
+       * para sempre uma notificacao que nunca vai ser aplicada.
+       */
+      pedido = referenciaExterna
+        ? await OrderRepository.lockOrderByIdempotencyKey(referenciaExterna, client)
+        : null;
+      if (!pedido) {
+        pedido = await OrderRepository.lockOrderByPaymentId(paymentId, client);
+      }
 
       if (!pedido) {
         await client.query("ROLLBACK");

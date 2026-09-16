@@ -29,7 +29,20 @@ const P2 = "11111111-0000-0000-0000-0000000000f2"; // 100,00 — alvo da promoç
 const P3 = "11111111-0000-0000-0000-0000000000f3"; // 80,00 — fronteira do frete grátis
 
 /** O que o dublê do MP responde; cada teste ajusta. */
-const mp = { falhaNoCreate: false, statusDoGet: "pending", criacoes: [] };
+const mp = {
+  falhaNoCreate: false,
+  statusDoGet: "pending",
+  criacoes: [],
+  /**
+   * id NUMERICO -> `external_reference` da order criada com ele.
+   *
+   * O DUBLE PRECISA DISSO PORQUE O GATEWAY REAL FAZ ISSO: a notificacao chega
+   * com o id numerico do pagamento, `GET /v1/payments/{numerico}` responde com
+   * `external_reference`, e e por esse campo que o webhook reencontra o pedido
+   * (a loja grava o id da ORDER em `pagamento_id_mp`, que e outro id).
+   */
+  referencias: {},
+};
 
 function respostaFalsa() {
   const res = { codigo: null, corpo: null };
@@ -117,18 +130,56 @@ before(async () => {
     if (caminho === "../config/mercadopago") {
       return {
         payment: {
-          get: async ({ id }) => ({ id, status: mp.statusDoGet }),
+          get: async ({ id }) => ({
+            id,
+            status: mp.statusDoGet,
+            external_reference: mp.referencias[id],
+          }),
+        },
+        /**
+         * A CRIACAO MUDOU DE ENDPOINT. `POST /v1/payments` responde 401 nesta
+         * aplicacao (ela e Orders). `payment.get` fica acima porque o webhook
+         * continua relendo pelo endpoint antigo, com o id NUMERICO.
+         */
+        order: {
           create: async ({ body }) => {
             if (mp.falhaNoCreate) throw new Error("gateway caiu");
             mp.criacoes.push(body);
+            mp.referencias[900000 + mp.criacoes.length] = body.external_reference;
             return {
-              id: 900000 + mp.criacoes.length,
-              status: "pending",
-              point_of_interaction: {
-                transaction_data: { ticket_url: "https://mp.local/pix" },
+              id: `ORDTST0${900000 + mp.criacoes.length}`,
+              status: "action_required",
+              status_detail: "waiting_transfer",
+              external_reference: body.external_reference,
+              transactions: {
+                payments: [
+                  {
+                    id: `PAY0${900000 + mp.criacoes.length}`,
+                    payment_method: {
+                      id: body.transactions.payments[0].payment_method.id,
+                      ticket_url: "https://mp.local/pix",
+                      qr_code: "00020126580014br.gov.bcb.pix",
+                    },
+                  },
+                ],
               },
             };
           },
+          get: async ({ id }) => ({
+            id,
+            status: "action_required",
+            status_detail: "waiting_transfer",
+            transactions: {
+              payments: [
+                {
+                  payment_method: {
+                    id: "pix",
+                    ticket_url: "https://mp.local/pix",
+                  },
+                },
+              ],
+            },
+          }),
         },
       };
     }
@@ -733,7 +784,8 @@ test("checkout com cupom: desconto no valor cobrado, uso e pedido gravados", asy
   assert.equal(res.codigo, 201);
   // 2 × 50 = 100; 10% = 10; retirada sem frete → cobra 90.
   const cobranca = mp.criacoes[mp.criacoes.length - 1];
-  assert.equal(cobranca.transaction_amount, 90);
+  // A Orders manda o valor como STRING de duas casas, nao como numero.
+  assert.equal(cobranca.total_amount, "90.00");
 
   const { rows } = await bd.pool.query(
     `SELECT total, desconto, cupom_codigo FROM canastra.pedidos WHERE pedido_id = $1`,
@@ -808,7 +860,7 @@ test("frete grátis sem cupom: subtotal no piso, zero aceito", async () => {
   );
   assert.equal(res.codigo, 201);
   const cobranca = mp.criacoes[mp.criacoes.length - 1];
-  assert.equal(cobranca.transaction_amount, 160);
+  assert.equal(cobranca.total_amount, "160.00");
 
   // E um pedido sem cupom nasce com desconto zero e sem código.
   const { rows } = await bd.pool.query(
@@ -860,7 +912,7 @@ test("com o frete real, o mesmo carrinho com cupom fecha a conta certa", async (
   assert.equal(res.codigo, 201);
   // 160 − 16 + 5 de frete = 149.
   const cobranca = mp.criacoes[mp.criacoes.length - 1];
-  assert.equal(cobranca.transaction_amount, 149);
+  assert.equal(cobranca.total_amount, "149.00");
 
   const { rows } = await bd.pool.query(
     "SELECT total, desconto, cupom_codigo, frete FROM canastra.pedidos WHERE pedido_id = $1",
@@ -902,7 +954,7 @@ test("promoção ativa não vira 409: confere-se o preço de VITRINE, cobra-se o
 
   assert.equal(res.codigo, 201);
   // ...e a cobrança é a metade, por causa da promoção de 50% no P2.
-  assert.equal(mp.criacoes[mp.criacoes.length - 1].transaction_amount, 50);
+  assert.equal(mp.criacoes[mp.criacoes.length - 1].total_amount, "50.00");
 });
 
 test("subtotal do cupom NÃO entra na declaração: o campo é só dos itens", async () => {
@@ -919,7 +971,7 @@ test("subtotal do cupom NÃO entra na declaração: o campo é só dos itens", a
     res,
   );
   assert.equal(res.codigo, 201);
-  assert.equal(mp.criacoes[mp.criacoes.length - 1].transaction_amount, 90);
+  assert.equal(mp.criacoes[mp.criacoes.length - 1].total_amount, "90.00");
 
   // E declarar o total JÁ descontado (o erro fácil de quem monta o corpo) é
   // recusado, em vez de virar cobrança silenciosa sobre outra base.

@@ -34,7 +34,28 @@ const P1 = "11111111-0000-0000-0000-0000000000b1"; // 50,00 — SKU cadastrado n
 const P2 = "11111111-0000-0000-0000-0000000000b2"; // 80,00 — SKU que NÃO existe no "Bling"
 
 /** O que o dublê do MP responde; cada teste ajusta. */
-const mp = { statusDoCreate: "pending", statusDoGet: "pending", criacoes: [] };
+/**
+ * `statusDaOrder` fala o idioma da API de Orders, e `statusDoGet` o da antiga.
+ *
+ * NAO E INCONSISTENCIA: a criacao passou a ser `POST /v1/orders`
+ * (`action_required`, `processed`) e o webhook continua relendo por
+ * `GET /v1/payments/{id numerico}`, que responde no vocabulario legado
+ * (`pending`, `approved`). Os dois convivem no mesmo fluxo de verdade.
+ */
+const mp = {
+  /**
+   * id NUMERICO -> `external_reference` da order criada com ele.
+   *
+   * O DUBLE PRECISA DISSO PORQUE O GATEWAY REAL FAZ ISSO: a notificacao chega
+   * com o id numerico do pagamento, `GET /v1/payments/{numerico}` responde com
+   * `external_reference`, e e por esse campo que o webhook reencontra o pedido
+   * (a loja grava o id da ORDER em `pagamento_id_mp`, que e outro id).
+   */
+  referencias: {},
+  statusDaOrder: "action_required",
+  statusDoGet: "pending",
+  criacoes: [],
+};
 
 /** E-mails capturados do dublê do emailSender. */
 const emails = [];
@@ -292,17 +313,58 @@ before(async () => {
     if (caminho === "../config/mercadopago") {
       return {
         payment: {
-          get: async ({ id }) => ({ id, status: mp.statusDoGet }),
+          get: async ({ id }) => ({
+            id,
+            status: mp.statusDoGet,
+            external_reference: mp.referencias[id],
+          }),
+        },
+        /**
+         * A CRIACAO MUDOU DE ENDPOINT. `POST /v1/payments` responde 401 nesta
+         * aplicacao (ela e Orders). `payment.get` fica acima porque o webhook
+         * continua relendo pelo endpoint antigo, com o id NUMERICO.
+         */
+        order: {
           create: async ({ body }) => {
+            if (mp.falhaNoCreate) throw new Error("gateway caiu");
             mp.criacoes.push(body);
+            mp.referencias[900000 + mp.criacoes.length] = body.external_reference;
             return {
-              id: 900000 + mp.criacoes.length,
-              status: mp.statusDoCreate,
-              point_of_interaction: {
-                transaction_data: { ticket_url: "https://mp.local/pix" },
+              id: `ORDTST0${900000 + mp.criacoes.length}`,
+              status: mp.statusDaOrder,
+              status_detail:
+                mp.statusDaOrder === "processed" ? "accredited" : "waiting_transfer",
+              external_reference: body.external_reference,
+              transactions: {
+                payments: [
+                  {
+                    id: `PAY0${900000 + mp.criacoes.length}`,
+                    payment_method: {
+                      id: body.transactions.payments[0].payment_method.id,
+                      ticket_url: "https://mp.local/pix",
+                      qr_code: "00020126580014br.gov.bcb.pix",
+                    },
+                  },
+                ],
               },
             };
           },
+          get: async ({ id }) => ({
+            id,
+            status: mp.statusDaOrder,
+            status_detail:
+              mp.statusDaOrder === "processed" ? "accredited" : "waiting_transfer",
+            transactions: {
+              payments: [
+                {
+                  payment_method: {
+                    id: "pix",
+                    ticket_url: "https://mp.local/pix",
+                  },
+                },
+              ],
+            },
+          }),
         },
       };
     }
@@ -496,7 +558,7 @@ test("sincronizarPedido: pedido sem pagamento confirmado é recusado com frase",
 
 test("checkout aprovado com BLING_ATIVO=true dispara a sincronização", async () => {
   process.env.BLING_ATIVO = "true";
-  mp.statusDoCreate = "approved";
+  mp.statusDaOrder = "processed";
   try {
     const res = respostaFalsa();
     await PaymentController.createPayment(
@@ -513,13 +575,13 @@ test("checkout aprovado com BLING_ATIVO=true dispara a sincronização", async (
     assert.equal(gravado.status, "aprovado");
   } finally {
     delete process.env.BLING_ATIVO;
-    mp.statusDoCreate = "pending";
+    mp.statusDaOrder = "action_required";
   }
 });
 
 test("com BLING_ATIVO desligado, aprovado NÃO vai ao Bling", async () => {
   assert.notEqual(process.env.BLING_ATIVO, "true");
-  mp.statusDoCreate = "approved";
+  mp.statusDaOrder = "processed";
   const chamadasAntes = bling.requisicoes.length;
   try {
     const res = respostaFalsa();
@@ -538,7 +600,7 @@ test("com BLING_ATIVO desligado, aprovado NÃO vai ao Bling", async () => {
       "nenhuma chamada ao Bling com a integração desligada",
     );
   } finally {
-    mp.statusDoCreate = "pending";
+    mp.statusDaOrder = "action_required";
   }
 });
 

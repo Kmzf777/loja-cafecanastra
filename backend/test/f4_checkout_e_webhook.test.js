@@ -27,7 +27,19 @@ const PRODUTO = "11111111-0000-0000-0000-0000000000aa";
 
 /** O que o dublê do MP responde; cada teste ajusta. */
 const mp = {
+  /**
+   * id NUMERICO -> `external_reference` da order criada com ele.
+   *
+   * O DUBLE PRECISA DISSO PORQUE O GATEWAY REAL FAZ ISSO: a notificacao chega
+   * com o id numerico do pagamento, `GET /v1/payments/{numerico}` responde com
+   * `external_reference`, e e por esse campo que o webhook reencontra o pedido
+   * (a loja grava o id da ORDER em `pagamento_id_mp`, que e outro id).
+   */
+  referencias: {},
   statusDoGet: "approved",
+  /** O que `order.create` responde. `action_required` = Pix esperando. */
+  statusDaOrder: "action_required",
+  detalheDaOrder: "waiting_transfer",
   falhaNoGet: false,
   falhaNoCreate: false,
   criacoes: [],
@@ -141,6 +153,7 @@ before(async () => {
             return {
               id,
               status: mp.statusDoGet,
+              external_reference: mp.referencias[id],
               // O MP devolve o QR do Pix também na releitura — é o que o
               // replay de idempotência usa para repor o ticketUrl.
               point_of_interaction: {
@@ -148,15 +161,63 @@ before(async () => {
               },
             };
           },
+        },
+        /**
+         * A CRIACAO MUDOU DE ENDPOINT, e por isso o duble tem dois objetos.
+         *
+         * `POST /v1/payments` responde 401 nesta aplicacao (ela e Orders); quem
+         * cria cobranca agora e `order.create`. `payment.get` FICA no duble
+         * acima porque o webhook continua relendo pelo endpoint antigo, com o
+         * id NUMERICO e o vocabulario legado — medido, nao suposto.
+         */
+        order: {
           create: async ({ body, requestOptions }) => {
             if (mp.falhaNoCreate) throw new Error("gateway caiu");
             mp.criacoes.push(body);
+            mp.referencias[900000 + mp.criacoes.length] = body.external_reference;
             mp.opcoes.push(requestOptions || null);
+            const ehPix = body.transactions.payments[0].payment_method.id === "pix";
             return {
-              id: 900000 + mp.criacoes.length,
-              status: "pending",
-              point_of_interaction: {
-                transaction_data: { ticket_url: "https://mp.local/pix" },
+              id: `ORDTST0${900000 + mp.criacoes.length}`,
+              status: mp.statusDaOrder,
+              status_detail: mp.detalheDaOrder,
+              external_reference: body.external_reference,
+              transactions: {
+                payments: [
+                  {
+                    id: `PAY0${900000 + mp.criacoes.length}`,
+                    status: mp.statusDaOrder,
+                    payment_method: {
+                      id: body.transactions.payments[0].payment_method.id,
+                      ...(ehPix
+                        ? {
+                            ticket_url: "https://mp.local/pix",
+                            qr_code: "00020126580014br.gov.bcb.pix",
+                            qr_code_base64: "iVBORw0KGgo=",
+                          }
+                        : {}),
+                    },
+                  },
+                ],
+              },
+            };
+          },
+          get: async ({ id }) => {
+            if (mp.falhaNoGet) throw new Error("MP fora do ar");
+            return {
+              id,
+              status: mp.statusDaOrder,
+              status_detail: mp.detalheDaOrder,
+              transactions: {
+                payments: [
+                  {
+                    payment_method: {
+                      id: "pix",
+                      ticket_url: "https://mp.local/pix",
+                      qr_code: "00020126580014br.gov.bcb.pix",
+                    },
+                  },
+                ],
               },
             };
           },
@@ -291,7 +352,7 @@ test("checkout grava canastra.pedidos, baixa estoque, persiste CPF e esvazia a s
   assert.ok(res.corpo.orderId);
   assert.equal(res.corpo.ticketUrl, "https://mp.local/pix");
   assert.equal(mp.criacoes.length, 1);
-  assert.equal(mp.criacoes[0].transaction_amount, 100);
+  assert.equal(mp.criacoes[0].total_amount, "100.00", "Orders fala string de duas casas");
 
   // O pedido, nas colunas reais.
   const { rows } = await bd.pool.query(
@@ -551,7 +612,7 @@ test("subtotal batendo: 201, e quem cobra continua sendo o servidor", async () =
   assert.equal(res.codigo, 201);
   // O valor cobrado NÃO sai do campo declarado: ele saiu da releitura travada
   // do banco. O campo só serviu para o servidor saber que a tela estava certa.
-  assert.equal(mp.criacoes[mp.criacoes.length - 1].transaction_amount, 100);
+  assert.equal(mp.criacoes[mp.criacoes.length - 1].total_amount, "100.00");
   assert.equal(await estoqueDoProduto(), estoqueAntes - 2);
 });
 
@@ -637,14 +698,19 @@ test("checkout: a fatura do cliente traz o nome da loja", async () => {
 
   assert.equal(res.codigo, 201);
   const cobranca = mp.criacoes[mp.criacoes.length - 1];
+  // NA ORDERS O DESCRITOR DESCEU: era campo de topo na Payments, agora mora em
+  // `transactions.payments[].payment_method`. O limite de 13 nao mudou, e ele
+  // continua sendo o unico campo da integracao que falha FECHADO.
+  const descritor =
+    cobranca.transactions.payments[0].payment_method.statement_descriptor;
   assert.ok(
-    cobranca.statement_descriptor.length <= 13,
+    descritor.length <= 13,
     "o Mercado Pago corta o descritor em 13 caracteres",
   );
-  assert.equal(cobranca.statement_descriptor, "CAFECANASTRA");
+  assert.equal(descritor, "CAFECANASTRA");
 });
 
-test("checkout: additional_info leva itens, destinatário e IP ao antifraude", async () => {
+test("checkout: os itens e o endereço vão ao antifraude na forma da Orders", async () => {
   await reporEstoque();
 
   const res = respostaFalsa();
@@ -672,14 +738,23 @@ test("checkout: additional_info leva itens, destinatário e IP ao antifraude", a
     "Ana não tem sobrenome cadastrado: last_name não pode nem existir na chave",
   );
 
-  const info = cobranca.additional_info;
-  assert.equal(info.items.length, 1);
-  assert.equal(info.items[0].id, PRODUTO);
-  assert.equal(info.items[0].quantity, 2);
-  assert.equal(info.items[0].title, "Café do Teste");
-  assert.equal(info.payer.first_name, "Ana");
-  assert.equal(info.ip_address, "203.0.113.7");
-  assert.equal(info.shipments.receiver_address.zip_code, "35012345");
+  // OS ITENS SUBIRAM PARA O TOPO. Na Payments eles eram enfeite de antifraude
+  // dentro de `additional_info` e podiam divergir do valor cobrado a vontade;
+  // na Orders eles SAO o valor cobrado — `sum(unit_price x quantity)` tem de
+  // fechar com `total_amount`, ou e 400 `order_items_total_amount_mismatch`.
+  const itens = cobranca.items;
+  assert.equal(itens[0].title, "Café do Teste");
+  assert.equal(itens[0].quantity, 2);
+  // O IDENTIFICADOR E O SKU, e nao o `product_id`: o UUID tem 36 caracteres e
+  // `external_code` aceita 30 ("length must be <= 30, but got 36", 400 real).
+  // O produto deste teste tem SKU cadastrado, entao ele viaja.
+  assert.equal(itens[0].external_code, "WEBHOOK-1");
+  assert.ok(itens[0].external_code.length <= 30);
+
+  // O ENDERECO E O DO PAGADOR, e so. `additional_info.shipments` nao existe na
+  // Orders: "additionalProperties '$.shipments' not allowed", 400 medido.
+  assert.equal(cobranca.payer.zip_code, undefined);
+  assert.equal(cobranca.payer.address.zip_code, "35012345");
 });
 
 test("checkout: endereço sem número não quebra a cobrança nem manda lixo ao Mercado Pago", async () => {
@@ -711,14 +786,6 @@ test("checkout: endereço sem número não quebra a cobrança nem manda lixo ao 
     Object.prototype.hasOwnProperty.call(cobranca.payer.address, "street_number"),
     false,
     "payer.address.street_number não pode existir sem número",
-  );
-  assert.equal(
-    Object.prototype.hasOwnProperty.call(
-      cobranca.additional_info.shipments.receiver_address,
-      "street_number",
-    ),
-    false,
-    "additional_info.shipments.receiver_address.street_number não pode existir sem número",
   );
 });
 
@@ -802,4 +869,94 @@ test("checkout: deviceId acima de 128 caracteres não vai ao Mercado Pago, mas a
     false,
     "deviceId acima do limite não pode nem existir na chave",
   );
+});
+
+test("checkout: o street_number vai como STRING — na Orders é o oposto", async () => {
+  // NA PAYMENTS ERA INTEIRO e a API validava: "expected integer". NA ORDERS é
+  // string e a API valida o contrário: "'$.payer.address.street_number' -
+  // expected string, but got number", 400 medido em 16/09/2026. Um checkout
+  // que mandasse o número como número levaria 400 em TODO pedido com endereço.
+  await reporEstoque();
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-numero-string" },
+      body: corpoDeCheckout(),
+      ip: "203.0.113.7",
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  const cobranca = mp.criacoes[mp.criacoes.length - 1];
+  assert.equal(typeof cobranca.payer.address.street_number, "string");
+});
+
+test("checkout: a soma dos itens fecha com o total, frete e desconto inclusos", async () => {
+  // A regra que a Payments nunca teve. Frete vira LINHA DE ITEM; sem isso o
+  // gateway recusa a order inteira com `order_items_total_amount_mismatch`.
+  await reporEstoque();
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-soma" },
+      body: corpoDeCheckout(),
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  const cobranca = mp.criacoes[mp.criacoes.length - 1];
+  const soma = cobranca.items.reduce(
+    (t, i) => t + Math.round(Number(i.unit_price) * 100) * i.quantity,
+    0,
+  );
+  assert.equal(soma, Math.round(Number(cobranca.total_amount) * 100));
+});
+
+test("checkout: o pedido grava o id da ORDER, que é o único relegível", async () => {
+  // `GET /v1/payments/PAY01...` responde 404; `GET /v1/orders/{id}` responde
+  // 200. `pagamento_id_mp` já é `text` desde a 0005, então cabe sem migração.
+  await reporEstoque();
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-id-order" },
+      body: corpoDeCheckout(),
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  const { rows } = await bd.pool.query(
+    "SELECT pagamento_id_mp FROM canastra.pedidos WHERE pedido_id = $1",
+    [res.corpo.orderId],
+  );
+  assert.match(rows[0].pagamento_id_mp, /^ORDTST0/);
+});
+
+test("checkout: o Pix devolve o copia-e-cola, não só a URL do ticket", async () => {
+  // O QR mudou de lugar (`point_of_interaction` → `payment_method`) e passou a
+  // vir em três formas. A tela ganha o código copiável de graça nesta migração.
+  await reporEstoque();
+
+  const res = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-qr" },
+      body: corpoDeCheckout(),
+    },
+    res,
+  );
+
+  assert.equal(res.codigo, 201);
+  assert.equal(res.corpo.ticketUrl, "https://mp.local/pix");
+  assert.equal(res.corpo.qrCode, "00020126580014br.gov.bcb.pix");
 });

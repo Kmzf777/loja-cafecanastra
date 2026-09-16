@@ -455,6 +455,39 @@ class OrderRepository {
     );
     return rows[0];
   }
+
+  /**
+   * A BUSCA DO WEBHOOK DEPOIS DA MIGRAÇÃO PARA A API DE ORDERS.
+   *
+   * POR QUE ELA PRECISOU EXISTIR: os dois lados passaram a falar ids
+   * diferentes do MESMO pagamento. A loja grava em `pagamento_id_mp` o id da
+   * **order** (`ORDTST01...`), que é o único relegível — `GET /v1/payments/
+   * PAY01...` responde 404 e `GET /v1/orders/{id}` responde 200. Mas a
+   * notificação continua chegando como `type: "payment"` com o id **numérico**
+   * (`178390026423`). Procurar um pelo outro não acha nada, e o webhook
+   * responderia 404 para toda notificação legítima: nenhum pedido sairia de
+   * "pendente", que é exatamente o defeito que a integração inteira existe
+   * para não ter.
+   *
+   * `external_reference` É O FIO QUE LIGA OS DOIS, e ele já existia: a loja
+   * sempre mandou a chave de idempotência nesse campo, e ela é a mesma coisa
+   * que `pedidos.chave_idempotencia` — com índice único, porque é ele que
+   * barra a cobrança dupla do duplo clique. A releitura do pagamento devolve o
+   * campo; daqui sai o pedido.
+   *
+   * `FOR UPDATE` pelo mesmo motivo da irmã acima: duas notificações do mesmo
+   * pagamento serializam, e a segunda enxerga o status que a primeira
+   * commitou — é o que impede o estoque de voltar duas vezes.
+   */
+  async lockOrderByIdempotencyKey(chave, client) {
+    const { rows } = await client.query(
+      `SELECT ${COLUNAS_DO_CONTRATO} FROM canastra.pedidos
+        WHERE chave_idempotencia = $1 LIMIT 1
+        FOR UPDATE`,
+      [String(chave)],
+    );
+    return rows[0];
+  }
 }
 
 module.exports = new OrderRepository();

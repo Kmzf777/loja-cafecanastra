@@ -55,7 +55,8 @@ de credencial de verdade.
 | `MP_WEBHOOK_SECRET` | Mercado Pago → Webhooks | **nenhum pedido sai de "pendente"** |
 | `WEBHOOK_URL` | seu domínio público, https | o MP não consegue avisar nada |
 | `EMAIL_PASS2` + `EMAIL_DOMINIO` | Resend, com domínio verificado | nenhum e-mail é entregue |
-| `MELHOR_ENVIO_TOKEN`, `ZIPCODE_ORIGIN` | Melhor Envio | o checkout recusa fechar pedido |
+| `ZIPCODE_ORIGIN` | o CEP de onde saem as encomendas | a cotação da Melhor Envio é recusada inteira |
+| `MELHOR_ENVIO_TOKEN` | Melhor Envio | **só se `MELHOR_ENVIO_ATIVO=true`** — desligada, o frete fixo cobre |
 
 ### Opcionais — cada uma liga um recurso
 
@@ -68,6 +69,7 @@ de credencial de verdade.
 | `BLING_NFE_AUTO` | emitir NF-e junto da sincronização | emissão só pelo botão do painel |
 | `BLING_RASTREIO_CRON` | buscar rastreio de hora em hora | rastreio só pelo botão |
 | `ABANDONO_ATIVO` | e-mail de carrinho abandonado | ninguém é lembrado |
+| `MELHOR_ENVIO_ATIVO` | a cotação real de frete | **desligada desde 16/09/2026**: entra `FRETE_FIXO_CENTAVOS` (R$ 25) no lugar |
 
 > **Regra de desenho:** toda integração nova nasce **desligada**. Variável vazia
 > nunca derruba a subida do processo — o recurso apenas não aparece. Isso é
@@ -93,14 +95,35 @@ detalhados em `producao.md`; a lista curta é:
 - [ ] **Domínio verificado no Resend.** Sem isso nenhum e-mail transacional sai.
 - [ ] **Webhook do Mercado Pago** apontando para
       `https://SEU-DOMINIO/api/webhook/mercadopago` (com o prefixo `/api`).
-- [ ] **UM CARTÃO DE TESTE APROVADO, com credenciais `TEST-`, ANTES das de
-      produção.** Não é zelo: o `statement_descriptor` (`CAFECANASTRA`) é o
-      único campo que a loja manda ao gateway que **falha fechado**. Todo o
-      resto degrada com elegância — sem device id cobra igual, sem
-      `additional_info` cobra igual. Mas conta com restrição de descritor
-      RECUSA o pagamento, e aí não é uma venda que se perde, são todas. A
-      suíte não pega isso: ela exercita um dublê, não o Mercado Pago.
-      Titular `APRO`, Mastercard `5031 4332 1540 6351`, CVV `123`, `11/30`.
+- [ ] **UM CARTÃO DE TESTE APROVADO ANTES das credenciais de produção.** Não é
+      zelo: o `statement_descriptor` (`CAFECANASTRA`) é o único campo que a
+      loja manda ao gateway que **falha fechado**. Todo o resto degrada com
+      elegância — sem device id cobra igual, sem itens detalhados cobra igual.
+      Mas conta com restrição de descritor RECUSA o pagamento, e aí não é uma
+      venda que se perde, são todas. A suíte não pega isso: ela exercita um
+      dublê, não o Mercado Pago.
+
+      **OS CARTÕES DE TESTE MUDAM, E ESTE DOCUMENTO JÁ MENTIU SOBRE ELES.**
+      Até 16/09/2026 a linha acima mandava usar o Mastercard
+      `5031 4332 1540 6351` — que hoje responde **422 sem detalhe nenhum**
+      nesta conta, e cuja busca de BIN devolve "payment method not found". Uma
+      tarde se perde procurando o erro no payload quando o problema é o
+      número do cartão. **Pegue a tabela no painel do Mercado Pago** (Suas
+      integrações → Contas de teste → Cartões) em vez de confiar em qualquer
+      documento, este inclusive. Os quatro medidos em 16/09/2026, todos com
+      titular `APRO`, validade `11/30`:
+
+      | Bandeira | Número | CVV | Orders |
+      |---|---|---|---|
+      | Mastercard | `5480 8328 0103 3311` | 123 | ✅ `processed/accredited` |
+      | Visa | `4235 6477 2802 5682` | 123 | ✅ `processed/accredited` |
+      | American Express | `3753 651535 56885` | 1234 | ✅ `processed/accredited` |
+      | Elo Débito | `5067 7667 8388 8311` | 123 | ❌ exige `type: "debit_card"` e 3DS — fora do checkout atual |
+
+      Os titulares especiais continuam valendo e **recusa não volta 201**:
+      `FUND` (saldo), `SECU` (CVV), `EXPI` (validade) e `OTHE` (genérica)
+      devolvem **HTTP 402** com a order inteira em `data`. `CONT` devolve 201
+      com `processing/in_process`.
 - [ ] **`security.js` carregando no checkout.** Abra o console do navegador na
       página e confira que `MP_DEVICE_SESSION_ID` existe. Se não existir, a
       cobrança sai do mesmo jeito — de propósito —, mas a taxa de aprovação

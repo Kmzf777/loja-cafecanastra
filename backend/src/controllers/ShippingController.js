@@ -10,6 +10,79 @@ const { somarCentavos } = require("../utils/preco");
 const LOCAL_PREFIXES = ["350"];
 
 /**
+ * O NOME DA OPCAO DE FRETE FIXO, numa constante e nao repetido em dois lugares.
+ *
+ * `conferirFrete` (PaymentController) casa a escolha do cliente por NOME e
+ * preco. O nome sai daqui e volta para ca na recotacao, entao as duas pontas
+ * sao literalmente a mesma string — um acento perdido numa delas viraria 409
+ * "o frete mudou" em todo pedido, com os dois lados calculando o mesmo valor.
+ */
+const NOME_DO_FRETE_FIXO = "Entrega padrão";
+
+/** O que vale quando ninguem configurou nada: R$ 25,00 em 7 dias. */
+const FRETE_FIXO_PADRAO_CENTAVOS = 2500;
+const FRETE_FIXO_PADRAO_DIAS = 7;
+
+/**
+ * A Melhor Envio esta ligada?
+ *
+ * AUSENTE VALE COMO LIGADA, e a assimetria e deliberada: esta variavel nasceu
+ * como interruptor de DESLIGAR uma integracao que ja existia e ja cotava. Um
+ * default "desligado" trocaria o comportamento de qualquer deploy que nunca
+ * ouviu falar dela — a loja passaria a vender frete fixo sem ninguem ter
+ * decidido isso. Desligar precisa ser um ato explicito, escrito no .env.
+ *
+ * DESLIGADA EM 16/09/2026, e vale registrar o motivo: o sandbox respondia 403
+ * a toda cotacao (`Erro na API Melhor Envio: Request failed with status code
+ * 403`), `calcularOpcoesDeFrete` ficava sem NENHUMA opcao para todo CEP fora
+ * do prefixo 350, e o `conferirFrete` do checkout recusava o pedido com 503.
+ * A loja inteira parada por causa da credencial de um terceiro.
+ */
+function melhorEnvioAtiva() {
+  const bruto = String(process.env.MELHOR_ENVIO_ATIVO ?? "").trim().toLowerCase();
+  if (bruto === "") return true;
+  return !["false", "0", "nao", "não", "off", "no"].includes(bruto);
+}
+
+/**
+ * A opcao que entra NO LUGAR da cotacao externa quando ela esta desligada.
+ *
+ * SUBSTITUTA, NAO ACRESCIMO: ela so existe com a Melhor Envio desligada.
+ * Oferece-la ao lado de um PAC cotado de verdade seria vender frete abaixo do
+ * custo sem ninguem ter decidido isso — o cliente escolheria sempre a mais
+ * barata, e a diferenca sairia do bolso da loja em toda venda.
+ *
+ * EM CENTAVOS na variavel e em reais no campo `price`, pelo mesmo motivo de
+ * `frete_gratis_minimo_centavos`: dinheiro se configura em inteiro, porque
+ * "25.90" escrito a mao num .env vira float e float nao fecha caixa. A divisao
+ * por 100 acontece uma vez, aqui, na fronteira com o resto da cotacao — que
+ * fala reais desde sempre (a Melhor Envio devolve `price` em reais).
+ *
+ * VALOR INVALIDO CAI NO PADRAO EM VEZ DE DERRUBAR A LOJA: `FRETE_FIXO_CENTAVOS=`
+ * vazio, negativo ou com virgula produziria `NaN` no `price`, o casamento de
+ * `conferirFrete` nunca fecharia e todo checkout responderia 409 — o mesmo
+ * estado que este interruptor veio consertar, por outra porta.
+ */
+function opcaoDeFreteFixo() {
+  const centavos = Number(process.env.FRETE_FIXO_CENTAVOS);
+  const valorCentavos =
+    Number.isInteger(centavos) && centavos >= 0
+      ? centavos
+      : FRETE_FIXO_PADRAO_CENTAVOS;
+
+  const dias = Number(process.env.FRETE_FIXO_PRAZO_DIAS);
+  const prazo = Number.isInteger(dias) && dias > 0 ? dias : FRETE_FIXO_PADRAO_DIAS;
+
+  return {
+    id: "frete-fixo",
+    name: NOME_DO_FRETE_FIXO,
+    price: valorCentavos / 100,
+    days: prazo,
+    company_picture: null,
+  };
+}
+
+/**
  * O piso do frete gratis, em centavos, lido de `canastra.config_loja` (0009).
  *
  * FRETE GRATIS E REGRA DE SERVIDOR (decisao 3 do plano mestre): o navegador
@@ -58,6 +131,38 @@ function subtotalEmCentavos(itens) {
 }
 
 /**
+ * Zera as opcoes quando o subtotal atinge o piso do frete gratis.
+ *
+ * EXTRAIDA PORQUE AGORA HA DUAS SAIDAS de `calcularOpcoesDeFrete` — a cotada
+ * pela Melhor Envio e a do frete fixo, quando ela esta desligada. Enquanto o
+ * bloco era o ultimo paragrafo da funcao, "toda saida passa por ele" era
+ * verdade por posicao; com duas saidas, so uma funcao chamada pelas duas
+ * mantem isso verdadeiro. Um frete fixo que ignorasse o piso faria a loja
+ * cobrar R$ 25 de um carrinho de R$ 200 enquanto a barra de progresso da
+ * vitrine anuncia "frete gratis" — a promessa quebrada na propria tela.
+ *
+ * O desconto do cupom abate ANTES da comparacao com o piso: um carrinho de
+ * R$ 160 com cupom de 10% e um carrinho de R$ 144 para efeito de frete
+ * gratis. `Math.max(0, ...)` porque um fixed maior que o subtotal ja foi
+ * travado por quem calculou o desconto, mas esta funcao nao confia nisso.
+ *
+ * O marcador `gratis: true` acompanha o zero porque a vitrine usa ELE para
+ * dizer "gratis" em vez de "R$ 0,00", e porque `conferirFrete` casa NOME e
+ * preco: com todas as opcoes zeradas, o nome e a unica coisa que ainda
+ * distingue uma da outra.
+ */
+async function aplicarFreteGratis(opcoes, itens, descontoCentavos) {
+  const minimo = await freteGratisMinimoCentavos();
+  const subtotalComDesconto = Math.max(
+    0,
+    subtotalEmCentavos(itens) - (Number(descontoCentavos) || 0),
+  );
+  if (minimo === null || subtotalComDesconto < minimo) return opcoes;
+
+  return opcoes.map((opcao) => ({ ...opcao, price: 0, gratis: true }));
+}
+
+/**
  * Calcula as opcoes de frete para um CEP e uma lista de itens.
  *
  * Extraido do handler HTTP para poder ser chamado TAMBEM no checkout. O motivo
@@ -92,6 +197,22 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
       days: 1,
       company_picture: "https://cdn-icons-png.flaticon.com/512/7541/7541900.png",
     });
+  }
+
+  /**
+   * A PORTA DE SAIDA ANTECIPADA: desligada a Melhor Envio, nada abaixo daqui
+   * roda — nem o payload, nem a ida a rede, nem o catch que decide entre
+   * seguir e lancar FRETE_INDISPONIVEL. Sair aqui, e nao filtrar o resultado
+   * la embaixo, e o que garante que uma credencial quebrada de terceiro nao
+   * consegue mais atrasar (12s de timeout) nem derrubar a cotacao da loja.
+   *
+   * O frete gratis continua sendo aplicado por quem esta abaixo do `return`?
+   * NAO — por isso o piso e conferido aqui tambem, pela mesma funcao. Duas
+   * saidas, uma regra so.
+   */
+  if (!melhorEnvioAtiva()) {
+    shippingOptions.push(opcaoDeFreteFixo());
+    return aplicarFreteGratis(shippingOptions, itens, descontoCentavos);
   }
 
   const productsPayload = itens.map((item) => ({
@@ -184,20 +305,7 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
   // R$ 160 com cupom de 10% e um carrinho de R$ 144 para efeito de frete
   // gratis. `Math.max(0, ...)` porque um fixed maior que o subtotal ja foi
   // travado por quem calculou o desconto, mas esta funcao nao confia nisso.
-  const minimo = await freteGratisMinimoCentavos();
-  const subtotalComDesconto = Math.max(
-    0,
-    subtotalEmCentavos(itens) - (Number(descontoCentavos) || 0),
-  );
-  if (minimo !== null && subtotalComDesconto >= minimo) {
-    shippingOptions = shippingOptions.map((opcao) => ({
-      ...opcao,
-      price: 0,
-      gratis: true,
-    }));
-  }
-
-  return shippingOptions;
+  return aplicarFreteGratis(shippingOptions, itens, descontoCentavos);
 }
 
 class ShippingController {

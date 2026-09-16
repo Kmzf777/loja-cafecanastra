@@ -1,4 +1,4 @@
-# Mercado Pago — a aplicação fala Orders, e a loja fala Payments
+# Mercado Pago — a aplicação fala Orders, e a loja aprendeu a falar Orders
 
 **Medido em 25/08/2026** contra a aplicação `7289536483168143`, usuário de teste
 `TESTUSER2898971294415703080` (user id `2664947316`). Tudo aqui é resposta real
@@ -8,6 +8,11 @@ do gateway, não leitura de documentação.
 > `POST /v1/payments`. Essa chamada responde **401** nesta aplicação. A
 > mensagem de erro aponta para o lugar errado, e sem este registro o próximo
 > a mexer perde as mesmas horas trocando credencial.
+>
+> **A migração foi feita em 16/09/2026** (§5). As seções 1 a 4 ficam como
+> estão: elas são o diagnóstico, e é ele que decide o que fazer no dia em que
+> alguém trocar a aplicação do Mercado Pago. Rode a sonda da §1 **antes** de
+> trocar qualquer credencial.
 
 ---
 
@@ -106,18 +111,56 @@ id em formato string **cabe sem migração de banco**.
 
 ---
 
-## 5. O que isso implica para o código
+## 5. FEITO em 16/09/2026 — o que mudou no código
 
-Precisa mudar:
+A migração está no ar. O que esta seção listava como "precisa mudar" virou isto:
 
-- `PaymentController.createPayment` — monta Order em vez de Payment
-- `traduzirStatusMp` (`utils/statusDePedido.js`) — não conhece nenhum status do
-  Orders
-- `ticketUrlDoPagamento` — o QR do Pix mudou de lugar
-- O que vai em `pagamento_id_mp`: o id da **Order** (`ORDTST...`), porque é o
-  único relegível — o `PAY01...` dá 404 no endpoint antigo
-- `items[].external_code` — usar o **SKU**, não o `product_id`
-- O dublê do Mercado Pago nos testes, e os testes do checkout
+| Onde | O que ficou |
+|---|---|
+| `src/utils/mercadoPagoOrders.js` | **novo.** Monta o corpo da Order, traduz status e lê a resposta. Funções puras, 20 testes sem banco |
+| `src/config/mercadopago.js` | exporta `order` **e** `payment` — a criação é Orders, a releitura do webhook é Payments |
+| `PaymentController.createPayment` | monta Order; `street_number` virou **string**; recusa (402) é desembrulhada de `data` |
+| `PaymentController.receiveWebhook` | acha o pedido por `external_reference`, com o caminho antigo preservado para pedidos anteriores |
+| `ordersRepository` | ganhou `lockOrderByIdempotencyKey` |
+| `ticketUrlDoPagamento` | relê por `order.get`, não `payment.get` |
+| `validatedItems` | carrega `sku`, que vira `external_code` |
+| os 4 dublês de teste | `order.create`, e `payment.get` devolvendo `external_reference` |
+
+**`traduzirStatusMp` NÃO mudou, e essa foi a descoberta que encolheu a
+migração.** A suposição da §5 original era que o webhook precisaria aprender o
+vocabulário da Orders. Ele não precisa: a notificação continua chegando como
+`type: "payment"` com o id **numérico**, e `GET /v1/payments/{numérico}`
+responde 200 no vocabulário **antigo** (`approved`/`pending`/`rejected`) — com
+`external_reference` junto, que é o que reencontra o pedido. Medido.
+
+### 5.1 O que só apareceu ao migrar de verdade
+
+Quatro regras que a §4 não tinha, todas arrancadas de erro real do gateway:
+
+1. **`sum(items) == total_amount`, ou 400 `order_items_total_amount_mismatch`.**
+   Na Payments os itens eram enfeite de antifraude e o valor vinha de
+   `transaction_amount`. Na Orders os itens **são** o valor — então frete virou
+   linha de item e desconto virou linha **negativa** (o gateway aceita as duas,
+   medido). Efeito colateral bom: a fatura do cliente mostra a composição do
+   preço.
+2. **`payer.address.street_number` é STRING.** Na Payments era Integer e a API
+   validava; na Orders ela valida o oposto — *"expected string, but got
+   number"*. O código tinha um comentário longo explicando por que convertia
+   para número. Migrar sem reler esse campo daria 400 em **todo** pedido com
+   endereço.
+3. **`shipments` não existe.** *"additionalProperties '$.shipments' not
+   allowed"*. O endereço de entrega vai só em `payer.address`.
+4. **Recusa de cartão é HTTP 402, não 201.** A Payments devolvia 201 com
+   `status: "rejected"` e o fluxo seguia reto. A Orders **lança** — mas carrega
+   a order inteira em `data`, com `status: "failed"` e o motivo real em
+   `transactions.payments[0].status_detail`. Sem desembrulhar isso, toda recusa
+   de cartão viraria "o gateway caiu": o estoque voltaria, mas o pedido não
+   existiria para ninguém explicar ao cliente.
+
+Também medido: `items[].external_code` é **opcional** (sem SKU, o campo some em
+vez de ir com um UUID truncado) e `expiration_time: "PT30M"` mantém a janela de
+30 minutos do Pix — sem o campo o padrão do gateway é 24 horas, e estoque
+reservado por 24 horas é estoque que some da prateleira.
 
 Não precisa mudar:
 

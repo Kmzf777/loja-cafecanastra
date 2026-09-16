@@ -401,3 +401,149 @@ test("com frete grátis, o casamento por nome ainda identifica a opção", async
     ehMaisBarata: true,
   });
 });
+
+/* --------------------------------------------------------------------------
+ * O INTERRUPTOR DA MELHOR ENVIO, e o frete fixo que entra no lugar dela
+ *
+ * POR QUE UM INTERRUPTOR, e não apagar a integração: a Melhor Envio é a única
+ * cotação real que a loja tem, e um dia ela volta (token novo, conta de
+ * produção). O que não pode continuar é o que estava acontecendo em 16/09/2026:
+ * o sandbox respondendo 403, `calcularOpcoesDeFrete` ficando sem NENHUMA opção
+ * para todo CEP fora do prefixo 350, e o `conferirFrete` do checkout recusando
+ * o pedido com 503 — a loja inteira parada por causa de uma credencial de
+ * terceiro.
+ *
+ * O PADRÃO É LIGADO, de propósito. `MELHOR_ENVIO_ATIVO` ausente significa "como
+ * sempre foi": quem nunca ouviu falar desta variável não tem o comportamento
+ * trocado debaixo dos pés por um deploy. Desligar é um ato explícito.
+ *
+ * O FRETE FIXO SÓ EXISTE COM A MELHOR ENVIO DESLIGADA, e isso é o ponto: ele é
+ * o SUBSTITUTO da cotação, não um acréscimo a ela. Oferecer "Entrega padrão —
+ * R$ 25" ao lado de um PAC de R$ 31 cotado de verdade seria vender frete
+ * abaixo do custo sem ninguém ter decidido isso.
+ * -------------------------------------------------------------------------- */
+
+/** Fora do prefixo 350: sem cotação externa, este CEP não tem opção nenhuma. */
+const CEP_DISTANTE = "01310100";
+
+/** Roda `corpo` com as variáveis trocadas e devolve o ambiente ao fim. */
+async function comAmbiente(variaveis, corpo) {
+  const anterior = new Map(
+    Object.keys(variaveis).map((nome) => [nome, process.env[nome]]),
+  );
+  Object.entries(variaveis).forEach(([nome, valor]) => {
+    if (valor === undefined) delete process.env[nome];
+    else process.env[nome] = valor;
+  });
+  try {
+    return await corpo();
+  } finally {
+    anterior.forEach((valor, nome) => {
+      if (valor === undefined) delete process.env[nome];
+      else process.env[nome] = valor;
+    });
+  }
+}
+
+test("desligada, o CEP distante recebe o frete fixo em vez de ficar sem opção", async () => {
+  const opcoes = await comAmbiente({ MELHOR_ENVIO_ATIVO: "false" }, () =>
+    calcularOpcoesDeFrete({ zipCode: CEP_DISTANTE, itens: [itemDe(50)] }),
+  );
+
+  assert.deepEqual(
+    opcoes.map((o) => o.name),
+    ["Entrega padrão"],
+    "com a Melhor Envio desligada sobra o frete fixo, e só ele",
+  );
+  assert.equal(opcoes[0].price, 25, "o padrão combinado: R$ 25,00");
+  assert.ok(opcoes[0].days > 0, "prazo precisa ser um número de dias de verdade");
+});
+
+test("ligada, o CEP distante sem cotação continua recusando — nada mudou", async () => {
+  // A porta fechada de `MELHOR_ENVIO_URL` (before) faz a cotação falhar. Este
+  // é o comportamento de HOJE, e ele tem de sobreviver ao interruptor: quem
+  // não desligou nada não ganha frete fixo de brinde.
+  await assert.rejects(
+    () =>
+      comAmbiente({ MELHOR_ENVIO_ATIVO: "true" }, () =>
+        calcularOpcoesDeFrete({ zipCode: CEP_DISTANTE, itens: [itemDe(50)] }),
+      ),
+    (erro) => erro.code === "FRETE_INDISPONIVEL",
+  );
+});
+
+test("a variável ausente vale como LIGADA: o padrão é o de sempre", async () => {
+  await assert.rejects(
+    () =>
+      comAmbiente({ MELHOR_ENVIO_ATIVO: undefined }, () =>
+        calcularOpcoesDeFrete({ zipCode: CEP_DISTANTE, itens: [itemDe(50)] }),
+      ),
+    (erro) => erro.code === "FRETE_INDISPONIVEL",
+  );
+});
+
+test("desligada, a entrega local convive com o frete fixo no CEP 350xx", async () => {
+  const opcoes = await comAmbiente({ MELHOR_ENVIO_ATIVO: "false" }, () =>
+    calcularOpcoesDeFrete({ zipCode: CEP_LOCAL, itens: [itemDe(50)] }),
+  );
+
+  assert.deepEqual(
+    opcoes.map((o) => o.name).sort(),
+    ["Entrega Local", "Entrega padrão"],
+    "quem mora perto continua podendo escolher a entrega própria",
+  );
+});
+
+test("o valor do frete fixo sai de FRETE_FIXO_CENTAVOS, em centavos", async () => {
+  // CENTAVOS e não reais, pelo mesmo motivo de `frete_gratis_minimo_centavos`:
+  // dinheiro em float é dinheiro errado. 3190 = R$ 31,90.
+  const opcoes = await comAmbiente(
+    { MELHOR_ENVIO_ATIVO: "false", FRETE_FIXO_CENTAVOS: "3190" },
+    () => calcularOpcoesDeFrete({ zipCode: CEP_DISTANTE, itens: [itemDe(50)] }),
+  );
+
+  assert.equal(opcoes[0].price, 31.9);
+});
+
+test("o piso do frete grátis zera o frete fixo como zera qualquer opção", async () => {
+  const opcoes = await comAmbiente({ MELHOR_ENVIO_ATIVO: "false" }, () =>
+    calcularOpcoesDeFrete({ zipCode: CEP_DISTANTE, itens: [itemDe(200)] }),
+  );
+
+  assert.equal(opcoes[0].price, 0);
+  assert.equal(opcoes[0].gratis, true);
+});
+
+test("conferirFrete aceita o frete fixo pelo par nome+preço", async () => {
+  const conferido = await comAmbiente({ MELHOR_ENVIO_ATIVO: "false" }, () =>
+    conferirFrete({
+      address: { zip_code: CEP_DISTANTE },
+      itens: [itemDe(50)],
+      shippingCost: 25,
+      shippingMethod: "Entrega padrão",
+    }),
+  );
+
+  assert.deepEqual(conferido, {
+    valor: 25,
+    metodo: "Entrega padrão",
+    ehMaisBarata: true,
+  });
+});
+
+test("o frete fixo não vira porta para o cliente escolher quanto paga", async () => {
+  // A defesa que já existia continua de pé com a opção nova: o navegador
+  // mandando R$ 5 numa cotação de R$ 25 leva 409, não desconto.
+  await assert.rejects(
+    () =>
+      comAmbiente({ MELHOR_ENVIO_ATIVO: "false" }, () =>
+        conferirFrete({
+          address: { zip_code: CEP_DISTANTE },
+          itens: [itemDe(50)],
+          shippingCost: 5,
+          shippingMethod: "Entrega padrão",
+        }),
+      ),
+    (erro) => erro.status === 409,
+  );
+});
