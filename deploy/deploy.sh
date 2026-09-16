@@ -112,6 +112,16 @@ main() {
       --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="$NEXT_PUBLIC_SUPABASE_ANON_KEY" \
       --build-arg NEXT_PUBLIC_SITE_URL="$NEXT_PUBLIC_SITE_URL" \
       --build-arg NEXT_PUBLIC_API_URL="$NEXT_PUBLIC_API_URL" \
+      `# AS TRES OPCIONAIS, e a ausencia delas aqui era um defeito mudo.` \
+      `# O Dockerfile declara os ARGs desde sempre e o .env.build e lido logo` \
+      `# acima — mas sem a linha do --build-arg a variavel simplesmente nao` \
+      `# chega ao build. Preencher .env.build nao ligava nada, e nada` \
+      `# reclamava: NEXT_PUBLIC_* e assada no bundle, entao o sintoma era o` \
+      `# recurso continuar invisivel na loja. Foi o que manteve o CARTAO DE` \
+      `# CREDITO desligado — prometido nos termos de uso e sem radio na tela.` \
+      --build-arg NEXT_PUBLIC_MP_PUBLIC_KEY="${NEXT_PUBLIC_MP_PUBLIC_KEY:-}" \
+      --build-arg NEXT_PUBLIC_GA4_ID="${NEXT_PUBLIC_GA4_ID:-}" \
+      --build-arg NEXT_PUBLIC_WHATSAPP="${NEXT_PUBLIC_WHATSAPP:-}" \
       -f frontend/Dockerfile -t loja-web:latest .
     CONSTRUIU_WEB=true
   else
