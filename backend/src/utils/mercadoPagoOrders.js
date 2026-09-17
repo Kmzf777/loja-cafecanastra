@@ -238,15 +238,33 @@ function montarCorpoDaOrder({
   }
 
   const ehPix = meioDePagamento === "pix";
+  const tipo = tipoDoMeio(meioDePagamento);
+
+  /**
+   * PARCELA E COISA DE CARTAO, e o gateway e literal sobre isso:
+   * "'$.transactions.payments[0].payment_method' - additionalProperties
+   * 'installments' not allowed", HTTP 400 — medido em 16/09/2026, com Pix.
+   *
+   * O DETALHE QUE CUSTA A VENDA: o checkout manda `installments: 1` sempre,
+   * porque o CardForm preenche o campo e o corpo e o mesmo para os dois meios.
+   * Esse `1` inofensivo — parcela unica, o padrao de qualquer compra — fazia a
+   * Orders recusar o PEDIDO INTEIRO no Pix. Nao e "ignorado quando nao se
+   * aplica": e propriedade nao permitida, e a resposta e 400.
+   *
+   * A condicao e pelo TIPO, e nao por `!== "pix"`: boleto (`ticket`) e saldo
+   * em conta (`account_money`) tambem nao parcelam, e escrever a regra pelo
+   * que ela e evita o mesmo 400 no dia em que um deles for ligado.
+   */
+  const ehCartao = tipo === "credit_card" || tipo === "debit_card";
 
   const pagamento = {
     amount: reais(totalCentavos),
     ...(ehPix ? { expiration_time: EXPIRACAO_DO_PIX } : {}),
     payment_method: {
       id: meioDePagamento,
-      type: tipoDoMeio(meioDePagamento),
+      type: tipo,
       ...(token ? { token } : {}),
-      ...(parcelas ? { installments: Number(parcelas) } : {}),
+      ...(ehCartao && parcelas ? { installments: Number(parcelas) } : {}),
       statement_descriptor: descritor,
     },
   };
@@ -298,8 +316,48 @@ function leituraDaOrder(order) {
   };
 }
 
+/**
+ * A RECUSA DO GATEWAY EM UMA LINHA QUE NOMEIA O CAMPO.
+ *
+ * POR QUE ISTO EXISTE, e custou uma hora para nascer: `console.error` do Node
+ * imprime profundidade 2 por padrão, e a recusa da Orders tem a informação útil
+ * na profundidade 3 — `errors[].details[]`. O log de produção saía assim:
+ *
+ *     Erro ao processar pagamento: {
+ *       errors: [ { code: 'property_value', message: '...', details: [Array] } ]
+ *     }
+ *
+ * "Invalid value for property" sem dizer QUAL propriedade é um log que só
+ * informa que algo deu errado — exatamente o que já se sabia. O que estava
+ * escondido dentro daquele `[Array]` era
+ * "'$.transactions.payments[0].payment_method' - additionalProperties
+ * 'installments' not allowed", que é o diagnóstico inteiro numa frase.
+ *
+ * PROCURA EM TRÊS LUGARES porque o SDK aninha a resposta em profundidades
+ * diferentes conforme o caminho do erro (lançado pela validação, pelo HTTP, ou
+ * embrulhado em `cause`). Olhar num lugar só fazia a linha sair vazia
+ * justamente na falha que importava.
+ *
+ * NUNCA LANÇA: uma função que existe para explicar erro não pode ser a próxima
+ * causa de erro. Sem forma reconhecível, devolve a mensagem que houver.
+ */
+function descreverErroDoMp(erro) {
+  const listas = [erro?.errors, erro?.cause?.errors, erro?.response?.data?.errors];
+  const erros = listas.find((lista) => Array.isArray(lista) && lista.length);
+
+  if (!erros) return String(erro?.message || erro || "erro sem mensagem");
+
+  return erros
+    .map((e) => {
+      const detalhes = Array.isArray(e?.details) ? e.details.join("; ") : "";
+      return [e?.code, e?.message, detalhes].filter(Boolean).join(" — ");
+    })
+    .join(" | ");
+}
+
 module.exports = {
   montarCorpoDaOrder,
+  descreverErroDoMp,
   traduzirStatusDaOrder,
   leituraDaOrder,
   reais,

@@ -28,6 +28,7 @@ const {
   montarCorpoDaOrder,
   traduzirStatusDaOrder,
   leituraDaOrder,
+  descreverErroDoMp,
   LIMITE_EXTERNAL_CODE,
 } = require("../src/utils/mercadoPagoOrders.js");
 
@@ -177,6 +178,16 @@ test("Pix: tipo bank_transfer e expiração de 30 minutos", () => {
   assert.equal("token" in pagamento.payment_method, false);
 });
 
+test("Pix NÃO leva installments — o gateway recusa o pedido inteiro", () => {
+  // "'$.transactions.payments[0].payment_method' - additionalProperties
+  // 'installments' not allowed", HTTP 400 medido em 16/09/2026. O checkout
+  // manda `installments: 1` por padrão (o CardForm sempre preenche), e no Pix
+  // esse 1 inofensivo derrubava a venda inteira. Vale para todo meio que não
+  // seja cartão.
+  const pagamento = corpoBase({ parcelas: 1 }).transactions.payments[0];
+  assert.equal("installments" in pagamento.payment_method, false);
+});
+
 test("cartão: token e parcelas dentro do payment_method, sem expiração", () => {
   const pagamento = corpoBase({
     meioDePagamento: "master",
@@ -277,4 +288,51 @@ test("order sem transação não explode — devolve o que dá e nada mais", () 
   assert.equal(lido.pagamentoId, "ORD1");
   assert.equal(lido.status, "aprovado");
   assert.equal(lido.ticketUrl, undefined);
+});
+
+/* --------------------------------------------------------------------------
+ * A mensagem de erro do gateway
+ * -------------------------------------------------------------------------- */
+
+test("a recusa do gateway vira uma linha que NOMEIA o campo", () => {
+  // O `console.error` do Node imprime `details: [Array]` para array aninhado —
+  // profundidade 2 é o padrão. Numa recusa da Orders, `details` é EXATAMENTE
+  // onde mora a única informação útil: qual propriedade foi recusada e por
+  // quê. O log dizia "Invalid value for property" e escondia qual.
+  const erro = {
+    errors: [
+      {
+        code: "unsupported_properties",
+        message: "Properties not supported",
+        details: [
+          "'$.transactions.payments[0].payment_method' - additionalProperties 'installments' not allowed",
+        ],
+      },
+      {
+        code: "property_value",
+        message: "Invalid value for property",
+        details: ["'$.items[0].external_code' - length must be <= 30, but got 36"],
+      },
+    ],
+  };
+
+  const linha = descreverErroDoMp(erro);
+  assert.match(linha, /installments' not allowed/);
+  assert.match(linha, /length must be <= 30/);
+  assert.match(linha, /unsupported_properties/);
+});
+
+test("erro sem forma de gateway devolve a mensagem que houver", () => {
+  assert.match(descreverErroDoMp(new Error("socket hang up")), /socket hang up/);
+  assert.equal(typeof descreverErroDoMp(undefined), "string");
+});
+
+test("a recusa embrulhada em `cause` também é lida", () => {
+  // O SDK do Mercado Pago aninha a resposta em profundidades diferentes
+  // conforme o caminho do erro; procurar em um lugar só era o que fazia a
+  // linha sair vazia justamente na falha que importava.
+  const erro = {
+    cause: { errors: [{ code: "failed", message: "The following transactions failed", details: ["PAY01: insufficient_amount"] }] },
+  };
+  assert.match(descreverErroDoMp(erro), /insufficient_amount/);
 });

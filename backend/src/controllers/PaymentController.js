@@ -31,6 +31,7 @@ const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const {
   montarCorpoDaOrder,
   leituraDaOrder,
+  descreverErroDoMp,
 } = require("../utils/mercadoPagoOrders");
 const cuponsRepository = require("../repositories/cuponsRepository");
 // O motor de promoção (0032 + Onda 4). `motor.js` é PURO — a conta; o
@@ -1434,6 +1435,19 @@ class PaymentController {
               `(${orderRecusada?.transactions?.payments?.[0]?.status_detail ?? "sem detalhe"}).`,
           );
         } else {
+          /**
+           * A LINHA QUE NOMEIA O CAMPO, antes de propagar.
+           *
+           * O `console.error` do catch externo imprime profundidade 2 e a
+           * recusa da Orders guarda o diagnostico na 3 (`errors[].details[]`):
+           * o log saia com `details: [Array]`, dizendo "Invalid value for
+           * property" sem dizer QUAL. Uma recusa de esquema aqui derruba TODA
+           * venda, e descobrir qual campo o gateway nao aceitou nao pode
+           * depender de reproduzir a chamada a mao.
+           */
+          console.error(
+            `Mercado Pago recusou o corpo da order: ${descreverErroDoMp(falhaNoGateway)}`,
+          );
           // Cobranca nao saiu: devolve o que foi reservado, senao o produto
           // some do estoque sem ninguem ter comprado. O uso do cupom volta
           // junto — ele foi reservado na mesma transacao e um cupom "gasto"
