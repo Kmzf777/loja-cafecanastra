@@ -972,3 +972,123 @@ test("checkout: o Pix devolve o copia-e-cola, não só a URL do ticket", async (
   assert.equal(res.corpo.ticketUrl, "https://mp.local/pix");
   assert.equal(res.corpo.qrCode, "00020126580014br.gov.bcb.pix");
 });
+
+/* --------------------------------------------------------------------------
+ * A NOTIFICAÇÃO DA API DE ORDERS
+ *
+ * MEDIDA em 17/09/2026, contra a aplicação real. Uma aplicação de Orders NÃO
+ * notifica `type: "payment"` com id numérico — ela notifica:
+ *
+ *   type   : "order"
+ *   action : "order.processed"
+ *   data.id: "ORDTST01M2PSGY..."   ← o MESMO id que a loja grava
+ *
+ * O webhook saía pela primeira linha (`if (type !== "payment") return 200`):
+ * reconhecia a notificação, respondia 200 e não fazia NADA. Pedido pago que
+ * nunca sai de "pendente" é o defeito que esta integração inteira existe para
+ * não ter — e ele era silencioso dos dois lados, porque o painel do Mercado
+ * Pago mostrava a entrega como bem-sucedida.
+ * -------------------------------------------------------------------------- */
+
+/** A notificação no formato que a aplicação de Orders realmente envia. */
+function notificacaoDeOrder(orderId) {
+  return {
+    headers: { "x-request-id": "req-order" },
+    query: { "data.id": orderId, type: "order" },
+    body: {
+      action: "order.processed",
+      api_version: "v1",
+      type: "order",
+      data: { id: orderId, status: "processed", status_detail: "accredited" },
+    },
+    ip: "127.0.0.1",
+  };
+}
+
+test("webhook de `order` aplica a transição — não é mais ignorado em silêncio", async () => {
+  await reporEstoque();
+
+  const criacao = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-webhook-order" },
+      body: corpoDeCheckout(),
+    },
+    criacao,
+  );
+  assert.equal(criacao.codigo, 201);
+
+  const { rows: antes } = await bd.pool.query(
+    "SELECT status, pagamento_id_mp FROM canastra.pedidos WHERE pedido_id = $1",
+    [criacao.corpo.orderId],
+  );
+  assert.equal(antes[0].status, "pendente");
+
+  // A order é RELIDA da API — o status nunca sai do corpo da notificação, que
+  // é público. O dublê responde `processed/accredited`.
+  mp.statusDaOrder = "processed";
+  mp.detalheDaOrder = "accredited";
+  const res = respostaFalsa();
+  await PaymentController.receiveWebhook(notificacaoDeOrder(antes[0].pagamento_id_mp), res);
+  mp.statusDaOrder = "action_required";
+  mp.detalheDaOrder = "waiting_transfer";
+
+  assert.equal(res.codigo, 200);
+  const { rows: depois } = await bd.pool.query(
+    "SELECT status FROM canastra.pedidos WHERE pedido_id = $1",
+    [criacao.corpo.orderId],
+  );
+  assert.equal(depois[0].status, "aprovado", "o pedido tem de sair de pendente");
+});
+
+test("webhook de `order` repetido não produz efeito duas vezes", async () => {
+  await reporEstoque();
+
+  const criacao = respostaFalsa();
+  await PaymentController.createPayment(
+    {
+      user: { userId: ANA },
+      headers: { "idempotency-key": "clique-webhook-order-2" },
+      body: corpoDeCheckout(),
+    },
+    criacao,
+  );
+  const { rows } = await bd.pool.query(
+    "SELECT pagamento_id_mp FROM canastra.pedidos WHERE pedido_id = $1",
+    [criacao.corpo.orderId],
+  );
+
+  mp.statusDaOrder = "canceled";
+  mp.detalheDaOrder = null;
+  const estoqueAntes = await estoqueDoProduto();
+
+  const um = respostaFalsa();
+  await PaymentController.receiveWebhook(notificacaoDeOrder(rows[0].pagamento_id_mp), um);
+  const devolvido = await estoqueDoProduto();
+
+  const dois = respostaFalsa();
+  await PaymentController.receiveWebhook(notificacaoDeOrder(rows[0].pagamento_id_mp), dois);
+
+  mp.statusDaOrder = "action_required";
+  mp.detalheDaOrder = "waiting_transfer";
+
+  assert.equal(um.codigo, 200);
+  assert.equal(dois.codigo, 200);
+  assert.equal(devolvido, estoqueAntes + 2, "o cancelamento devolveu o estoque");
+  assert.equal(await estoqueDoProduto(), devolvido, "o reenvio NÃO devolve de novo");
+});
+
+test("notificação de tipo que a loja não trata continua sendo 200 sem efeito", async () => {
+  const res = respostaFalsa();
+  await PaymentController.receiveWebhook(
+    {
+      headers: { "x-request-id": "req-x" },
+      query: {},
+      body: { type: "subscription_preapproval", data: { id: "x" } },
+      ip: "127.0.0.1",
+    },
+    res,
+  );
+  assert.equal(res.codigo, 200);
+});

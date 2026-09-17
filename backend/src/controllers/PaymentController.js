@@ -1766,10 +1766,33 @@ class PaymentController {
       return res.sendStatus(401);
     }
 
+    /**
+     * DOIS FORMATOS DE NOTIFICACAO, e o segundo era o unico que chegava.
+     *
+     * MEDIDO em 17/09/2026 contra a aplicacao real: uma aplicacao de **Orders**
+     * notifica `type: "order"`, `action: "order.processed"`, com `data.id`
+     * sendo o id da ORDER (`ORDTST01...`) — o MESMO id que a loja grava em
+     * `pagamento_id_mp`. Nao chega `type: "payment"` com id numerico.
+     *
+     * Esta linha dizia `if (type !== "payment") return 200`. O efeito era o
+     * pior possivel: a loja RECONHECIA a notificacao, respondia 200 e nao
+     * fazia nada. Pedido pago que nunca sai de "pendente", em silencio dos
+     * dois lados — o painel do Mercado Pago mostrava a entrega como
+     * bem-sucedida, porque ela foi.
+     *
+     * O caminho de `payment` FICA, e nao por simetria: uma conta que volte a
+     * ser de Payments, um pedido gravado antes desta migracao e a propria
+     * possibilidade de o MP notificar os dois topicos passam por ele.
+     */
     const { type, data } = req.body;
-    if (type !== "payment") return res.sendStatus(200);
+    const ehOrder = type === "order";
+    const ehPayment = type === "payment";
+    if (!ehOrder && !ehPayment) return res.sendStatus(200);
 
-    const paymentId = data?.id;
+    // `data.id` tambem viaja na query string (`?data.id=...`), e e de la que
+    // o MP monta o manifesto da assinatura. O corpo e a fonte normal; a query
+    // e a rede de seguranca para uma notificacao que chegue sem corpo.
+    const paymentId = data?.id ?? req.query?.["data.id"];
 
     // A ida ao MP fica FORA da transacao: e rede, e segurar trava de linha
     // durante ela bloquearia o proprio pedido (e o checkout) pelo tempo da
@@ -1778,6 +1801,24 @@ class PaymentController {
     let mpStatus;
     let referenciaExterna;
     try {
+      /**
+       * A ORDER E RELIDA DA API, e o status NUNCA sai do corpo da notificacao.
+       *
+       * A notificacao de `order` traz `data.status` e `data.status_detail`
+       * prontos — e usa-los seria trocar uma ida a rede por um buraco: o
+       * endpoint e publico, e quem forjasse um corpo com
+       * `status: "processed"` aprovaria o proprio pedido. A assinatura HMAC ja
+       * barra isso, mas defesa de status nao se aposenta porque existe defesa
+       * de assinatura.
+       */
+      if (ehOrder) {
+        const lido = leituraDaOrder(await order.get({ id: paymentId }));
+        mpStatus = lido.statusDoGateway;
+        statusPt = lido.status;
+        // Na notificacao de order, `data.id` JA e o que a loja gravou em
+        // `pagamento_id_mp` — a busca por referencia externa fica de reserva.
+        referenciaExterna = undefined;
+      } else {
       /**
        * A RELEITURA CONTINUA PELO ENDPOINT ANTIGO, e isso NAO e sobra da
        * migracao — e o que o Mercado Pago manda. Mesmo numa aplicacao de
@@ -1791,11 +1832,15 @@ class PaymentController {
        * notificacao traz nao e mais o que a loja gravou.
        */
       const mpPayment = await payment.get({ id: paymentId });
-      mpStatus = mpPayment.status;
-      statusPt = traduzirStatusMp(mpStatus);
-      referenciaExterna = mpPayment.external_reference;
+        mpStatus = mpPayment.status;
+        statusPt = traduzirStatusMp(mpStatus);
+        referenciaExterna = mpPayment.external_reference;
+      }
     } catch (erro) {
-      console.error(`Webhook: falha ao reler o pagamento ${paymentId} no MP:`, erro);
+      console.error(
+        `Webhook: falha ao reler ${ehOrder ? "a order" : "o pagamento"} ${paymentId} no MP:`,
+        erro,
+      );
       return res.sendStatus(500);
     }
 
