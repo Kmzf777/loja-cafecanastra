@@ -5,6 +5,7 @@ const pool = require("../pgPool");
 const cuponsRepository = require("../repositories/cuponsRepository");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const { somarCentavos } = require("../utils/preco");
+const { diagnosticarFalhaDeCotacao } = require("../utils/melhorEnvio");
 
 /** CEPs atendidos por entrega propria. */
 const LOCAL_PREFIXES = ["350"];
@@ -278,7 +279,17 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
 
     shippingOptions = [...shippingOptions, ...apiOptions];
   } catch (apiError) {
-    console.error("Erro na API Melhor Envio:", apiError.message);
+    /**
+     * O LOG DIZ A CAUSA, e nao so o numero. `apiError.message` produzia
+     * "Request failed with status code 403" para tres problemas que se
+     * resolvem em tres lugares diferentes — firewall deles, painel de
+     * aplicacoes, `.env` daqui. Em 16/09/2026 a loja passou dias sem vender
+     * com esse 403 no log, e a suspeita natural (token vencido) era a errada:
+     * um token novo, em 17/09, deu o MESMO 403, porque o bloqueio nunca tinha
+     * sido de credencial. Ver utils/melhorEnvio.js.
+     */
+    const diagnostico = diagnosticarFalhaDeCotacao(apiError);
+    console.error(`Erro na API Melhor Envio [${diagnostico.causa}]: ${diagnostico.mensagem}`);
     // Se a entrega local ja cobre o CEP, seguimos com ela; senao o chamador
     // decide (a rota HTTP devolve 500, o checkout recusa o pedido).
     if (shippingOptions.length === 0) {
