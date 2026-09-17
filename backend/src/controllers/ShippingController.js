@@ -6,6 +6,7 @@ const cuponsRepository = require("../repositories/cuponsRepository");
 const { avaliarCupom, normalizarCodigo } = require("../utils/cupom");
 const { somarCentavos } = require("../utils/preco");
 const { diagnosticarFalhaDeCotacao } = require("../utils/melhorEnvio");
+const { cotarFreteSimulado } = require("../utils/freteSimulado");
 
 /** CEPs atendidos por entrega propria. */
 const LOCAL_PREFIXES = ["350"];
@@ -46,42 +47,19 @@ function melhorEnvioAtiva() {
 }
 
 /**
- * A opcao que entra NO LUGAR da cotacao externa quando ela esta desligada.
+ * AS OPCOES QUE ENTRAM NO LUGAR DA COTACAO, quando ela esta desligada, moram em
+ * `utils/freteSimulado.js`.
  *
- * SUBSTITUTA, NAO ACRESCIMO: ela so existe com a Melhor Envio desligada.
- * Oferece-la ao lado de um PAC cotado de verdade seria vender frete abaixo do
- * custo sem ninguem ter decidido isso — o cliente escolheria sempre a mais
- * barata, e a diferenca sairia do bolso da loja em toda venda.
+ * SAIRAM DAQUI quando deixaram de ser UMA: uma opcao fixa destrava a venda mas
+ * nao exercita a ESCOLHA, e escolha de frete e metade do checkout — o total
+ * muda, o CardForm do Mercado Pago remonta com o novo valor, e o
+ * `conferirFrete` casa nome E preco. Com uma opcao so, `ehMaisBarata`
+ * respondia `true` sempre e a regra de `promocao_frete` nunca via um "nao".
  *
- * EM CENTAVOS na variavel e em reais no campo `price`, pelo mesmo motivo de
- * `frete_gratis_minimo_centavos`: dinheiro se configura em inteiro, porque
- * "25.90" escrito a mao num .env vira float e float nao fecha caixa. A divisao
- * por 100 acontece uma vez, aqui, na fronteira com o resto da cotacao — que
- * fala reais desde sempre (a Melhor Envio devolve `price` em reais).
- *
- * VALOR INVALIDO CAI NO PADRAO EM VEZ DE DERRUBAR A LOJA: `FRETE_FIXO_CENTAVOS=`
- * vazio, negativo ou com virgula produziria `NaN` no `price`, o casamento de
- * `conferirFrete` nunca fecharia e todo checkout responderia 409 — o mesmo
- * estado que este interruptor veio consertar, por outra porta.
+ * SUBSTITUEM, NAO ACRESCENTAM: com a Melhor Envio ligada elas nao existem.
+ * Oferece-las ao lado de um PAC cotado de verdade seria vender frete abaixo do
+ * custo sem ninguem ter decidido isso.
  */
-function opcaoDeFreteFixo() {
-  const centavos = Number(process.env.FRETE_FIXO_CENTAVOS);
-  const valorCentavos =
-    Number.isInteger(centavos) && centavos >= 0
-      ? centavos
-      : FRETE_FIXO_PADRAO_CENTAVOS;
-
-  const dias = Number(process.env.FRETE_FIXO_PRAZO_DIAS);
-  const prazo = Number.isInteger(dias) && dias > 0 ? dias : FRETE_FIXO_PADRAO_DIAS;
-
-  return {
-    id: "frete-fixo",
-    name: NOME_DO_FRETE_FIXO,
-    price: valorCentavos / 100,
-    days: prazo,
-    company_picture: null,
-  };
-}
 
 /**
  * O piso do frete gratis, em centavos, lido de `canastra.config_loja` (0009).
@@ -212,7 +190,7 @@ async function calcularOpcoesDeFrete({ zipCode, itens, descontoCentavos = 0 }) {
    * saidas, uma regra so.
    */
   if (!melhorEnvioAtiva()) {
-    shippingOptions.push(opcaoDeFreteFixo());
+    shippingOptions.push(...cotarFreteSimulado({ cep: cleanZip, itens }));
     return aplicarFreteGratis(shippingOptions, itens, descontoCentavos);
   }
 

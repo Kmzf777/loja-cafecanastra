@@ -452,10 +452,14 @@ test("desligada, o CEP distante recebe o frete fixo em vez de ficar sem opção"
 
   assert.deepEqual(
     opcoes.map((o) => o.name),
-    ["Entrega padrão"],
-    "com a Melhor Envio desligada sobra o frete fixo, e só ele",
+    ["Entrega padrão", "Entrega expressa"],
+    "desligada a cotação real, entram as DUAS modalidades simuladas",
   );
-  assert.equal(opcoes[0].price, 25, "o padrão combinado: R$ 25,00");
+  // CEP 01310100 é Sudeste, a zona da própria origem (fator 1,0). Um item sem
+  // peso vale 300 g (o default da coluna), e R$ 6,00/kg soma R$ 1,80 sobre a
+  // base de R$ 25,00.
+  assert.equal(opcoes[0].price, 26.8, "base de R$ 25,00 + peso");
+  assert.ok(opcoes[1].price > opcoes[0].price, "a expressa custa mais");
   assert.ok(opcoes[0].days > 0, "prazo precisa ser um número de dias de verdade");
 });
 
@@ -489,7 +493,7 @@ test("desligada, a entrega local convive com o frete fixo no CEP 350xx", async (
 
   assert.deepEqual(
     opcoes.map((o) => o.name).sort(),
-    ["Entrega Local", "Entrega padrão"],
+    ["Entrega Local", "Entrega expressa", "Entrega padrão"],
     "quem mora perto continua podendo escolher a entrega própria",
   );
 });
@@ -498,7 +502,13 @@ test("o valor do frete fixo sai de FRETE_FIXO_CENTAVOS, em centavos", async () =
   // CENTAVOS e não reais, pelo mesmo motivo de `frete_gratis_minimo_centavos`:
   // dinheiro em float é dinheiro errado. 3190 = R$ 31,90.
   const opcoes = await comAmbiente(
-    { MELHOR_ENVIO_ATIVO: "false", FRETE_FIXO_CENTAVOS: "3190" },
+    {
+      MELHOR_ENVIO_ATIVO: "false",
+      FRETE_FIXO_CENTAVOS: "3190",
+      // Peso zerado isola a base: este teste é sobre a variável, não sobre a
+      // aritmética do peso — essa mora em frete_simulado.test.js.
+      FRETE_POR_QUILO_CENTAVOS: "0",
+    },
     () => calcularOpcoesDeFrete({ zipCode: CEP_DISTANTE, itens: [itemDe(50)] }),
   );
 
@@ -510,22 +520,28 @@ test("o piso do frete grátis zera o frete fixo como zera qualquer opção", asy
     calcularOpcoesDeFrete({ zipCode: CEP_DISTANTE, itens: [itemDe(200)] }),
   );
 
-  assert.equal(opcoes[0].price, 0);
-  assert.equal(opcoes[0].gratis, true);
+  for (const o of opcoes) {
+    assert.equal(o.price, 0, `${o.name} tinha de estar zerada`);
+    assert.equal(o.gratis, true);
+  }
 });
 
-test("conferirFrete aceita o frete fixo pelo par nome+preço", async () => {
+test("conferirFrete aceita a opção simulada pelo par nome+preço", async () => {
   const conferido = await comAmbiente({ MELHOR_ENVIO_ATIVO: "false" }, () =>
     conferirFrete({
       address: { zip_code: CEP_DISTANTE },
       itens: [itemDe(50)],
-      shippingCost: 25,
+      shippingCost: 26.8,
       shippingMethod: "Entrega padrão",
     }),
   );
 
+  // `ehMaisBarata` é o insumo de `promocao_frete.apenas_modalidade_mais_barata`
+  // (0032), e AGORA ele é uma pergunta de verdade: com duas modalidades, a
+  // padrão é a barata e a expressa não é. Com uma opção só, o campo respondia
+  // `true` sempre e a regra nunca era exercitada contra um "não".
   assert.deepEqual(conferido, {
-    valor: 25,
+    valor: 26.8,
     metodo: "Entrega padrão",
     ehMaisBarata: true,
   });
@@ -546,4 +562,27 @@ test("o frete fixo não vira porta para o cliente escolher quanto paga", async (
       ),
     (erro) => erro.status === 409,
   );
+});
+
+test("a expressa NÃO é a mais barata — a regra do motor passa a ter pergunta", async () => {
+  // Este caso não existia com uma opção só: `ehMaisBarata` respondia `true`
+  // para tudo, e `promocao_frete.apenas_modalidade_mais_barata` (0032) — que
+  // existe para a loja bancar o PAC sem bancar o SEDEX — nunca via um "não".
+  await comAmbiente({ MELHOR_ENVIO_ATIVO: "false" }, async () => {
+    const opcoes = await calcularOpcoesDeFrete({
+      zipCode: CEP_DISTANTE,
+      itens: [itemDe(50)],
+    });
+    const expressa = opcoes.find((o) => o.name === "Entrega expressa");
+
+    const conferido = await conferirFrete({
+      address: { zip_code: CEP_DISTANTE },
+      itens: [itemDe(50)],
+      shippingCost: expressa.price,
+      shippingMethod: "Entrega expressa",
+    });
+
+    assert.equal(conferido.metodo, "Entrega expressa");
+    assert.equal(conferido.ehMaisBarata, false, "a expressa custa mais que a padrão");
+  });
 });
