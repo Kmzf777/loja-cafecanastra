@@ -18,6 +18,18 @@ const assert = require("node:assert/strict");
 const Module = require("node:module");
 const { subirPostgres } = require("./ajuda/postgres.js");
 const { aplicarMigracoes } = require("../db/migrar.js");
+/**
+ * A MESMA funcao que o controlador usa para montar a chave.
+ *
+ * Os testes escreviam `${ANA}:clique-abc` a mao, e isso deixou de ser possivel:
+ * a forma da chave agora e decidida pelo que a API de Orders aceita em
+ * `external_reference` (64 caracteres, so `[A-Za-z0-9_-]`), e o valor tem um
+ * resumo SHA-256 dentro. Reimplementar isso aqui seria escrever a regra duas
+ * vezes — e a copia do teste passaria a concordar consigo mesma em vez de com
+ * o codigo.
+ */
+const { chaveDeIdempotencia } = require("../src/utils/mercadoPagoOrders.js");
+const chaveDe = (clique) => chaveDeIdempotencia({ userId: ANA, chaveDoCliente: clique });
 
 let bd;
 let PaymentController;
@@ -363,7 +375,7 @@ test("checkout grava canastra.pedidos, baixa estoque, persiste CPF e esvazia a s
   );
   assert.equal(rows[0].status, "pendente");
   assert.equal(Number(rows[0].total), 100);
-  assert.equal(rows[0].chave_idempotencia, `${ANA}:clique-abc`);
+  assert.equal(rows[0].chave_idempotencia, chaveDe("clique-abc"));
   assert.equal(rows[0].itens[0].product_id, PRODUTO);
 
   // Frete E método são os CONFERIDOS, não o que o corpo mandou. O corpo diz
@@ -417,7 +429,7 @@ test("o mesmo Idempotency-Key devolve o pedido existente SEM cobrar de novo", as
 
   const { rows } = await bd.pool.query(
     "SELECT count(*)::int AS n FROM canastra.pedidos WHERE chave_idempotencia = $1",
-    [`${ANA}:clique-abc`],
+    [chaveDe("clique-abc")],
   );
   assert.equal(rows[0].n, 1);
 });
@@ -432,7 +444,7 @@ let pagamentoMp;
 test("webhook aplica a transição e repete sem efeito (idempotente)", async () => {
   const { rows } = await bd.pool.query(
     "SELECT pagamento_id_mp FROM canastra.pedidos WHERE chave_idempotencia = $1",
-    [`${ANA}:clique-abc`],
+    [chaveDe("clique-abc")],
   );
   pagamentoMp = rows[0].pagamento_id_mp;
 
@@ -656,7 +668,7 @@ test("checkout: a cobrança leva a chave de idempotência ao Mercado Pago", asyn
   assert.equal(mp.criacoes.length, antes + 1);
   assert.equal(
     mp.opcoes[mp.opcoes.length - 1]?.idempotencyKey,
-    `${ANA}:clique-idem-mp`,
+    chaveDe("clique-idem-mp"),
     "a chave tem que ser a MESMA que a linha do pedido grava",
   );
 });
@@ -674,7 +686,7 @@ test("checkout: external_reference liga o pagamento à linha do pedido", async (
 
   assert.equal(res.codigo, 201);
   const cobranca = mp.criacoes[mp.criacoes.length - 1];
-  assert.equal(cobranca.external_reference, `${ANA}:clique-ref`);
+  assert.equal(cobranca.external_reference, chaveDe("clique-ref"));
 
   // O que torna a conciliação possível: o campo do painel do MP e a coluna do
   // pedido guardam o MESMO valor.

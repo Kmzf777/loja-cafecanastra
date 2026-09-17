@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("node:crypto");
+
 /**
  * A API DE ORDERS DO MERCADO PAGO — a tradução entre a loja e o gateway.
  *
@@ -38,6 +40,18 @@
 
 /** O que o gateway aceita em `items[].external_code`. Medido, não lido. */
 const LIMITE_EXTERNAL_CODE = 30;
+
+/**
+ * O que o gateway aceita em `external_reference`: 64 caracteres, e só
+ * `[A-Za-z0-9_-]`. Medido em 16/09/2026, os dois limites com erro real:
+ *
+ *   "'$.external_reference' - does not match pattern"           (com ":" ou ".")
+ *   "'$.external_reference' - length must be <= 64, but got 84"
+ */
+const LIMITE_EXTERNAL_REFERENCE = 64;
+
+/** Quantos caracteres do resumo entram na chave. 20 hex = 80 bits. */
+const TAMANHO_DO_RESUMO = 20;
 
 /**
  * A janela do Pix, no formato de duração ISO-8601 que a Orders usa.
@@ -355,8 +369,74 @@ function descreverErroDoMp(erro) {
     .join(" | ");
 }
 
+/**
+ * A CHAVE DE IDEMPOTÊNCIA — UM VALOR QUE SERVE A TRÊS DONOS.
+ *
+ * O mesmo texto é, ao mesmo tempo:
+ *
+ *   `pedidos.chave_idempotencia`  — índice único, o que barra a cobrança dupla
+ *                                   do duplo clique **depois** de gravar;
+ *   `X-Idempotency-Key`           — o que faz o Mercado Pago devolver o mesmo
+ *                                   pagamento em vez de criar outro, **antes**;
+ *   `external_reference`          — o fio que liga o pedido da loja ao painel
+ *                                   do MP, e por onde o webhook reencontra o
+ *                                   pedido depois da migração para a Orders.
+ *
+ * ELE PRECISOU MUDAR DE FORMA porque o terceiro dono tem regras que os outros
+ * dois não tinham. A loja montava `${userId}:${chaveDoCliente}` — e a Orders
+ * recusa **os dois-pontos** e recusa **acima de 64 caracteres**. Com um uuid do
+ * navegador como chave do clique, o valor tinha 73 caracteres e um ":" no meio:
+ * os dois erros de uma vez, em TODA venda. Era isto que fazia o checkout
+ * responder 500 com "Falha no pagamento" depois de passar por tudo o mais.
+ *
+ * SEPARAR OS TRÊS VALORES ERA A OUTRA SAÍDA, e é pior: `external_reference`
+ * diferente de `chave_idempotencia` significa que o webhook não acha o pedido
+ * por ele — e aí nenhum pedido sai de "pendente", que é o defeito que a
+ * integração inteira existe para não ter. Um valor, três donos.
+ *
+ * A FORMA: `${userId}-${resumo}`. O usuário fica LEGÍVEL na frente, porque é
+ * ele que serve para conciliar à mão no painel do MP; o resumo é um SHA-256 da
+ * chave do clique, cortado em 20 hex (80 bits — colisão acidental não
+ * acontece). Resumir em vez de truncar a chave crua é o que impede dois
+ * cliques de prefixo parecido de virarem o mesmo pedido depois do corte.
+ *
+ * DETERMINÍSTICO É O PONTO INTEIRO: a retentativa do mesmo clique tem de
+ * produzir a MESMA chave, senão o replay não reconhece nada e o cliente é
+ * cobrado duas vezes. Por isso resumo, e não aleatório.
+ *
+ * SEM CHAVE DO CLIENTE, cada chamada gera uma chave nova (uuid) — é o caminho
+ * do checkout que não manda o cabeçalho. Não há replay a reconhecer ali (duas
+ * requisições sem identidade são dois pedidos), mas o índice único continua
+ * armado, que é o que o comentário original desta linha já dizia.
+ */
+function chaveDeIdempotencia({ userId, chaveDoCliente }) {
+  const cliente = String(chaveDoCliente || "").trim();
+  if (!cliente) return crypto.randomUUID();
+
+  const resumo = crypto
+    .createHash("sha256")
+    .update(cliente)
+    .digest("hex")
+    .slice(0, TAMANHO_DO_RESUMO);
+
+  /**
+   * O `userId` é sanitizado e CORTADO pelo que sobra do orçamento, e não o
+   * contrário: o resumo é o que garante unicidade, então ele é inteiro sempre.
+   * Um id fora do formato uuid (ou absurdamente longo) encolhe o prefixo
+   * legível em vez de estourar o limite e derrubar a venda.
+   */
+  const espacoDoPrefixo = LIMITE_EXTERNAL_REFERENCE - TAMANHO_DO_RESUMO - 1;
+  const prefixo = String(userId || "anon")
+    .replace(/[^A-Za-z0-9_-]/g, "-")
+    .slice(0, espacoDoPrefixo);
+
+  return `${prefixo}-${resumo}`;
+}
+
 module.exports = {
   montarCorpoDaOrder,
+  chaveDeIdempotencia,
+  LIMITE_EXTERNAL_REFERENCE,
   descreverErroDoMp,
   traduzirStatusDaOrder,
   leituraDaOrder,

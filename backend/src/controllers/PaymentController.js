@@ -32,6 +32,7 @@ const {
   montarCorpoDaOrder,
   leituraDaOrder,
   descreverErroDoMp,
+  chaveDeIdempotencia,
 } = require("../utils/mercadoPagoOrders");
 const cuponsRepository = require("../repositories/cuponsRepository");
 // O motor de promoção (0032 + Onda 4). `motor.js` é PURO — a conta; o
@@ -573,10 +574,18 @@ class PaymentController {
       const chaveDoCliente = String(
         req.headers["idempotency-key"] || req.headers["x-idempotency-key"] || "",
       ).trim();
-      const chaveIdempotencia =
-        chaveDoCliente && chaveDoCliente.length <= 128
-          ? `${userId}:${chaveDoCliente}`
-          : uuidv4();
+      /**
+       * A FORMA DA CHAVE MORA EM `utils/mercadoPagoOrders`, e nao aqui, porque
+       * quem manda nela e o gateway: `external_reference` aceita 64
+       * caracteres e so `[A-Za-z0-9_-]`. O `${userId}:${chaveDoCliente}` que
+       * ficava nesta linha tinha dois-pontos E, com um uuid do navegador,
+       * 73 caracteres — os dois erros de uma vez, em toda venda.
+       */
+      const chaveIdempotencia = chaveDeIdempotencia({
+        userId,
+        chaveDoCliente:
+          chaveDoCliente && chaveDoCliente.length <= 128 ? chaveDoCliente : "",
+      });
 
       if (chaveDoCliente) {
         const existente =

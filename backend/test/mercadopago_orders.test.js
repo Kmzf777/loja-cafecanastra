@@ -29,7 +29,9 @@ const {
   traduzirStatusDaOrder,
   leituraDaOrder,
   descreverErroDoMp,
+  chaveDeIdempotencia,
   LIMITE_EXTERNAL_CODE,
+  LIMITE_EXTERNAL_REFERENCE,
 } = require("../src/utils/mercadoPagoOrders.js");
 
 const PAGADOR = {
@@ -335,4 +337,72 @@ test("a recusa embrulhada em `cause` também é lida", () => {
     cause: { errors: [{ code: "failed", message: "The following transactions failed", details: ["PAY01: insufficient_amount"] }] },
   };
   assert.match(descreverErroDoMp(erro), /insufficient_amount/);
+});
+
+/* --------------------------------------------------------------------------
+ * A chave de idempotência, que é TAMBÉM o `external_reference`
+ * -------------------------------------------------------------------------- */
+
+test("a chave cabe no que a Orders aceita: 64 caracteres, sem pontuação", () => {
+  // MEDIDO em 16/09/2026, e é uma regra que a Payments não tinha:
+  //   "'$.external_reference' - does not match pattern"      (com ":" ou ".")
+  //   "'$.external_reference' - length must be <= 64, but got 84"
+  // A loja montava `${userId}:${chaveDoCliente}` — dois-pontos E, com um uuid
+  // do navegador, 73 caracteres. Os dois erros de uma vez, em TODA venda.
+  const chave = chaveDeIdempotencia({
+    userId: "f1a35fc3-dc4c-4b34-8054-e2b423743dd3",
+    chaveDoCliente: "b7e21f40-1f2a-4c88-9a11-0d3e77c1a555",
+  });
+
+  assert.ok(chave.length <= LIMITE_EXTERNAL_REFERENCE, `${chave.length} caracteres`);
+  assert.match(chave, /^[A-Za-z0-9_-]+$/);
+});
+
+test("a mesma tentativa produz a MESMA chave — é disso que vive o replay", () => {
+  // Duas tentativas do mesmo clique têm de colidir de propósito: é o que faz a
+  // segunda receber o pedido da primeira em vez de uma segunda cobrança.
+  const argumentos = { userId: "u-1", chaveDoCliente: "clique-abc" };
+  assert.equal(chaveDeIdempotencia(argumentos), chaveDeIdempotencia(argumentos));
+});
+
+test("cliques diferentes do mesmo usuário não colidem", () => {
+  const a = chaveDeIdempotencia({ userId: "u-1", chaveDoCliente: "clique-a" });
+  const b = chaveDeIdempotencia({ userId: "u-1", chaveDoCliente: "clique-b" });
+  assert.notEqual(a, b);
+});
+
+test("usuários diferentes com o MESMO clique não colidem", () => {
+  // O navegador gera o id do clique; nada impede dois navegadores de gerarem
+  // o mesmo valor, e sem o usuário na chave um pediria o pedido do outro.
+  const a = chaveDeIdempotencia({ userId: "u-1", chaveDoCliente: "clique-x" });
+  const b = chaveDeIdempotencia({ userId: "u-2", chaveDoCliente: "clique-x" });
+  assert.notEqual(a, b);
+});
+
+test("o usuário continua legível na chave, para conciliar no painel do MP", () => {
+  const chave = chaveDeIdempotencia({ userId: "u-1", chaveDoCliente: "clique-x" });
+  assert.ok(chave.startsWith("u-1-"), chave);
+});
+
+test("sem chave do cliente, a chave ainda nasce — e ainda cabe", () => {
+  // O pedido NUNCA grava sem chave: o índice único tem de continuar armado
+  // para todo caminho futuro, mesmo o do checkout que não manda o cabeçalho.
+  const chave = chaveDeIdempotencia({ userId: "f1a35fc3-dc4c-4b34-8054-e2b423743dd3" });
+  assert.ok(chave.length > 0);
+  assert.ok(chave.length <= LIMITE_EXTERNAL_REFERENCE);
+  assert.match(chave, /^[A-Za-z0-9_-]+$/);
+  // E duas chamadas sem clique NÃO podem colidir: são dois pedidos distintos.
+  assert.notEqual(
+    chaveDeIdempotencia({ userId: "u-1" }),
+    chaveDeIdempotencia({ userId: "u-1" }),
+  );
+});
+
+test("um userId absurdamente longo não estoura o limite", () => {
+  const chave = chaveDeIdempotencia({
+    userId: "u".repeat(200),
+    chaveDoCliente: "clique",
+  });
+  assert.ok(chave.length <= LIMITE_EXTERNAL_REFERENCE, `${chave.length}`);
+  assert.match(chave, /^[A-Za-z0-9_-]+$/);
 });
