@@ -94,7 +94,21 @@ detalhados em `producao.md`; a lista curta é:
       "confira sua caixa de entrada" para sempre.
 - [ ] **Domínio verificado no Resend.** Sem isso nenhum e-mail transacional sai.
 - [ ] **Webhook do Mercado Pago** apontando para
-      `https://SEU-DOMINIO/api/webhook/mercadopago` (com o prefixo `/api`).
+      `https://SEU-DOMINIO/api/webhook/mercadopago` (com o prefixo `/api`),
+      **com o tópico `Orders` marcado** e a **chave secreta do painel copiada
+      para `MP_WEBHOOK_SECRET`**. Os três juntos, ou nenhum pedido sai de
+      "pendente":
+      · URL errada → o MP não alcança nada;
+      · só "Pagamentos" marcado → esta aplicação é de Orders e notifica
+        `type: "order"`; nada é entregue;
+      · segredo diferente do painel → a loja recusa toda notificação com 401,
+        e **isso não aparece em lugar nenhum** a não ser no log dela (o painel
+        do MP mostra a tentativa, não o motivo).
+      Foi exatamente o que aconteceu em 17/09/2026: 20 notificações, 20
+      recusadas. Confira depois de configurar — faça uma compra de teste e
+      procure `🔔 Webhook` no log da API. Se aparecer "assinatura inválida",
+      o segredo está errado; o diagnóstico completo está em
+      `docs/mercadopago-orders.md` §5.0.
 - [ ] **UM CARTÃO DE TESTE APROVADO ANTES das credenciais de produção.** Não é
       zelo: o `statement_descriptor` (`CAFECANASTRA`) é o único campo que a
       loja manda ao gateway que **falha fechado**. Todo o resto degrada com

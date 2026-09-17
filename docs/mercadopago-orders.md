@@ -133,6 +133,51 @@ vocabulário da Orders. Ele não precisa: a notificação continua chegando como
 responde 200 no vocabulário **antigo** (`approved`/`pending`/`rejected`) — com
 `external_reference` junto, que é o que reencontra o pedido. Medido.
 
+### 5.0 O WEBHOOK — o defeito mais caro, e o mais silencioso
+
+**Uma aplicação de Orders não notifica `payment`.** Medido em 17/09/2026, com a
+notificação real capturada no log:
+
+```json
+{ "action": "order.processed", "api_version": "v1", "type": "order",
+  "data": { "id": "ORDTST01M2PSGY…", "external_reference": "…",
+            "status": "processed", "status_detail": "accredited",
+            "transactions": { "payments": [ { "id": "PAY01…", … } ] } } }
+```
+
+`type` é **`order`** e `data.id` é o id da **order** — o mesmo que a loja grava
+em `pagamento_id_mp`. A query string traz `?data.id=…&type=order` junto.
+
+A primeira linha do webhook era `if (type !== "payment") return 200`. Então a
+loja **reconhecia a notificação, respondia 200 e não fazia nada.** Pedido pago
+que nunca sai de "pendente" — e silencioso dos dois lados, porque o painel do
+Mercado Pago mostra a entrega como bem-sucedida: ela foi.
+
+Isto contradiz a suposição da §5 original ("o webhook precisa aprender o
+vocabulário da Orders" era certo, mas pelo motivo errado — não é o vocabulário,
+é o TÓPICO). Corrigido: o webhook trata `order` e `payment`, relendo pela API
+correspondente. O status continua sendo **relido**, nunca lido do corpo.
+
+#### O que precisa estar certo no painel do Mercado Pago
+
+- [ ] URL: `https://SEU-DOMINIO/api/webhook/mercadopago` (com o prefixo `/api`).
+- [ ] **Tópico marcado: Orders.** Marcar só "Pagamentos" não entrega nada numa
+      aplicação de Orders.
+- [ ] A **chave secreta do painel** copiada para `MP_WEBHOOK_SECRET`.
+
+Em 17/09/2026, **as 20 notificações recebidas foram todas recusadas por
+assinatura inválida** — e não é defeito de código: 42 combinações de manifesto
+(id do corpo, da query, minúsculo, com e sem `request-id`, com
+`external_reference`, com o id do pagamento) foram testadas contra a assinatura
+real e nenhuma bateu. O `MP_WEBHOOK_SECRET` do `.env` não é o segredo cadastrado
+no painel para esta aplicação. **Sem isso, nenhum pedido sai de "pendente"** —
+mesmo com todo o resto funcionando.
+
+Para conferir sem depender do painel: capture uma notificação real e rode o
+HMAC sobre `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`. Se não bater com o
+`v1` do cabeçalho `x-signature`, o segredo está errado — o manifesto não é a
+variável.
+
 ### 5.1 O que só apareceu ao migrar de verdade
 
 Quatro regras que a §4 não tinha, todas arrancadas de erro real do gateway:
@@ -157,10 +202,19 @@ Quatro regras que a §4 não tinha, todas arrancadas de erro real do gateway:
    de cartão viraria "o gateway caiu": o estoque voltaria, mas o pedido não
    existiria para ninguém explicar ao cliente.
 
-Também medido: `items[].external_code` é **opcional** (sem SKU, o campo some em
-vez de ir com um UUID truncado) e `expiration_time: "PT30M"` mantém a janela de
-30 minutos do Pix — sem o campo o padrão do gateway é 24 horas, e estoque
-reservado por 24 horas é estoque que some da prateleira.
+5. **`installments` é propriedade NÃO PERMITIDA fora do cartão.** O checkout
+   manda `installments: 1` sempre (o CardForm preenche o campo e o corpo é o
+   mesmo para os dois meios). Na Payments esse `1` era inofensivo; na Orders
+   derruba o pedido inteiro no Pix:
+   *"'$.transactions.payments[0].payment_method' - additionalProperties
+   'installments' not allowed"*.
+6. **`external_reference` aceita 64 caracteres e só `[A-Za-z0-9_-]`.** A chave
+   de idempotência da loja era `${userId}:${chaveDoCliente}` — dois-pontos e,
+   com um uuid do navegador, 73 caracteres. Os dois erros de uma vez, em toda
+   venda. Agora é `${userId}-${sha256(clique)[0..20]}`.
+
+Também medido: `items[].external_code` é **opcional** e `expiration_time:
+"PT30M"` mantém a janela de 30 minutos do Pix.
 
 Não precisa mudar:
 
